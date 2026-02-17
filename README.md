@@ -50,7 +50,7 @@ Headroom:          40M - 35.8M                     =  ~4.2M spare
 | RoPE | Rotary embeddings | Zero extra params, encodes relative position | Su et al. (2021) |
 | Weight tying | Shared embed/head | Saves 16M params, improves perplexity | Press & Wolf (2017) |
 
-> Full analysis with paper references: [ARCHITECTURE_DECISIONS.md](ARCHITECTURE_DECISIONS.md)
+> Full analysis with paper references: [docs/ARCHITECTURE_DECISIONS.md](docs/ARCHITECTURE_DECISIONS.md) | Roadmap: [docs/ROADMAP.md](docs/ROADMAP.md)
 
 ## Datasources
 

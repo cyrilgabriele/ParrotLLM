@@ -1,0 +1,7 @@
+[project]
+name = "ParrotLLM"
+version = "0.1.0"
+description = "Code of ParrotLLM group of the NLP course @ HSG"
+readme = "README.md"
+requires-python = ">=3.14"
+dependencies = []

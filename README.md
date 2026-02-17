@@ -2,6 +2,13 @@
 
 40M parameter decoder-only LLM built from scratch for the PikoGPT Challenge (NLP Lab FS26).
 
+## Setup
+
+```bash
+uv sync                                        # install all dependencies
+uv run python main.py --stage preprocess       # run a stage
+```
+
 ## Architecture
 
 ```

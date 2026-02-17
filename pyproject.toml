@@ -1,7 +1,20 @@
 [project]
-name = "ParrotLLM"
+name = "parrotllm"
 version = "0.1.0"
 description = "Code of ParrotLLM group of the NLP course @ HSG"
 readme = "README.md"
 requires-python = ">=3.14"
-dependencies = []
+dependencies = [
+    "torch>=2.6.0",
+    "transformers>=4.48.0",
+    "datasets>=3.0.0",
+    "numpy>=2.0.0",
+    "tqdm>=4.66.0",
+    "wandb>=0.19.0",
+    "pyyaml>=6.0",
+    "gradio>=5.0.0",
+    "fasttext-wheel>=0.9.2",
+]
+
+[project.scripts]
+parrotllm = "main:main"

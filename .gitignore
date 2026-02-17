@@ -206,5 +206,12 @@ marimo/_static/
 marimo/_lsp/
 __marimo__/
 
-# custom 
-/data
+# ── ML project ───────────────────────────────────────────
+# All data (downloaded via scripts/download_data.py)
+/data/
+
+# Checkpoints (large .pt files)
+checkpoints/*.pt
+
+# Weights & Biases
+wandb/

@@ -1,6 +1,5 @@
 """Download all datasets needed for the project."""
 
-import os
 import urllib.request
 from pathlib import Path
 
@@ -8,6 +7,9 @@ from datasets import load_dataset
 
 
 DATA_DIR = Path("data")
+NLP26_OWT_EVAL_URLS = (
+    "https://drive.switch.ch/index.php/s/6TLGQFEIkAPJ72K/download",
+)
 
 
 def download_openwebtext_10k():
@@ -64,29 +66,61 @@ def download_openwebtext_full():
 def download_nlp26_eval():
     """NLP26 OWT eval split from SWITCHdrive (for test set decontamination)."""
     out = DATA_DIR / "owt-eval"
-    if out.exists():
-        print(f"[skip] {out} already exists")
+    eval_root = out / "NLP26" / "NLP26_OWT_eval"
+    test_split = eval_root / "test"
+    if test_split.exists():
+        print(f"[skip] {test_split} already exists")
         return
-    url = "https://drive.switch.ch/index.php/s/6TLGQFEIkAPJ72K/download"
-    print("[download] NLP26 OWT eval split from SWITCHdrive...")
-    out.mkdir(exist_ok=True)
-    zip_path = out / "owt-eval.zip"
+
+    out.mkdir(parents=True, exist_ok=True)
+    tmp_archive = out / "nlp26_owt_eval_download.bin"
+    last_error: Exception | None = None
+    print("[download] NLP26 OWT eval split from SWITCHdrive (full archive)...")
+
+    for url in NLP26_OWT_EVAL_URLS:
+        try:
+            urllib.request.urlretrieve(url, str(tmp_archive))
+            last_error = None
+            break
+        except Exception as err:  # pragma: no cover - network errors vary
+            last_error = err
+            print(f"  [warn] Failed to download from {url}: {err}")
+
+    if last_error is not None:
+        tmp_archive.unlink(missing_ok=True)
+        print("  [warn] NLP26 eval split not available yet.")
+        print("  Please verify the SWITCHdrive link provided by the teaching staff.")
+        return
+
+    import tarfile
+    import zipfile
     try:
-        urllib.request.urlretrieve(url, str(zip_path))
-        # Try to unzip if it's a zip file
-        import zipfile
-        if zipfile.is_zipfile(str(zip_path)):
-            with zipfile.ZipFile(str(zip_path), "r") as zf:
-                zf.extractall(str(out))
-            zip_path.unlink()
-            print(f"[done] Extracted to {out}")
+        if zipfile.is_zipfile(tmp_archive):
+            with zipfile.ZipFile(tmp_archive, "r") as zf:
+                zf.extractall(out)
+        elif tarfile.is_tarfile(tmp_archive):
+            with tarfile.open(tmp_archive, "r:*") as tf:
+                tf.extractall(out)
         else:
-            print(f"[done] Downloaded to {zip_path} (not a zip, check format)")
-    except Exception as e:
-        out.rmdir()  # clean up empty dir on failure
-        print(f"[warn] NLP26 eval split not available yet: {e}")
-        print("  The course may not have uploaded it yet.")
-        print("  URL: https://drive.switch.ch/index.php/s/6TLGQFEIkAPJ72K")
+            # Fallback to shutil for other archive formats (rare).
+            import shutil
+
+            shutil.unpack_archive(str(tmp_archive), out)
+    except Exception as err:  # pragma: no cover - depends on archive format
+        tmp_archive.unlink(missing_ok=True)
+        raise RuntimeError(
+            "Failed to extract NLP26 eval split. Please check the archive format."
+        ) from err
+    finally:
+        tmp_archive.unlink(missing_ok=True)
+
+    if test_split.exists():
+        print(f"[done] Extracted eval split to {eval_root}")
+    else:
+        print(
+            "[warn] Extraction finished but expected structure was not found."
+            f" Please inspect {out} manually."
+        )
 
 
 if __name__ == "__main__":
@@ -95,7 +129,5 @@ if __name__ == "__main__":
     download_openwebtext_10k()
     download_wikitext103_test()
     download_fasttext_langdetect()
+    download_openwebtext_full()
     download_nlp26_eval()
-
-    # Full dataset - uncomment when ready (38GB download)
-    # download_openwebtext_full()

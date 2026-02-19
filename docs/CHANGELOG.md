@@ -35,13 +35,14 @@ Track what was changed, why it was changed, and any important notes.
 - Renumbered pipeline phases: dedup→5, decontam→6, tokenize→7, binary→8
 
 #### Why
-- Heuristic mode catches residual code/artifacts and low-quality text that slip through sanitization
-- Classifier mode provides a higher-quality alternative when trained models are available
-- Higher language threshold reduces borderline non-English content
+- We set the threshold in language detection higher since to little documents got removed with 0.5 as threshold
+- Added the dual mode since we currently do not know if an LLM like roBERTa/kenlm is allowed als classifier (but LLM approach would be probably be better)
+- Added Dedublication because duplicates do not give us any new information
+
+
 
 #### Remarks
-- Classifier mode requires model files trained via `src/scripts/train_filter_models.py`
-- On 1k OWT docs: code filter removes ~0.6%, quality filter removes ~1.5%
+
 
 ---
 

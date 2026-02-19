@@ -36,3 +36,64 @@ class TestSanitizeBatch:
         )
         result = sanitize_batch([code])
         assert result["sanitize_status"][0] == "code_snippet"
+
+
+import os
+import pytest
+
+LANG_MODEL_PATH = os.path.join(
+    os.path.dirname(__file__), "..", "..", "data", "lid.176.ftz"
+)
+HAS_LANG_MODEL = os.path.exists(LANG_MODEL_PATH)
+
+
+@pytest.mark.skipif(not HAS_LANG_MODEL, reason="fasttext model not found")
+class TestDetectLanguageBatch:
+    def test_returns_dict_with_required_keys(self):
+        from src.data.preprocess import detect_language_batch
+
+        texts = ["Hello world, this is English.", "Bonjour le monde."]
+        result = detect_language_batch(texts, LANG_MODEL_PATH)
+        assert "lang" in result
+        assert "lang_conf" in result
+        assert len(result["lang"]) == 2
+        assert len(result["lang_conf"]) == 2
+
+    def test_detects_english(self):
+        from src.data.preprocess import detect_language_batch
+
+        texts = ["The president of the United States gave a speech today."]
+        result = detect_language_batch(texts, LANG_MODEL_PATH)
+        assert result["lang"][0] == "en"
+        assert result["lang_conf"][0] > 0.5
+
+    def test_detects_non_english(self):
+        from src.data.preprocess import detect_language_batch
+
+        texts = ["Dies ist ein deutscher Text ueber Wissenschaft und Forschung."]
+        result = detect_language_batch(texts, LANG_MODEL_PATH)
+        assert result["lang"][0] == "de"
+
+    def test_matches_sequential(self):
+        from src.data.preprocess import detect_language, detect_language_batch
+        import fasttext
+
+        model = fasttext.load_model(LANG_MODEL_PATH)
+        texts = [
+            "Hello this is a test.",
+            "Bonjour le monde entier.",
+            "",
+            "The quick brown fox jumps.",
+        ]
+        batch_result = detect_language_batch(texts, LANG_MODEL_PATH)
+
+        for i, text in enumerate(texts):
+            seq_lang, seq_conf = detect_language(text, model)
+            assert batch_result["lang"][i] == seq_lang
+            assert abs(batch_result["lang_conf"][i] - seq_conf) < 1e-6
+
+    def test_empty_batch(self):
+        from src.data.preprocess import detect_language_batch
+
+        result = detect_language_batch([], LANG_MODEL_PATH)
+        assert result == {"lang": [], "lang_conf": []}

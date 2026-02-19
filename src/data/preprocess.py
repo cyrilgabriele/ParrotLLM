@@ -287,6 +287,51 @@ def detect_language(text: str, model) -> tuple[str, float]:
     return lang, conf
 
 
+def detect_language_batch(
+    texts: list[str], lang_model_path: str
+) -> dict[str, list]:
+    """Batch language detection. Loads model from path (safe for multiprocessing).
+
+    Returns dict with 'lang' and 'lang_conf' columns.
+    """
+    if not texts:
+        return {"lang": [], "lang_conf": []}
+
+    model = fasttext.load_model(lang_model_path)
+    langs: list[str] = []
+    confs: list[float] = []
+
+    # Extract first lines for prediction
+    first_lines: list[str] = []
+    empty_mask: list[bool] = []
+    for text in texts:
+        line = text.split("\n")[0].strip() if text else ""
+        first_lines.append(line)
+        empty_mask.append(not line)
+
+    # fasttext batch predict on non-empty lines
+    non_empty_lines = [line for line, is_empty in zip(first_lines, empty_mask) if not is_empty]
+
+    if non_empty_lines:
+        pred_labels, pred_scores = model.predict(non_empty_lines)
+    else:
+        pred_labels, pred_scores = [], []
+
+    pred_idx = 0
+    for is_empty in empty_mask:
+        if is_empty:
+            langs.append("unknown")
+            confs.append(0.0)
+        else:
+            lang = pred_labels[pred_idx][0].replace("__label__", "")
+            conf = float(pred_scores[pred_idx][0])
+            langs.append(lang)
+            confs.append(conf)
+            pred_idx += 1
+
+    return {"lang": langs, "lang_conf": confs}
+
+
 def extract_ngrams(text: str, n: int = 13) -> set[str]:
     """Extract character-level n-grams for contamination detection."""
     text = text.lower().strip()

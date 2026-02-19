@@ -21,6 +21,8 @@ def main():
     parser.add_argument("--temperature", type=float, default=0.0)
     parser.add_argument("--device", default="auto")
     parser.add_argument("--seed", type=int, default=0)
+    parser.add_argument("--num-workers", default="auto",
+                        help="Number of CPU workers for preprocessing (default: auto = all cores)")
     parser.add_argument("--leaderboard", action="store_true")
 
     args = parser.parse_args()

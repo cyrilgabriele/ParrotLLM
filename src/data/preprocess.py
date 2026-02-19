@@ -223,6 +223,20 @@ def sanitize_document_text(text: str) -> tuple[str | None, str | None]:
     return cleaned, None
 
 
+def sanitize_batch(texts: list[str]) -> dict[str, list]:
+    """Batch wrapper around sanitize_document_text for Dataset.map compatibility.
+
+    Returns dict with 'text' (cleaned or empty string) and 'sanitize_status' columns.
+    """
+    out_texts: list[str] = []
+    statuses: list[str] = []
+    for text in texts:
+        cleaned, status = sanitize_document_text(text)
+        out_texts.append(cleaned or "")
+        statuses.append(status or "kept")
+    return {"text": out_texts, "sanitize_status": statuses}
+
+
 def normalize_and_fingerprint(
     text: str, lowercase: bool = True
 ) -> tuple[str, str | None]:

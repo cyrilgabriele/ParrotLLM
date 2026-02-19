@@ -5,10 +5,8 @@ from __future__ import annotations
 import hashlib
 import html
 import os
-import random
 import re
 import unicodedata
-from collections import Counter, defaultdict
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -41,92 +39,207 @@ _BASE_BOILERPLATE_PREFIXES = (
 BOILERPLATE_EXACT_MARKERS = tuple(marker.lower() for marker in _BASE_BOILERPLATE_EXACT)
 BOILERPLATE_PREFIX_MARKERS = tuple(prefix.lower() for prefix in _BASE_BOILERPLATE_PREFIXES)
 WHITESPACE_RE = re.compile(r"\s+")
-HTML_TAG_RE = re.compile(r"<[^>]+>")
+HTML_COMMENT_RE = re.compile(r"<!--.*?-->", re.DOTALL)
+HTML_TAG_RE = re.compile(r"<[^>]*>")
+URL_RE = re.compile(r"https?://\S+")
+MULTI_NEWLINE_RE = re.compile(r"\n{3,}")
+# Control chars, BOM, replacement char — but preserve \t and \n (handled separately)
+_CONTROL_RE = re.compile(r"[\ufffd\ufeff\x00-\x08\x0b\x0c\x0e-\x1f\x7f-\x9f]")
 CODE_KEYWORD_RE = re.compile(
-    r"\b(class|def|function|public|private|import|from|package|namespace|var|let|const|return|for|while|if|else|try|catch|using|struct|enum)\b",
-    re.IGNORECASE,
+    r"\b(def|function|public|private|package|namespace|var|let|const|struct|enum)\b"
 )
 CODE_FENCE_RE = re.compile(r"```|~~~|<code>|</code>|&lt;/?code&gt;", re.IGNORECASE)
+CODE_STRUCTURAL_RE = re.compile(
+    r"^\s*[\[\{]|[\]\}]\s*[,;]?\s*$"  # lines that are mostly JSON/config brackets
+)
 
-ENABLE_MINHASH_DECONTAMINATION = True
-MINHASH_NUM_PERMUTATIONS = 64
-MINHASH_ROWS_PER_BAND = 4  # results in 16 bands
-MINHASH_SHINGLE_SIZE = 5
-MINHASH_JACCARD_THRESHOLD = 0.8
-MINHASH_PRIME = 2_305_843_009_213_693_951  # 2^61 - 1 (Mersenne prime)
-MINHASH_MAX_HASH = MINHASH_PRIME - 1
-MINHASH_SEED = 1337
+# Corpus deduplication (MinHash LSH)
+DEDUP_NUM_PERM = 64
+DEDUP_BANDS = 16        # 16 bands x 4 rows = 64 perms
+DEDUP_ROWS = 4
+DEDUP_SHINGLE_SIZE = 5  # 5-word shingles
+DEDUP_THRESHOLD = 0.8   # Jaccard similarity threshold
+_DEDUP_PRIME = (1 << 61) - 1  # Mersenne prime for universal hashing
+_DEDUP_MAX_HASH = (1 << 32) - 1
+
+# ── Heuristic filter thresholds (Phase 3 + 4) ────────────────────────────────
+HTML_TAG_DENSITY_THRESHOLD = 0.02        # Phase 3a: >2 % HTML tag chars → drop
+CODE_SYMBOL_CHARS = frozenset("{}[]<>=\\_")
+CODE_SYMBOL_RATIO_THRESHOLD = 0.10       # Phase 3b: strictly >10 % → drop
+PROGRAMMING_KEYWORDS = frozenset({
+    # Python (code-specific only — excludes from, as, with, pass, class, import, return)
+    "def", "elif", "except", "finally", "lambda", "self", "yield", "assert",
+    # JavaScript / TypeScript
+    "const", "async", "await", "typeof", "instanceof",
+    "undefined", "prototype", "require",
+    # Java / C# / C++
+    "void", "boolean", "namespace", "implements", "extends",
+    "override", "abstract", "virtual", "protected",
+    # General (code-specific only — excludes new, case, break, continue, delete, catch, throw)
+    "struct", "enum", "sizeof", "typedef", "goto",
+    "template", "inline", "volatile", "extern", "register",
+    "println", "printf", "malloc", "nullptr", "stdin", "stdout",
+    "argv", "argc", "endl", "iostream", "strcmp",
+})
+PROGRAMMING_KEYWORD_MAX = 3              # Phase 3c: >3 distinct → drop
+
+MIN_WORD_COUNT = 50                      # Phase 4a
+MIN_CHAR_COUNT = 200                     # Phase 4a
+MAX_WORD_LENGTH = 40                     # Phase 4b
+NGRAM_SIZE = 10                          # Phase 4c
+NGRAM_MAX_REPEATS = 3                    # Phase 4c: any 10-gram >3 times → drop
+
+# ── Classifier model paths ────────────────────────────────────────────────────
+CODE_CLASSIFIER_FILENAME = "code_vs_prose.ftz"
+QUALITY_CLASSIFIER_FILENAME = "educational_quality.ftz"
+KENLM_MODEL_FILENAME = "wikipedia_en.arpa.bin"
+CODE_CLASSIFIER_THRESHOLD = 0.5
+KENLM_PERPLEXITY_LOW = 10.0
+KENLM_PERPLEXITY_HIGH = 100000.0
+EDUCATIONAL_QUALITY_MIN = 2
 
 
 class MinHasher:
-    """Lightweight MinHash implementation with pre-generated permutations."""
+    """Compute MinHash signatures using universal hashing: h(x) = (a*x + b) mod p."""
 
-    def __init__(self, num_perm: int, seed: int = 0) -> None:
-        self.num_perm = num_perm
-        self.prime = MINHASH_PRIME
+    def __init__(self, num_perm: int = DEDUP_NUM_PERM, seed: int = 42):
+        import random
         rng = random.Random(seed)
-        self.permutations = [
-            (rng.randrange(1, self.prime - 1), rng.randrange(0, self.prime - 1))
-            for _ in range(num_perm)
-        ]
-
-    def signature(self, hashes: set[int]) -> tuple[int, ...]:
-        if not hashes:
-            return tuple([MINHASH_MAX_HASH] * self.num_perm)
-        sig: list[int] = []
-        for a, b in self.permutations:
-            min_val = MINHASH_MAX_HASH
-            for value in hashes:
-                hashed = (a * value + b) % self.prime
-                if hashed < min_val:
-                    min_val = hashed
-            sig.append(min_val)
-        return tuple(sig)
-
-
-class MinHashLSHIndex:
-    """Banding-based LSH for MinHash signatures."""
-
-    def __init__(self, num_perm: int, rows_per_band: int) -> None:
-        if num_perm % rows_per_band != 0:
-            raise ValueError("num_perm must be divisible by rows_per_band")
         self.num_perm = num_perm
-        self.rows_per_band = rows_per_band
-        self.num_bands = num_perm // rows_per_band
-        self.bands: list[dict[tuple[int, ...], set[str]]] = [
-            defaultdict(set) for _ in range(self.num_bands)
-        ]
+        self._a = [rng.randint(1, _DEDUP_PRIME - 1) for _ in range(num_perm)]
+        self._b = [rng.randint(0, _DEDUP_PRIME - 1) for _ in range(num_perm)]
 
-    def insert(self, doc_id: str, signature: tuple[int, ...]) -> None:
-        for band_idx in range(self.num_bands):
-            start = band_idx * self.rows_per_band
-            band_key = tuple(signature[start : start + self.rows_per_band])
-            self.bands[band_idx][band_key].add(doc_id)
-
-    def query(self, signature: tuple[int, ...]) -> set[str]:
-        candidates: set[str] = set()
-        for band_idx in range(self.num_bands):
-            start = band_idx * self.rows_per_band
-            band_key = tuple(signature[start : start + self.rows_per_band])
-            hits = self.bands[band_idx].get(band_key)
-            if hits:
-                candidates.update(hits)
-        return candidates
+    def signature(self, hashes: set[int]) -> list[int]:
+        """Compute MinHash signature from a set of shingle hashes."""
+        if not hashes:
+            return [_DEDUP_MAX_HASH] * self.num_perm
+        sig = []
+        for a, b in zip(self._a, self._b):
+            min_val = min((a * h + b) % _DEDUP_PRIME for h in hashes)
+            sig.append(min_val)
+        return sig
 
 
-MINHASHER = (
-    MinHasher(MINHASH_NUM_PERMUTATIONS, seed=MINHASH_SEED)
-    if ENABLE_MINHASH_DECONTAMINATION
-    else None
-)
+class UnionFind:
+    """Disjoint-set with path compression and union by rank."""
+
+    def __init__(self):
+        self.parent: dict[int, int] = {}
+        self._rank: dict[int, int] = {}
+
+    def find(self, x: int) -> int:
+        if x not in self.parent:
+            self.parent[x] = x
+            self._rank[x] = 0
+            return x
+        while self.parent[x] != x:
+            self.parent[x] = self.parent[self.parent[x]]  # path halving
+            x = self.parent[x]
+        return x
+
+    def union(self, x: int, y: int) -> None:
+        rx, ry = self.find(x), self.find(y)
+        if rx == ry:
+            return
+        if self._rank[rx] < self._rank[ry]:
+            rx, ry = ry, rx
+        self.parent[ry] = rx
+        if self._rank[rx] == self._rank[ry]:
+            self._rank[rx] += 1
+
+
+def _shingle_hashes(text: str, size: int = DEDUP_SHINGLE_SIZE) -> set[int]:
+    """Normalize text, split into words, extract word-level shingles, hash each."""
+    words = text.lower().split()
+    if len(words) < size:
+        return set()
+    hashes = set()
+    for i in range(len(words) - size + 1):
+        shingle = " ".join(words[i : i + size])
+        h = int(hashlib.blake2b(shingle.encode(), digest_size=8).hexdigest(), 16)
+        hashes.add(h % _DEDUP_PRIME)
+    return hashes
+
+
+# Module-level hasher for use by batched map function
+_GLOBAL_MINHASHER = MinHasher(DEDUP_NUM_PERM)
+
+
+def _minhash_signature_batch(texts: list[str]) -> dict[str, list]:
+    """Batch function for Dataset.map — compute MinHash signature per document."""
+    sigs = []
+    for text in texts:
+        h = _shingle_hashes(text)
+        sigs.append(_GLOBAL_MINHASHER.signature(h))
+    return {"minhash_sig": sigs}
+
+
+def _jaccard_from_signatures(sig_a: list[int], sig_b: list[int]) -> float:
+    """Estimate Jaccard similarity from two MinHash signatures."""
+    if not sig_a or not sig_b:
+        return 0.0
+    return sum(a == b for a, b in zip(sig_a, sig_b)) / len(sig_a)
+
+
+def deduplicate_corpus(ds) -> set[int]:
+    """Build LSH index, find near-duplicate clusters, return row indices to remove.
+
+    Keeps the longest document (by word count) in each cluster.
+    """
+    n = len(ds)
+    # Build LSH buckets: band_idx -> band_hash -> list of doc indices
+    buckets: dict[int, dict[int, list[int]]] = {
+        b: {} for b in range(DEDUP_BANDS)
+    }
+    sigs = ds["minhash_sig"]
+
+    for doc_idx in range(n):
+        sig = sigs[doc_idx]
+        for band_idx in range(DEDUP_BANDS):
+            start = band_idx * DEDUP_ROWS
+            band = tuple(sig[start : start + DEDUP_ROWS])
+            band_hash = hash(band)
+            buckets[band_idx].setdefault(band_hash, []).append(doc_idx)
+
+    # Find candidate pairs and verify Jaccard
+    uf = UnionFind()
+    for band_idx in range(DEDUP_BANDS):
+        for bucket in buckets[band_idx].values():
+            if len(bucket) < 2:
+                continue
+            for i in range(len(bucket)):
+                for j in range(i + 1, len(bucket)):
+                    a, b = bucket[i], bucket[j]
+                    if uf.find(a) == uf.find(b):
+                        continue  # already in same cluster
+                    jac = _jaccard_from_signatures(sigs[a], sigs[b])
+                    if jac >= DEDUP_THRESHOLD:
+                        uf.union(a, b)
+
+    # Group clusters
+    clusters: dict[int, list[int]] = {}
+    for doc_idx in range(n):
+        if doc_idx in uf.parent:
+            root = uf.find(doc_idx)
+            clusters.setdefault(root, []).append(doc_idx)
+
+    # For each cluster, keep the longest doc (most words), mark rest for removal
+    texts = ds["text"]
+    to_remove: set[int] = set()
+    for members in clusters.values():
+        if len(members) < 2:
+            continue
+        best_idx = max(members, key=lambda i: len(texts[i].split()))
+        for idx in members:
+            if idx != best_idx:
+                to_remove.add(idx)
+
+    return to_remove
 
 
 @dataclass
 class TestDecontaminationIndex:
-    ngrams: set[str]
     content_hashes: set[str]
-    minhash_index: MinHashLSHIndex | None = None
-    doc_shingles: dict[str, set[int]] | None = None
 
 
 # ── Helpers ──────────────────────────────────────────────────────────────────
@@ -161,30 +274,21 @@ def _strip_boilerplate_markers(text: str) -> str:
 
 
 def _strip_html_tags(text: str) -> str:
-    if "<" not in text and "&lt;" not in text.lower():
+    has_tags = "<" in text
+    has_entities = "&" in text
+    if not has_tags and not has_entities:
         return text
-    no_tags = HTML_TAG_RE.sub(" ", text)
-    return html.unescape(no_tags)
+    cleaned = text
+    if has_tags:
+        cleaned = HTML_COMMENT_RE.sub(" ", cleaned)
+        cleaned = HTML_TAG_RE.sub(" ", cleaned)
+    return html.unescape(cleaned)
 
 
 def _remove_special_characters(text: str) -> tuple[str, bool]:
-    cleaned_chars: list[str] = []
-    removed = False
-    for ch in text:
-        if ch in {"\ufffd", "\ufeff"}:
-            removed = True
-            continue
-        if ch == "\t":
-            cleaned_chars.append(" ")
-            continue
-        if ch == "\n":
-            cleaned_chars.append(ch)
-            continue
-        if unicodedata.category(ch).startswith("C"):
-            removed = True
-            continue
-        cleaned_chars.append(ch)
-    return "".join(cleaned_chars), removed
+    cleaned = text.replace("\t", " ")
+    result = _CONTROL_RE.sub("", cleaned)
+    return result, len(result) != len(cleaned)
 
 
 def _looks_like_code(text: str) -> bool:
@@ -198,14 +302,23 @@ def _looks_like_code(text: str) -> bool:
     code_like = 0
     for line in lines:
         stripped = line.strip()
-        if not stripped:
-            continue
-        if stripped.startswith(("#include", "//", "/*", "*/")):
+        # Comment / preprocessor lines
+        if stripped.startswith(("#include", "#!", "//", "/*", "*/", "$")):
             code_like += 1
             continue
+        # Language keywords co-occurring with code punctuation
         if CODE_KEYWORD_RE.search(stripped) and any(ch in stripped for ch in "{}();[]<>"):
             code_like += 1
             continue
+        # JSON/config bracket lines
+        if CODE_STRUCTURAL_RE.match(stripped):
+            code_like += 1
+            continue
+        # SQL-like statements
+        if stripped.upper().startswith(("SELECT ", "INSERT ", "UPDATE ", "DELETE ", "CREATE TABLE", "DROP ")):
+            code_like += 1
+            continue
+        # High punctuation density (minified JS, CSS, config)
         punctuation_ratio = sum(ch in "{}();<>/=+-" for ch in stripped) / max(len(stripped), 1)
         if punctuation_ratio > 0.35:
             code_like += 1
@@ -213,9 +326,65 @@ def _looks_like_code(text: str) -> bool:
     return code_like / len(lines) > 0.3 or code_like >= 5
 
 
+# ── Heuristic filter helpers (Phase 3 + 4) ───────────────────────────────────
+
+_CODE_FENCE_SIMPLE_RE = re.compile(r"```")
+_HTML_TAG_DENSITY_RE = re.compile(r"</?[a-zA-Z][^>]*>")
+_WORD_SPLIT_RE = re.compile(r"\b[a-zA-Z_]\w*\b")
+
+
+def _has_code_fences(text: str) -> bool:
+    """Check whether *text* contains triple-backtick code fences."""
+    return _CODE_FENCE_SIMPLE_RE.search(text) is not None
+
+
+def _html_tag_density(text: str) -> float:
+    """Fraction of characters occupied by HTML tags."""
+    if not text:
+        return 0.0
+    tag_chars = sum(m.end() - m.start() for m in _HTML_TAG_DENSITY_RE.finditer(text))
+    return tag_chars / len(text)
+
+
+def _symbol_to_text_ratio(text: str) -> float:
+    """Fraction of characters in *text* that belong to CODE_SYMBOL_CHARS."""
+    if not text:
+        return 0.0
+    return sum(ch in CODE_SYMBOL_CHARS for ch in text) / len(text)
+
+
+def _programming_keyword_count(text: str) -> int:
+    """Count distinct programming keywords found in *text*."""
+    words = {w.lower() for w in _WORD_SPLIT_RE.findall(text)}
+    return len(words & PROGRAMMING_KEYWORDS)
+
+
+def _longest_word_length(text: str) -> int:
+    """Length of the longest whitespace-delimited token."""
+    words = text.split()
+    if not words:
+        return 0
+    return max(len(w) for w in words)
+
+
+def _max_ngram_repeats(text: str, n: int = NGRAM_SIZE) -> int:
+    """Maximum repetition count of any word-level *n*-gram."""
+    words = text.split()
+    if len(words) < n:
+        return 0
+    counts: dict[tuple[str, ...], int] = {}
+    for i in range(len(words) - n + 1):
+        gram = tuple(words[i : i + n])
+        counts[gram] = counts.get(gram, 0) + 1
+    return max(counts.values()) if counts else 0
+
+
 def sanitize_document_text(text: str) -> tuple[str | None, str | None]:
     cleaned = _strip_html_tags(text)
     cleaned, _ = _remove_special_characters(cleaned)
+    cleaned = URL_RE.sub("", cleaned)
+    cleaned = _strip_boilerplate_markers(cleaned)
+    cleaned = MULTI_NEWLINE_RE.sub("\n\n", cleaned)
     cleaned = cleaned.strip()
     if not cleaned:
         return None, "empty_after_clean"
@@ -238,6 +407,143 @@ def sanitize_batch(texts: list[str]) -> dict[str, list]:
     return {"text": out_texts, "sanitize_status": statuses}
 
 
+# ── Heuristic filter batch functions (Phase 3 + 4) ───────────────────────────
+
+
+def heuristic_code_filter_batch(texts: list[str]) -> dict[str, list]:
+    """Phase 3 heuristic: flag documents that look like code/artifacts.
+
+    Returns {"code_filter_status": ["kept"|"code_fence"|"html_density"|
+                                     "symbol_ratio"|"keyword_density"]}
+    """
+    statuses: list[str] = []
+    for text in texts:
+        if _has_code_fences(text):
+            statuses.append("code_fence")
+        elif _html_tag_density(text) > HTML_TAG_DENSITY_THRESHOLD:
+            statuses.append("html_density")
+        elif _symbol_to_text_ratio(text) > CODE_SYMBOL_RATIO_THRESHOLD:
+            statuses.append("symbol_ratio")
+        elif _programming_keyword_count(text) > PROGRAMMING_KEYWORD_MAX:
+            statuses.append("keyword_density")
+        else:
+            statuses.append("kept")
+    return {"code_filter_status": statuses}
+
+
+def heuristic_quality_filter_batch(texts: list[str]) -> dict[str, list]:
+    """Phase 4 heuristic: flag low-quality / incoherent documents.
+
+    Returns {"quality_filter_status": ["kept"|"too_few_words"|"too_few_chars"|
+                                        "unnatural_word"|"ngram_repetition"]}
+    """
+    statuses: list[str] = []
+    for text in texts:
+        words = text.split()
+        if len(words) < MIN_WORD_COUNT:
+            statuses.append("too_few_words")
+        elif len(text) < MIN_CHAR_COUNT:
+            statuses.append("too_few_chars")
+        elif _longest_word_length(text) > MAX_WORD_LENGTH:
+            statuses.append("unnatural_word")
+        elif _max_ngram_repeats(text, NGRAM_SIZE) > NGRAM_MAX_REPEATS:
+            statuses.append("ngram_repetition")
+        else:
+            statuses.append("kept")
+    return {"quality_filter_status": statuses}
+
+
+# ── Classifier filter batch functions (Phase 3 + 4) ──────────────────────────
+
+
+def classifier_code_filter_batch(
+    texts: list[str], model_path: str
+) -> dict[str, list]:
+    """Phase 3 classifier: fastText code-vs-prose model.
+
+    Reloads the model each batch (same pattern as detect_language_batch)
+    so multiprocessing workers each get their own copy.
+
+    Returns {"code_filter_status": [...], "code_score": [...]}
+    """
+    model = fasttext.load_model(model_path)
+    statuses: list[str] = []
+    scores: list[float] = []
+    for text in texts:
+        first_line = text.split("\n")[0].strip() if text else ""
+        if not first_line:
+            statuses.append("kept")
+            scores.append(0.0)
+            continue
+        pred = model.predict(first_line)
+        label = pred[0][0].replace("__label__", "")
+        score = float(pred[1][0])
+        if label == "code" and score > CODE_CLASSIFIER_THRESHOLD:
+            statuses.append("classifier_code")
+            scores.append(score)
+        else:
+            statuses.append("kept")
+            scores.append(score)
+    return {"code_filter_status": statuses, "code_score": scores}
+
+
+def classifier_quality_filter_batch(
+    texts: list[str], kenlm_model, edu_model_path: str
+) -> dict[str, list]:
+    """Phase 4 classifier: KenLM perplexity + fastText educational quality.
+
+    *kenlm_model* must be a pre-loaded kenlm.Model (not fork-safe, so
+    num_proc must be 1 when calling this).  *edu_model_path* is loaded
+    per-batch like the code classifier.
+
+    Returns {"quality_filter_status": [...], "perplexity": [...], "edu_score": [...]}
+    """
+    try:
+        import kenlm as _kenlm  # noqa: F811
+    except ImportError:
+        raise ImportError(
+            "kenlm is required for classifier quality filtering. "
+            "Install with: pip install kenlm"
+        )
+
+    edu_model = fasttext.load_model(edu_model_path)
+    statuses: list[str] = []
+    perplexities: list[float] = []
+    edu_scores: list[int] = []
+
+    for text in texts:
+        # Perplexity via KenLM
+        ppl = kenlm_model.perplexity(text) if text.strip() else float("inf")
+        perplexities.append(ppl)
+
+        # Educational quality via fastText
+        first_line = text.split("\n")[0].strip() if text else ""
+        if first_line:
+            pred = edu_model.predict(first_line)
+            label = pred[0][0].replace("__label__", "")
+            try:
+                edu_score = int(label)
+            except ValueError:
+                edu_score = 0
+        else:
+            edu_score = 0
+        edu_scores.append(edu_score)
+
+        # Filter decisions
+        if ppl < KENLM_PERPLEXITY_LOW or ppl > KENLM_PERPLEXITY_HIGH:
+            statuses.append("perplexity_outlier")
+        elif edu_score < EDUCATIONAL_QUALITY_MIN:
+            statuses.append("low_educational")
+        else:
+            statuses.append("kept")
+
+    return {
+        "quality_filter_status": statuses,
+        "perplexity": perplexities,
+        "edu_score": edu_scores,
+    }
+
+
 def normalize_and_fingerprint(
     text: str, lowercase: bool = True
 ) -> tuple[str, str | None]:
@@ -254,27 +560,6 @@ def normalized_fingerprint(text: str, lowercase: bool = True) -> str | None:
     _, fingerprint = normalize_and_fingerprint(text, lowercase=lowercase)
     return fingerprint
 
-
-def compute_shingle_hashes(normalized_text: str, shingle_size: int) -> set[int]:
-    tokens = normalized_text.split()
-    if len(tokens) < shingle_size:
-        return set()
-    shingles: set[int] = set()
-    for idx in range(len(tokens) - shingle_size + 1):
-        shingle = " ".join(tokens[idx : idx + shingle_size])
-        digest = hashlib.blake2b(shingle.encode("utf-8"), digest_size=8).digest()
-        shingles.add(int.from_bytes(digest, "big") % MINHASH_PRIME)
-    return shingles
-
-
-def jaccard_similarity(a: set[int], b: set[int]) -> float:
-    if not a or not b:
-        return 0.0
-    intersection = len(a & b)
-    if intersection == 0:
-        return 0.0
-    union = len(a | b)
-    return intersection / union
 
 
 def detect_language(text: str, model) -> tuple[str, float]:
@@ -333,28 +618,13 @@ def detect_language_batch(
     return {"lang": langs, "lang_conf": confs}
 
 
-def extract_ngrams(text: str, n: int = 13) -> set[str]:
-    """Extract character-level n-grams for contamination detection."""
-    text = text.lower().strip()
-    if len(text) < n:
-        return set()
-    return {text[i : i + n] for i in range(len(text) - n + 1)}
-
-
 def build_test_decontamination_index(
     data_dir: Path, lowercase: bool = True
 ) -> TestDecontaminationIndex:
-    """Build n-gram and normalized SHA-1 indexes for all eval/test splits."""
+    """Build SHA-1 content hash index from all eval/test splits."""
 
-    ngrams: set[str] = set()
     content_hashes: set[str] = set()
     split_specs: list[tuple[str, Path]] = []
-    minhash_index = (
-        MinHashLSHIndex(MINHASH_NUM_PERMUTATIONS, MINHASH_ROWS_PER_BAND)
-        if ENABLE_MINHASH_DECONTAMINATION and MINHASHER is not None
-        else None
-    )
-    doc_shingles: dict[str, set[int]] | None = {} if minhash_index else None
 
     wiki_path = data_dir / "wikitext-103-test"
     if wiki_path.exists():
@@ -376,48 +646,25 @@ def build_test_decontamination_index(
 
     if not split_specs:
         print("[decontam] No evaluation splits found; contamination checks disabled.")
-        return TestDecontaminationIndex(
-            ngrams=ngrams,
-            content_hashes=content_hashes,
-            minhash_index=minhash_index,
-            doc_shingles=doc_shingles,
-        )
+        return TestDecontaminationIndex(content_hashes=content_hashes)
 
     for name, path in split_specs:
         print(f"[decontam] Indexing {name} set...")
         dataset = load_from_disk(str(path))
-        before = len(ngrams)
         before_hashes = len(content_hashes)
 
         _lc = lowercase  # capture for closure
 
         def _compute_index_batch(batch):
-            """Compute ngrams, fingerprints, and normalized text for a batch."""
-            all_ngrams: list[str] = []
+            """Compute fingerprints for a batch."""
             fingerprints: list[str] = []
-            normalized_texts: list[str] = []
             for text in batch["text"]:
                 if not text or not text.strip():
-                    all_ngrams.append("")
                     fingerprints.append("")
-                    normalized_texts.append("")
                     continue
-                norm_text, fp = normalize_and_fingerprint(text, lowercase=_lc)
-                if not norm_text:
-                    all_ngrams.append("")
-                    fingerprints.append("")
-                    normalized_texts.append("")
-                    continue
-                doc_ngrams = extract_ngrams(text)
-                # Join ngrams with newline for serializability
-                all_ngrams.append("\n".join(doc_ngrams) if doc_ngrams else "")
+                _, fp = normalize_and_fingerprint(text, lowercase=_lc)
                 fingerprints.append(fp or "")
-                normalized_texts.append(norm_text)
-            return {
-                "ngrams_joined": all_ngrams,
-                "fingerprint": fingerprints,
-                "normalized_text": normalized_texts,
-            }
+            return {"fingerprint": fingerprints}
 
         mapped = dataset.map(
             _compute_index_batch,
@@ -426,66 +673,16 @@ def build_test_decontamination_index(
             num_proc=1,
         )
 
-        # Reduce: union ngrams, collect hashes, insert MinHash signatures
         for idx in range(len(mapped)):
-            row = mapped[idx]
-            ngrams_str = row["ngrams_joined"]
-            if ngrams_str:
-                ngrams.update(ngrams_str.split("\n"))
-            fp = row["fingerprint"]
+            fp = mapped[idx]["fingerprint"]
             if fp:
                 content_hashes.add(fp)
-            norm_text = row["normalized_text"]
-            if (
-                minhash_index
-                and doc_shingles is not None
-                and MINHASHER is not None
-                and norm_text
-            ):
-                shingle_hashes = compute_shingle_hashes(
-                    norm_text, MINHASH_SHINGLE_SIZE
-                )
-                if not shingle_hashes:
-                    continue
-                signature = MINHASHER.signature(shingle_hashes)
-                doc_id = f"{name}:{idx}"
-                minhash_index.insert(doc_id, signature)
-                doc_shingles[doc_id] = shingle_hashes
 
-        print(
-            f"  -> {len(ngrams) - before:,} new n-grams,"
-            f" {len(content_hashes) - before_hashes:,} new hashes"
-        )
+        print(f"  -> {len(content_hashes) - before_hashes:,} new hashes")
 
-    print(f"[decontam] Total test n-grams: {len(ngrams):,}")
     print(f"[decontam] Total test hashes: {len(content_hashes):,}")
-    if minhash_index and doc_shingles is not None:
-        print(
-            f"[decontam] MinHash protected docs: {len(doc_shingles):,}"
-            f" (shingle size={MINHASH_SHINGLE_SIZE}, perms={MINHASH_NUM_PERMUTATIONS})"
-        )
-    return TestDecontaminationIndex(
-        ngrams=ngrams,
-        content_hashes=content_hashes,
-        minhash_index=minhash_index,
-        doc_shingles=doc_shingles,
-    )
+    return TestDecontaminationIndex(content_hashes=content_hashes)
 
-
-def build_test_ngrams(data_dir: Path) -> set[str]:
-    """Backwards-compatible wrapper returning only the n-gram index."""
-    return build_test_decontamination_index(data_dir).ngrams
-
-
-def is_contaminated(
-    text: str, test_ngrams: set[str], n: int = 13, threshold: float = 0.8
-) -> bool:
-    """Check if a document has high overlap with test set n-grams."""
-    doc_ngrams = extract_ngrams(text, n)
-    if not doc_ngrams:
-        return False
-    overlap = len(doc_ngrams & test_ngrams) / len(doc_ngrams)
-    return overlap > threshold
 
 
 def decontaminate_batch(
@@ -493,10 +690,10 @@ def decontaminate_batch(
     test_index: TestDecontaminationIndex,
     normalize_lowercase: bool = True,
 ) -> dict[str, list]:
-    """Batch decontamination check: hash match, MinHash overlap, n-gram contamination.
+    """Batch decontamination check via SHA-1 content hash matching.
 
     Returns dict with 'decontam_status' column.
-    Values: 'kept', 'empty_after_normalize', 'test_overlap', 'minhash_overlap', 'contaminated'.
+    Values: 'kept', 'empty_after_normalize', 'test_overlap'.
     """
     if not texts:
         return {"decontam_status": []}
@@ -504,7 +701,7 @@ def decontaminate_batch(
     statuses: list[str] = []
     for text in texts:
         # Normalize + fingerprint
-        normalized_text, fingerprint = normalize_and_fingerprint(
+        _, fingerprint = normalize_and_fingerprint(
             text, lowercase=normalize_lowercase
         )
         if fingerprint is None:
@@ -514,38 +711,6 @@ def decontaminate_batch(
         # Exact hash match
         if test_index.content_hashes and fingerprint in test_index.content_hashes:
             statuses.append("test_overlap")
-            continue
-
-        # MinHash/LSH overlap
-        if (
-            ENABLE_MINHASH_DECONTAMINATION
-            and test_index.minhash_index is not None
-            and test_index.doc_shingles is not None
-            and MINHASHER is not None
-        ):
-            shingle_hashes = compute_shingle_hashes(
-                normalized_text, MINHASH_SHINGLE_SIZE
-            )
-            if shingle_hashes:
-                signature = MINHASHER.signature(shingle_hashes)
-                candidates = test_index.minhash_index.query(signature)
-                found_overlap = False
-                if candidates:
-                    for candidate in candidates:
-                        target = test_index.doc_shingles.get(candidate)
-                        if not target:
-                            continue
-                        similarity = jaccard_similarity(shingle_hashes, target)
-                        if similarity >= MINHASH_JACCARD_THRESHOLD:
-                            found_overlap = True
-                            break
-                if found_overlap:
-                    statuses.append("minhash_overlap")
-                    continue
-
-        # N-gram contamination
-        if test_index.ngrams and is_contaminated(text, test_index.ngrams):
-            statuses.append("contaminated")
             continue
 
         statuses.append("kept")
@@ -591,41 +756,17 @@ def preprocess_document(
 
     # Language filter
     detected_lang, conf = detect_language(text, lang_model)
-    if detected_lang != lang or conf < 0.5:
+    if detected_lang != lang or conf < 0.8:
         return None, "non_english"
 
-    # Exact-match decontamination using normalized hashes
-    normalized_text, fingerprint = normalize_and_fingerprint(
+    # Exact-match decontamination using normalized SHA-1 hashes
+    _, fingerprint = normalize_and_fingerprint(
         text, lowercase=normalize_lowercase
     )
     if fingerprint is None:
         return None, "empty_after_normalize"
     if test_index.content_hashes and fingerprint in test_index.content_hashes:
         return None, "test_overlap"
-
-    # MinHash/LSH overlap detection
-    if (
-        ENABLE_MINHASH_DECONTAMINATION
-        and test_index.minhash_index is not None
-        and test_index.doc_shingles is not None
-        and MINHASHER is not None
-    ):
-        shingle_hashes = compute_shingle_hashes(normalized_text, MINHASH_SHINGLE_SIZE)
-        if shingle_hashes:
-            signature = MINHASHER.signature(shingle_hashes)
-            candidates = test_index.minhash_index.query(signature)
-            if candidates:
-                for candidate in candidates:
-                    target = test_index.doc_shingles.get(candidate)
-                    if not target:
-                        continue
-                    similarity = jaccard_similarity(shingle_hashes, target)
-                    if similarity >= MINHASH_JACCARD_THRESHOLD:
-                        return None, "minhash_overlap"
-
-    # Decontamination
-    if test_index.ngrams and is_contaminated(text, test_index.ngrams):
-        return None, "contaminated"
 
     # Tokenize
     tokens = tokenizer.encode(text)
@@ -675,9 +816,7 @@ def run_preprocess(args):
     skip_decontam = getattr(args, "skip_decontam", False)
     if skip_decontam:
         print("[decontam] Skipping decontamination (--skip-decontam flag set)")
-        test_index = TestDecontaminationIndex(
-            ngrams=set(), content_hashes=set(), minhash_index=None, doc_shingles=None
-        )
+        test_index = TestDecontaminationIndex(content_hashes=set())
     else:
         test_index = build_test_decontamination_index(
             data_dir, lowercase=FINGERPRINT_LOWERCASE
@@ -721,7 +860,7 @@ def run_preprocess(args):
     before_lang = len(ds)
     target_lang = args.lang
     ds = ds.filter(
-        lambda row: row["lang"] == target_lang and row["lang_conf"] >= 0.5,
+        lambda row: row["lang"] == target_lang and row["lang_conf"] >= 0.8,
         num_proc=num_workers,
     )
     after_lang = len(ds)
@@ -730,28 +869,166 @@ def run_preprocess(args):
         f" (removed {before_lang - after_lang:,})"
     )
 
-    # ── Phase 3: Decontamination ─────────────────────────────────────────
+    # ── Phase 3: Code / artifact removal ─────────────────────────────────
+    filter_mode = getattr(args, "filter_mode", "heuristic")
+    skip_code_filter = getattr(args, "skip_code_filter", False)
+    skip_quality_filter = getattr(args, "skip_quality_filter", False)
+
+    if filter_mode == "none" or skip_code_filter:
+        print("\n[phase 3] Code/artifact removal... SKIPPED")
+        after_code = len(ds)
+    elif filter_mode == "heuristic":
+        print("\n[phase 3] Code/artifact removal (heuristic)...")
+        ds = ds.map(
+            lambda batch: heuristic_code_filter_batch(batch["text"]),
+            batched=True,
+            batch_size=256,
+            num_proc=num_workers,
+        )
+        before_code = len(ds)
+        ds = ds.filter(
+            lambda row: row["code_filter_status"] == "kept",
+            num_proc=num_workers,
+        )
+        after_code = len(ds)
+        print(
+            f"  kept {after_code:,} / {before_code:,}"
+            f" (removed {before_code - after_code:,})"
+        )
+    elif filter_mode == "classifier":
+        code_model_path = data_dir / CODE_CLASSIFIER_FILENAME
+        if not code_model_path.exists():
+            raise FileNotFoundError(
+                f"Code classifier model not found at {code_model_path}. "
+                "Train it with: uv run python src/scripts/train_filter_models.py code-classifier"
+            )
+        print("\n[phase 3] Code/artifact removal (classifier)...")
+        _code_model_path = str(code_model_path)
+        ds = ds.map(
+            lambda batch: classifier_code_filter_batch(batch["text"], _code_model_path),
+            batched=True,
+            batch_size=256,
+            num_proc=num_workers,
+        )
+        before_code = len(ds)
+        ds = ds.filter(
+            lambda row: row["code_filter_status"] == "kept",
+            num_proc=num_workers,
+        )
+        after_code = len(ds)
+        print(
+            f"  kept {after_code:,} / {before_code:,}"
+            f" (removed {before_code - after_code:,})"
+        )
+
+    # ── Phase 4: Quality / coherence filter ───────────────────────────────
+    if filter_mode == "none" or skip_quality_filter:
+        print("\n[phase 4] Quality/coherence filter... SKIPPED")
+        after_quality = len(ds)
+    elif filter_mode == "heuristic":
+        print("\n[phase 4] Quality/coherence filter (heuristic)...")
+        ds = ds.map(
+            lambda batch: heuristic_quality_filter_batch(batch["text"]),
+            batched=True,
+            batch_size=256,
+            num_proc=num_workers,
+        )
+        before_quality = len(ds)
+        ds = ds.filter(
+            lambda row: row["quality_filter_status"] == "kept",
+            num_proc=num_workers,
+        )
+        after_quality = len(ds)
+        print(
+            f"  kept {after_quality:,} / {before_quality:,}"
+            f" (removed {before_quality - after_quality:,})"
+        )
+    elif filter_mode == "classifier":
+        kenlm_path = data_dir / KENLM_MODEL_FILENAME
+        edu_path = data_dir / QUALITY_CLASSIFIER_FILENAME
+        if not kenlm_path.exists():
+            raise FileNotFoundError(
+                f"KenLM model not found at {kenlm_path}. "
+                "Train it with: uv run python src/scripts/train_filter_models.py kenlm-model"
+            )
+        if not edu_path.exists():
+            raise FileNotFoundError(
+                f"Educational quality model not found at {edu_path}. "
+                "Train it with: uv run python src/scripts/train_filter_models.py edu-classifier"
+            )
+        try:
+            import kenlm as _kenlm
+        except ImportError:
+            raise ImportError(
+                "kenlm is required for --filter-mode classifier. "
+                "Install with: pip install 'parrotllm[classifier]'"
+            )
+        print("\n[phase 4] Quality/coherence filter (classifier)...")
+        _kenlm_model = _kenlm.Model(str(kenlm_path))
+        _edu_path = str(edu_path)
+        ds = ds.map(
+            lambda batch: classifier_quality_filter_batch(
+                batch["text"], _kenlm_model, _edu_path
+            ),
+            batched=True,
+            batch_size=256,
+            num_proc=1,  # kenlm not fork-safe
+        )
+        before_quality = len(ds)
+        ds = ds.filter(
+            lambda row: row["quality_filter_status"] == "kept",
+            num_proc=1,
+        )
+        after_quality = len(ds)
+        print(
+            f"  kept {after_quality:,} / {before_quality:,}"
+            f" (removed {before_quality - after_quality:,})"
+        )
+
+    # ── Phase 5: Fuzzy deduplication ──────────────────────────────────────
+    skip_dedup = getattr(args, "skip_dedup", False)
+    if skip_dedup:
+        print("\n[phase 5] Fuzzy deduplication... SKIPPED")
+        after_dedup = len(ds)
+    else:
+        print("\n[phase 5] Fuzzy deduplication...")
+        # Pass 1: compute signatures (parallel)
+        ds = ds.map(
+            _minhash_signature_batch,
+            input_columns=["text"],
+            batched=True,
+            batch_size=256,
+            num_proc=num_workers,
+        )
+        # Pass 2: build LSH + find duplicates (single-threaded)
+        dup_indices = deduplicate_corpus(ds)
+        before_dedup = len(ds)
+        ds = ds.select([i for i in range(len(ds)) if i not in dup_indices])
+        after_dedup = len(ds)
+        print(f"  kept {after_dedup:,} / {before_dedup:,} (removed {before_dedup - after_dedup:,} near-duplicates)")
+
+    # ── Phase 6: Decontamination ──────────────────────────────────────────
     if skip_decontam:
-        print("\n[phase 3] Decontamination... SKIPPED")
+        print("\n[phase 6] Decontamination... SKIPPED")
         after_decontam = len(ds)
     else:
-        print("\n[phase 3] Decontamination...")
+        print("\n[phase 6] Decontamination...")
         ds = ds.map(
             lambda batch: decontaminate_batch(batch["text"], test_index),
             batched=True,
             batch_size=256,
-            num_proc=1,  # MinHash LSH index may not be picklable
+            num_proc=num_workers,
         )
         before_decontam = len(ds)
-        ds = ds.filter(lambda row: row["decontam_status"] == "kept", num_proc=1)
+        ds = ds.filter(lambda row: row["decontam_status"] == "kept", num_proc=num_workers)
         after_decontam = len(ds)
         print(
             f"  kept {after_decontam:,} / {before_decontam:,}"
             f" (removed {before_decontam - after_decontam:,})"
         )
 
-    # ── Phase 4: Tokenization ────────────────────────────────────────────
-    print("\n[phase 4] Tokenization...")
+    # ── Phase 7: Tokenization ─────────────────────────────────────────────
+    print("\n[phase 7] Tokenization...")
     ds = ds.map(
         lambda batch: tokenize_batch(batch["text"], tokenizer),
         batched=True,
@@ -767,15 +1044,20 @@ def run_preprocess(args):
     )
 
     # ── Summary ──────────────────────────────────────────────────────────
+    _skip_code = filter_mode == "none" or skip_code_filter
+    _skip_quality = filter_mode == "none" or skip_quality_filter
     print(f"\n[preprocess] Filter summary:")
-    print(f"  input:          {total_docs:,}")
-    print(f"  after sanitize: {after_sanitize:,}")
-    print(f"  after lang:     {after_lang:,}")
-    print(f"  after decontam: {after_decontam:,}{' (skipped)' if skip_decontam else ''}")
-    print(f"  after tokenize: {after_tok:,}")
+    print(f"  input:            {total_docs:,}")
+    print(f"  after sanitize:   {after_sanitize:,}")
+    print(f"  after lang:       {after_lang:,}")
+    print(f"  after code filter:{after_code:,}{' (skipped)' if _skip_code else ''}")
+    print(f"  after quality:    {after_quality:,}{' (skipped)' if _skip_quality else ''}")
+    print(f"  after dedup:      {after_dedup:,}{' (skipped)' if skip_dedup else ''}")
+    print(f"  after decontam:   {after_decontam:,}{' (skipped)' if skip_decontam else ''}")
+    print(f"  after tokenize:   {after_tok:,}")
 
-    # ── Phase 5: Binary output ───────────────────────────────────────────
-    print("\n[phase 5] Writing binary output...")
+    # ── Phase 8: Binary output ────────────────────────────────────────────
+    print("\n[phase 8] Writing binary output...")
     all_ids = []
     for row in ds:
         all_ids.extend(row["input_ids"])

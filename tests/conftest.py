@@ -40,6 +40,35 @@ def sample_texts():
 
 
 @pytest.fixture
+def prose_text():
+    """Clean English prose that should pass all heuristic filters."""
+    return (
+        "The history of natural language processing generally started in the 1950s, "
+        "although work can be found from earlier periods. In 1950, Alan Turing published "
+        "an article titled Computing Machinery and Intelligence which proposed what is now "
+        "called the Turing test as a criterion of intelligence, a task that involves the "
+        "automated interpretation and generation of natural language. The premise of the "
+        "test is that if the computer can engage in a conversation with a human without "
+        "being detected as a machine, it has demonstrated human intelligence. This text "
+        "needs to be long enough to exceed the minimum word count threshold of fifty words "
+        "and the minimum character count of two hundred characters to survive the quality "
+        "filter in heuristic mode."
+    )
+
+
+@pytest.fixture
+def code_text():
+    """Text heavy with code artifacts that should be caught by heuristic code filter."""
+    return (
+        '```python\n'
+        'def hello_world():\n'
+        '    print("Hello, world!")\n'
+        '```\n'
+        'Some surrounding prose text.'
+    )
+
+
+@pytest.fixture
 def english_text():
     """A single clean English document guaranteed to pass all filters."""
     return (

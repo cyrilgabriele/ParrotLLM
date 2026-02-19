@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import hashlib
 import html
+import os
 import random
 import re
 import unicodedata
@@ -669,39 +670,107 @@ def run_preprocess(args):
             f"Language model not found at {lang_model_path}. "
             "Run: uv run python src/scripts/download_data.py"
         )
-    lang_model = fasttext.load_model(str(lang_model_path))
 
     # Build decontamination indexes (ngrams + normalized hashes)
     test_index = build_test_decontamination_index(
         data_dir, lowercase=FINGERPRINT_LOWERCASE
     )
 
-    # Process all documents
-    print(f"[preprocess] Processing {len(ds):,} documents...")
-    stats: Counter = Counter()
-    all_tokens: list[int] = []
+    # Resolve num_workers
+    num_workers = getattr(args, "num_workers", "auto")
+    if num_workers == "auto":
+        num_workers = os.cpu_count() or 1
+    else:
+        num_workers = int(num_workers)
 
-    for doc in tqdm(ds, desc="preprocessing"):
-        tokens, status = preprocess_document(
-            doc["text"],
-            tokenizer,
-            lang_model,
-            test_index,
-            lang=args.lang,
-            normalize_lowercase=FINGERPRINT_LOWERCASE,
-        )
-        stats[status] += 1
-        if tokens is not None:
-            all_tokens.extend(tokens)
+    total_docs = len(ds)
+    print(f"[preprocess] Processing {total_docs:,} documents (num_workers={num_workers})...")
 
-    # Stats
-    print("\n[preprocess] Filter stats:")
-    for status, count in stats.most_common():
-        print(f"  {status}: {count:,} ({count / len(ds) * 100:.1f}%)")
-    print(f"  Total tokens kept: {len(all_tokens):,}")
+    # ── Phase 1: Sanitization ────────────────────────────────────────────
+    print("\n[phase 1] Sanitization...")
+    ds = ds.map(
+        lambda batch: sanitize_batch(batch["text"]),
+        batched=True,
+        batch_size=256,
+        num_proc=num_workers,
+    )
+    before_sanitize = len(ds)
+    ds = ds.filter(lambda row: row["sanitize_status"] == "kept", num_proc=num_workers)
+    after_sanitize = len(ds)
+    print(
+        f"  kept {after_sanitize:,} / {before_sanitize:,}"
+        f" (removed {before_sanitize - after_sanitize:,})"
+    )
 
-    # Convert to numpy uint16 (vocab 50257 fits in uint16 max 65535)
-    token_array = np.array(all_tokens, dtype=np.uint16)
+    # ── Phase 2: Language filter ─────────────────────────────────────────
+    print("\n[phase 2] Language detection...")
+    _lang_model_path = str(lang_model_path)
+    ds = ds.map(
+        lambda batch: detect_language_batch(batch["text"], _lang_model_path),
+        batched=True,
+        batch_size=256,
+        num_proc=num_workers,
+    )
+    before_lang = len(ds)
+    target_lang = args.lang
+    ds = ds.filter(
+        lambda row: row["lang"] == target_lang and row["lang_conf"] >= 0.5,
+        num_proc=num_workers,
+    )
+    after_lang = len(ds)
+    print(
+        f"  kept {after_lang:,} / {before_lang:,}"
+        f" (removed {before_lang - after_lang:,})"
+    )
+
+    # ── Phase 3: Decontamination ─────────────────────────────────────────
+    print("\n[phase 3] Decontamination...")
+    ds = ds.map(
+        lambda batch: decontaminate_batch(batch["text"], test_index),
+        batched=True,
+        batch_size=256,
+        num_proc=1,  # MinHash LSH index may not be picklable
+    )
+    before_decontam = len(ds)
+    ds = ds.filter(lambda row: row["decontam_status"] == "kept", num_proc=1)
+    after_decontam = len(ds)
+    print(
+        f"  kept {after_decontam:,} / {before_decontam:,}"
+        f" (removed {before_decontam - after_decontam:,})"
+    )
+
+    # ── Phase 4: Tokenization ────────────────────────────────────────────
+    print("\n[phase 4] Tokenization...")
+    ds = ds.map(
+        lambda batch: tokenize_batch(batch["text"], tokenizer),
+        batched=True,
+        batch_size=256,
+        num_proc=1,  # Rust tokenizer parallelizes internally
+    )
+    before_tok = len(ds)
+    ds = ds.filter(lambda row: row["n_tokens"] >= 64, num_proc=1)
+    after_tok = len(ds)
+    print(
+        f"  kept {after_tok:,} / {before_tok:,}"
+        f" (removed {before_tok - after_tok:,} short docs)"
+    )
+
+    # ── Summary ──────────────────────────────────────────────────────────
+    print(f"\n[preprocess] Filter summary:")
+    print(f"  input:          {total_docs:,}")
+    print(f"  after sanitize: {after_sanitize:,}")
+    print(f"  after lang:     {after_lang:,}")
+    print(f"  after decontam: {after_decontam:,}")
+    print(f"  after tokenize: {after_tok:,}")
+
+    # ── Phase 5: Binary output ───────────────────────────────────────────
+    print("\n[phase 5] Writing binary output...")
+    all_ids = []
+    for row in ds:
+        all_ids.extend(row["input_ids"])
+
+    token_array = np.array(all_ids, dtype=np.uint16)
+    print(f"  Total tokens kept: {len(token_array):,}")
 
     # Train/val split (99% / 1%)
     n_val = max(1, int(len(token_array) * 0.01))

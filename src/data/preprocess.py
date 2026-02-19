@@ -508,6 +508,22 @@ def decontaminate_batch(
     return {"decontam_status": statuses}
 
 
+def tokenize_batch(
+    texts: list[str], tokenizer
+) -> dict[str, list]:
+    """Batch tokenization using the fast tokenizer's Rust backend.
+
+    Returns dict with 'input_ids' (list of token ID lists) and 'n_tokens' (lengths).
+    """
+    if not texts:
+        return {"input_ids": [], "n_tokens": []}
+
+    encoded = tokenizer(texts, add_special_tokens=False, return_attention_mask=False)
+    input_ids = encoded["input_ids"]
+    n_tokens = [len(ids) for ids in input_ids]
+    return {"input_ids": input_ids, "n_tokens": n_tokens}
+
+
 # ── Main pipeline ────────────────────────────────────────────────────────────
 
 

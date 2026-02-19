@@ -181,3 +181,46 @@ class TestDecontaminateBatch:
 
         result = decontaminate_batch([], empty_index)
         assert result == {"decontam_status": []}
+
+
+from transformers import GPT2TokenizerFast
+
+
+class TestTokenizeBatch:
+    @pytest.fixture
+    def tokenizer(self):
+        return GPT2TokenizerFast.from_pretrained("gpt2")
+
+    def test_returns_dict_with_required_keys(self, tokenizer):
+        from src.data.preprocess import tokenize_batch
+
+        texts = ["Hello world, this is a test."]
+        result = tokenize_batch(texts, tokenizer)
+        assert "input_ids" in result
+        assert "n_tokens" in result
+        assert len(result["input_ids"]) == 1
+        assert len(result["n_tokens"]) == 1
+
+    def test_matches_sequential(self, tokenizer, english_text):
+        from src.data.preprocess import tokenize_batch
+
+        texts = [english_text, "Short.", "Another longer sentence with more words."]
+        batch_result = tokenize_batch(texts, tokenizer)
+
+        for i, text in enumerate(texts):
+            seq_tokens = tokenizer.encode(text)
+            assert batch_result["input_ids"][i] == seq_tokens
+            assert batch_result["n_tokens"][i] == len(seq_tokens)
+
+    def test_empty_batch(self, tokenizer):
+        from src.data.preprocess import tokenize_batch
+
+        result = tokenize_batch([], tokenizer)
+        assert result == {"input_ids": [], "n_tokens": []}
+
+    def test_token_count_correct(self, tokenizer):
+        from src.data.preprocess import tokenize_batch
+
+        texts = ["Hello world"]
+        result = tokenize_batch(texts, tokenizer)
+        assert result["n_tokens"][0] == len(result["input_ids"][0])

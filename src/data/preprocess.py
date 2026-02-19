@@ -443,6 +443,71 @@ def is_contaminated(
     return overlap > threshold
 
 
+def decontaminate_batch(
+    texts: list[str],
+    test_index: TestDecontaminationIndex,
+    normalize_lowercase: bool = True,
+) -> dict[str, list]:
+    """Batch decontamination check: hash match, MinHash overlap, n-gram contamination.
+
+    Returns dict with 'decontam_status' column.
+    Values: 'kept', 'empty_after_normalize', 'test_overlap', 'minhash_overlap', 'contaminated'.
+    """
+    if not texts:
+        return {"decontam_status": []}
+
+    statuses: list[str] = []
+    for text in texts:
+        # Normalize + fingerprint
+        normalized_text, fingerprint = normalize_and_fingerprint(
+            text, lowercase=normalize_lowercase
+        )
+        if fingerprint is None:
+            statuses.append("empty_after_normalize")
+            continue
+
+        # Exact hash match
+        if test_index.content_hashes and fingerprint in test_index.content_hashes:
+            statuses.append("test_overlap")
+            continue
+
+        # MinHash/LSH overlap
+        if (
+            ENABLE_MINHASH_DECONTAMINATION
+            and test_index.minhash_index is not None
+            and test_index.doc_shingles is not None
+            and MINHASHER is not None
+        ):
+            shingle_hashes = compute_shingle_hashes(
+                normalized_text, MINHASH_SHINGLE_SIZE
+            )
+            if shingle_hashes:
+                signature = MINHASHER.signature(shingle_hashes)
+                candidates = test_index.minhash_index.query(signature)
+                found_overlap = False
+                if candidates:
+                    for candidate in candidates:
+                        target = test_index.doc_shingles.get(candidate)
+                        if not target:
+                            continue
+                        similarity = jaccard_similarity(shingle_hashes, target)
+                        if similarity >= MINHASH_JACCARD_THRESHOLD:
+                            found_overlap = True
+                            break
+                if found_overlap:
+                    statuses.append("minhash_overlap")
+                    continue
+
+        # N-gram contamination
+        if test_index.ngrams and is_contaminated(text, test_index.ngrams):
+            statuses.append("contaminated")
+            continue
+
+        statuses.append("kept")
+
+    return {"decontam_status": statuses}
+
+
 # ── Main pipeline ────────────────────────────────────────────────────────────
 
 

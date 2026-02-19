@@ -97,3 +97,87 @@ class TestDetectLanguageBatch:
 
         result = detect_language_batch([], LANG_MODEL_PATH)
         assert result == {"lang": [], "lang_conf": []}
+
+
+from src.data.preprocess import (
+    TestDecontaminationIndex,
+    extract_ngrams,
+    normalize_and_fingerprint,
+    is_contaminated,
+    FINGERPRINT_LOWERCASE,
+)
+
+
+class TestDecontaminateBatch:
+    @pytest.fixture
+    def empty_index(self):
+        return TestDecontaminationIndex(
+            ngrams=set(),
+            content_hashes=set(),
+            minhash_index=None,
+            doc_shingles=None,
+        )
+
+    @pytest.fixture
+    def index_with_ngrams(self):
+        """Index containing n-grams from a known 'test set' document."""
+        test_doc = "The quick brown fox jumps over the lazy dog near the river bank"
+        ngrams = extract_ngrams(test_doc)
+        _, fp = normalize_and_fingerprint(test_doc)
+        return TestDecontaminationIndex(
+            ngrams=ngrams,
+            content_hashes={fp} if fp else set(),
+            minhash_index=None,
+            doc_shingles=None,
+        )
+
+    def test_returns_dict_with_required_keys(self, empty_index):
+        from src.data.preprocess import decontaminate_batch
+
+        texts = ["Hello world test document."]
+        result = decontaminate_batch(texts, empty_index)
+        assert "decontam_status" in result
+        assert len(result["decontam_status"]) == 1
+
+    def test_clean_docs_pass(self, empty_index):
+        from src.data.preprocess import decontaminate_batch
+
+        texts = ["This is a perfectly clean document with no overlap."]
+        result = decontaminate_batch(texts, empty_index)
+        assert result["decontam_status"][0] == "kept"
+
+    def test_exact_hash_match_filtered(self, index_with_ngrams):
+        from src.data.preprocess import decontaminate_batch
+
+        # This exact text should match the hash in the index
+        texts = ["The quick brown fox jumps over the lazy dog near the river bank"]
+        result = decontaminate_batch(texts, index_with_ngrams)
+        assert result["decontam_status"][0] == "test_overlap"
+
+    def test_matches_sequential(self, index_with_ngrams):
+        from src.data.preprocess import decontaminate_batch
+
+        texts = [
+            "Completely unrelated text about programming languages and software development.",
+            "The quick brown fox jumps over the lazy dog near the river bank",
+            "",
+        ]
+        batch_result = decontaminate_batch(texts, index_with_ngrams)
+
+        for i, text in enumerate(texts):
+            if not text.strip():
+                assert batch_result["decontam_status"][i] == "empty_after_normalize"
+                continue
+            _, fp = normalize_and_fingerprint(text, lowercase=FINGERPRINT_LOWERCASE)
+            if fp and fp in index_with_ngrams.content_hashes:
+                assert batch_result["decontam_status"][i] == "test_overlap"
+            elif index_with_ngrams.ngrams and is_contaminated(text, index_with_ngrams.ngrams):
+                assert batch_result["decontam_status"][i] == "contaminated"
+            else:
+                assert batch_result["decontam_status"][i] == "kept"
+
+    def test_empty_batch(self, empty_index):
+        from src.data.preprocess import decontaminate_batch
+
+        result = decontaminate_batch([], empty_index)
+        assert result == {"decontam_status": []}

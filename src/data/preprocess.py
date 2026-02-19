@@ -672,9 +672,16 @@ def run_preprocess(args):
         )
 
     # Build decontamination indexes (ngrams + normalized hashes)
-    test_index = build_test_decontamination_index(
-        data_dir, lowercase=FINGERPRINT_LOWERCASE
-    )
+    skip_decontam = getattr(args, "skip_decontam", False)
+    if skip_decontam:
+        print("[decontam] Skipping decontamination (--skip-decontam flag set)")
+        test_index = TestDecontaminationIndex(
+            ngrams=set(), content_hashes=set(), minhash_index=None, doc_shingles=None
+        )
+    else:
+        test_index = build_test_decontamination_index(
+            data_dir, lowercase=FINGERPRINT_LOWERCASE
+        )
 
     # Resolve num_workers
     num_workers = getattr(args, "num_workers", "auto")
@@ -724,20 +731,24 @@ def run_preprocess(args):
     )
 
     # ── Phase 3: Decontamination ─────────────────────────────────────────
-    print("\n[phase 3] Decontamination...")
-    ds = ds.map(
-        lambda batch: decontaminate_batch(batch["text"], test_index),
-        batched=True,
-        batch_size=256,
-        num_proc=1,  # MinHash LSH index may not be picklable
-    )
-    before_decontam = len(ds)
-    ds = ds.filter(lambda row: row["decontam_status"] == "kept", num_proc=1)
-    after_decontam = len(ds)
-    print(
-        f"  kept {after_decontam:,} / {before_decontam:,}"
-        f" (removed {before_decontam - after_decontam:,})"
-    )
+    if skip_decontam:
+        print("\n[phase 3] Decontamination... SKIPPED")
+        after_decontam = len(ds)
+    else:
+        print("\n[phase 3] Decontamination...")
+        ds = ds.map(
+            lambda batch: decontaminate_batch(batch["text"], test_index),
+            batched=True,
+            batch_size=256,
+            num_proc=1,  # MinHash LSH index may not be picklable
+        )
+        before_decontam = len(ds)
+        ds = ds.filter(lambda row: row["decontam_status"] == "kept", num_proc=1)
+        after_decontam = len(ds)
+        print(
+            f"  kept {after_decontam:,} / {before_decontam:,}"
+            f" (removed {before_decontam - after_decontam:,})"
+        )
 
     # ── Phase 4: Tokenization ────────────────────────────────────────────
     print("\n[phase 4] Tokenization...")
@@ -760,7 +771,7 @@ def run_preprocess(args):
     print(f"  input:          {total_docs:,}")
     print(f"  after sanitize: {after_sanitize:,}")
     print(f"  after lang:     {after_lang:,}")
-    print(f"  after decontam: {after_decontam:,}")
+    print(f"  after decontam: {after_decontam:,}{' (skipped)' if skip_decontam else ''}")
     print(f"  after tokenize: {after_tok:,}")
 
     # ── Phase 5: Binary output ───────────────────────────────────────────

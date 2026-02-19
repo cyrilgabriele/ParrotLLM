@@ -387,19 +387,62 @@ def build_test_decontamination_index(
         dataset = load_from_disk(str(path))
         before = len(ngrams)
         before_hashes = len(content_hashes)
-        for idx, doc in enumerate(tqdm(dataset, desc=f"  {name}")):
-            text = doc.get("text", "") if isinstance(doc, dict) else doc["text"]
-            if not text.strip():
-                continue
-            normalized_text, fingerprint = normalize_and_fingerprint(text, lowercase)
-            if not normalized_text:
-                continue
-            ngrams.update(extract_ngrams(text))
-            if fingerprint:
-                content_hashes.add(fingerprint)
-            if minhash_index and doc_shingles is not None and MINHASHER is not None:
+
+        _lc = lowercase  # capture for closure
+
+        def _compute_index_batch(batch):
+            """Compute ngrams, fingerprints, and normalized text for a batch."""
+            all_ngrams: list[str] = []
+            fingerprints: list[str] = []
+            normalized_texts: list[str] = []
+            for text in batch["text"]:
+                if not text or not text.strip():
+                    all_ngrams.append("")
+                    fingerprints.append("")
+                    normalized_texts.append("")
+                    continue
+                norm_text, fp = normalize_and_fingerprint(text, lowercase=_lc)
+                if not norm_text:
+                    all_ngrams.append("")
+                    fingerprints.append("")
+                    normalized_texts.append("")
+                    continue
+                doc_ngrams = extract_ngrams(text)
+                # Join ngrams with newline for serializability
+                all_ngrams.append("\n".join(doc_ngrams) if doc_ngrams else "")
+                fingerprints.append(fp or "")
+                normalized_texts.append(norm_text)
+            return {
+                "ngrams_joined": all_ngrams,
+                "fingerprint": fingerprints,
+                "normalized_text": normalized_texts,
+            }
+
+        mapped = dataset.map(
+            _compute_index_batch,
+            batched=True,
+            batch_size=256,
+            num_proc=1,
+        )
+
+        # Reduce: union ngrams, collect hashes, insert MinHash signatures
+        for idx in range(len(mapped)):
+            row = mapped[idx]
+            ngrams_str = row["ngrams_joined"]
+            if ngrams_str:
+                ngrams.update(ngrams_str.split("\n"))
+            fp = row["fingerprint"]
+            if fp:
+                content_hashes.add(fp)
+            norm_text = row["normalized_text"]
+            if (
+                minhash_index
+                and doc_shingles is not None
+                and MINHASHER is not None
+                and norm_text
+            ):
                 shingle_hashes = compute_shingle_hashes(
-                    normalized_text, MINHASH_SHINGLE_SIZE
+                    norm_text, MINHASH_SHINGLE_SIZE
                 )
                 if not shingle_hashes:
                     continue
@@ -407,6 +450,7 @@ def build_test_decontamination_index(
                 doc_id = f"{name}:{idx}"
                 minhash_index.insert(doc_id, signature)
                 doc_shingles[doc_id] = shingle_hashes
+
         print(
             f"  -> {len(ngrams) - before:,} new n-grams,"
             f" {len(content_hashes) - before_hashes:,} new hashes"

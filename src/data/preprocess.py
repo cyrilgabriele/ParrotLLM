@@ -461,6 +461,9 @@ def run_preprocess(args):
     if args.dataset_size == "small":
         print("[data] Loading 10k subset...")
         ds = load_from_disk(str(data_dir / "openwebtext-10k"))
+    elif args.dataset_size == "dummy": 
+        print("[data] Loading 100 subset...")
+        ds = load_from_disk(str(data_dir / "openwebtext-100"))
     else:
         local_path = data_dir / "openwebtext"
         if local_path.exists():

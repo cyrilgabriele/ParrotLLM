@@ -7,7 +7,7 @@ def main():
                         choices=["preprocess", "train", "eval", "inference", "chat"])
 
     # Data args
-    parser.add_argument("--dataset-size", default="full", choices=["small", "full"])
+    parser.add_argument("--dataset-size", default="full", choices=["small", "full", "dummy"])
     parser.add_argument("--lang", default="en")
     parser.add_argument("--data-dir", default="data")
 

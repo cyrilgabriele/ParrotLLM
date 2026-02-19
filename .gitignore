@@ -215,3 +215,5 @@ checkpoints/*.pt
 
 # Weights & Biases
 wandb/
+
+.DS_Store

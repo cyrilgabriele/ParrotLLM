@@ -1,5 +1,6 @@
 """Download all datasets needed for the project."""
 
+import argparse
 import urllib.request
 from pathlib import Path
 
@@ -12,19 +13,34 @@ NLP26_OWT_EVAL_URLS = (
 )
 
 
-def download_openwebtext_10k():
-    """Stream 10k documents from full OpenWebText for fast exploration."""
-    out = DATA_DIR / "openwebtext-10k"
+def _download_openwebtext_subset(count: int, suffix: str):
+    """Stream a subset of OpenWebText and persist it locally."""
+    out = DATA_DIR / f"openwebtext-{suffix}"
     if out.exists():
         print(f"[skip] {out} already exists")
         return
-    print("[download] Streaming 10k docs from OpenWebText...")
+    print(f"[download] Streaming {count:,} docs from OpenWebText...")
     ds = load_dataset("Skylion007/openwebtext", split="train", streaming=True)
-    subset = list(ds.take(10_000))
+    subset = list(ds.take(count))
     from datasets import Dataset
-    ds_10k = Dataset.from_list(subset)
-    ds_10k.save_to_disk(str(out))
-    print(f"[done] {len(ds_10k)} documents -> {out}")
+    ds_subset = Dataset.from_list(subset)
+    ds_subset.save_to_disk(str(out))
+    print(f"[done] {len(ds_subset)} documents -> {out}")
+
+
+def download_openwebtext_10k():
+    """Stream 10k documents from full OpenWebText for fast exploration."""
+    _download_openwebtext_subset(10_000, "10k")
+
+
+def download_openwebtext_1k():
+    """Stream 1k documents for quick preprocessing smoke tests."""
+    _download_openwebtext_subset(1_000, "1k")
+
+
+def download_openwebtext_100():
+    """Stream 100 documents when you only need a few examples."""
+    _download_openwebtext_subset(100, "100")
 
 
 def download_wikitext103_test():
@@ -123,11 +139,33 @@ def download_nlp26_eval():
         )
 
 
-if __name__ == "__main__":
+DOWNLOAD_TARGETS = {
+    "openwebtext-100": download_openwebtext_100,
+    "openwebtext-1k": download_openwebtext_1k,
+    "openwebtext-10k": download_openwebtext_10k,
+    "openwebtext-full": download_openwebtext_full,
+    "wikitext103-test": download_wikitext103_test,
+    "fasttext-langdetect": download_fasttext_langdetect,
+    "nlp26-eval": download_nlp26_eval,
+}
+
+
+def main(argv: list[str] | None = None):
+    parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument(
+        "targets",
+        nargs="*",
+        choices=sorted(DOWNLOAD_TARGETS.keys()),
+        help="Datasets to download (default: all).",
+    )
+    args = parser.parse_args(argv)
+
     DATA_DIR.mkdir(exist_ok=True)
 
-    download_openwebtext_10k()
-    download_wikitext103_test()
-    download_fasttext_langdetect()
-    download_openwebtext_full()
-    download_nlp26_eval()
+    targets = args.targets or list(DOWNLOAD_TARGETS.keys())
+    for target in targets:
+        DOWNLOAD_TARGETS[target]()
+
+
+if __name__ == "__main__":
+    main()

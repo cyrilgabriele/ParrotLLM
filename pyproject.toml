@@ -23,6 +23,9 @@ classifier = ["kenlm>=0.2.0"]
 [project.scripts]
 parrotllm = "main:main"
 
+[tool.uv]
+package = true
+
 [dependency-groups]
 dev = [
     "pytest>=9.0.2",

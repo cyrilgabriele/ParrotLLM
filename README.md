@@ -131,6 +131,26 @@ Total params:   35,763,840  (~35.8M, budget: 40M)
 
 Full analysis with paper references: [docs/ARCHITECTURE_DECISIONS.md](docs/ARCHITECTURE_DECISIONS.md)
 
+## Preprocessing Pipeline
+
+All preprocessing runs via `main.py --stage preprocess` and applies 8 phases sequentially. Documents failing any phase are tagged with a reason and excluded from training.
+
+| Phase | What it does | Approach | Skippable |
+|-------|-------------|----------|-----------|
+| 1. Decontamination | Remove eval set overlaps | SHA-1 hash matching against Wikitext-103 & NLP26 OWT eval on raw text | `--skip-decontam` |
+| 2. Sanitization | Strip HTML, boilerplate, control chars, URLs | Regex rules | No |
+| 3. Language detection | Keep only target language (default: English) | fastText `lid.176.ftz`, threshold 0.8 | No |
+| 4. Code/artifact filter | Remove code dumps, HTML-heavy docs | Heuristic (symbol ratio, code fences) or fastText classifier | `--skip-code-filter` |
+| 5. Quality filter | Remove short, repetitive, incoherent text | Heuristic (min length, n-gram repetition) or KenLM + fastText edu-quality classifier | `--skip-quality-filter` |
+| 6. Fuzzy deduplication | Remove near-duplicate documents | MinHash LSH (64 perms, 16 bands, Jaccard ≥ 0.8) | `--skip-dedup` |
+| 7. Tokenization | Tokenize with GPT-2, filter docs < 64 tokens | `GPT2TokenizerFast` | No |
+| 8. Binary output | Split 99/1 train/val, save as uint16 `.bin` | numpy `tofile` | No |
+
+Decontamination runs first on raw text so that sanitization cannot alter document hashes and let contaminated documents slip through.
+
+Phases 4–5 support two modes via `--filter-mode {heuristic|classifier|none}`. Heuristic mode is the default and needs no pre-trained models. Classifier mode requires training models first (see `src/scripts/train_filter_models.py`).
+
+
 ## Config-Driven Pipeline
 
 Every stage reads from `configs/default.yaml`. Change hyperparameters there, not in code.

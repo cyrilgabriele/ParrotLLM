@@ -21,6 +21,17 @@ Track what was changed, why it was changed, and any important notes.
 
 ## Unreleased
 
+### [2026-02-24] - Christof
+
+#### What
+- Moved decontamination from Phase 6 to Phase 1 (runs first on raw text)
+
+#### Why
+- Decontamination must run on raw text before sanitization can alter content and change hashes 
+
+#### Remarks
+---
+
 <!-- Add new entries here -->
 
 ### [2026-02-19] - Christof

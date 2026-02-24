@@ -12,7 +12,7 @@ from pathlib import Path
 
 import fasttext
 import numpy as np
-from datasets import load_dataset, load_from_disk
+from datasets import load_from_disk
 from tqdm import tqdm
 from transformers import GPT2TokenizerFast
 

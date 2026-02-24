@@ -1,0 +1,76 @@
+# ParrotLLM — single source of truth for all hyperparameters
+# ──────────────────────────────────────────────────────────
+
+model:
+  vocab_size: 50257          # GPT-2 tokenizer vocabulary
+  d_model: 320               # hidden dimension
+  n_layers: 16               # transformer blocks
+  n_heads: 8                 # attention heads (d_head = d_model / n_heads = 40)
+  d_ff: 854                  # SwiGLU FFN intermediate size
+  context_length: 1024       # max sequence length
+  bias: false                # no bias in linear layers
+  dropout: 0.0               # dropout rate (0 for pretraining)
+  rope_theta: 10000.0        # RoPE base frequency
+
+training:
+  seed: 42
+  device: auto
+
+  # data (output of --stage preprocess)
+  train_bin: data/processed/train.bin
+  val_bin: data/processed/val.bin
+
+  # batching
+  batch_size: 64             # micro-batch size
+  gradient_accumulation_steps: 4  # effective batch = 64 * 4 = 256
+
+  # optimizer — AdamW
+  learning_rate: 6.0e-4
+  min_lr: 6.0e-5             # 10% of peak lr
+  weight_decay: 0.1
+  beta1: 0.9
+  beta2: 0.95
+  grad_clip: 1.0
+
+  # schedule
+  warmup_steps: 2000
+  max_steps: 100000
+
+  # checkpointing
+  save_every: 5000           # save checkpoint every N steps
+  eval_every: 500            # evaluate every N steps
+  checkpoint_dir: checkpoints
+
+  # logging
+  wandb_project: parrotllm
+  wandb_run_name: null       # auto-generated if null
+  log_every: 10              # log to console every N steps
+
+eval:
+  device: auto
+  batch_size: 32
+  max_sequences: 512         # cap eval sequences for speed
+  datasets:
+    - name: wikitext
+      path: wikitext
+      subset: wikitext-103-raw-v1
+      split: test
+    - name: owt_val
+      path: data/processed/val.bin
+
+inference:
+  device: auto
+  max_tokens: 128
+  temperature: 0.0           # 0 = greedy
+  top_k: 50
+  top_p: 0.9
+  seed: 42
+
+chat:
+  device: auto
+  max_tokens: 256
+  temperature: 0.7
+  top_k: 50
+  top_p: 0.9
+  system_prompt: "You are ParrotLLM, a helpful assistant."
+  checkpoint_dir: checkpoints

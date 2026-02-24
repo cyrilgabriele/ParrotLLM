@@ -193,7 +193,7 @@ For 40M params: 40M x 20 = **800M tokens minimum**.
 
 ### What this means for us
 
-Our OpenWebText subset is the constraint. We should use **as much data as we can** within our compute budget (2x 24h on 8xV100). The Chinchilla minimum of 800M tokens is a floor, not a ceiling. If the dataset allows, aim for multiple epochs to effectively see more tokens.
+Our OpenWebText subset is the constraint. We should use **as much data as we can** within our compute budget (<=24h on 8xV100; we plan for 23h to stay safe). The Chinchilla minimum of 800M tokens is a floor, not a ceiling. If the dataset allows, aim for multiple epochs to effectively see more tokens.
 
 ### Decision
 
@@ -314,7 +314,7 @@ Total: ~33.5M params (6.5M headroom)
 
 ### Our Constraints
 - **Model:** 40M parameters (N = 4 x 10^7)
-- **Compute:** 2x 24h on 8xV100 = **48 hours on 8 GPUs = 384 GPU-hours**
+- **Compute:** <=24h on 8xV100 (plan for **23h** to stay within quota) = **184 GPU-hours**
 - **Data:** OpenWebText subset (fixed)
 
 ### How many tokens can we process?
@@ -338,17 +338,17 @@ Where:
 
 For a tiny 40M model on 8xV100, estimated ~50K-150K tokens/second:
 
-| Throughput | Tokens in 48h | Tokens/param ratio |
+| Throughput | Tokens in 23h | Tokens/param ratio |
 |-----------|--------------|-------------------|
-| 50K tok/s (conservative) | **8.6B** | 215x |
-| 100K tok/s (moderate) | **17.3B** | 432x |
-| 150K tok/s (optimistic) | **25.9B** | 648x |
+| 50K tok/s (conservative) | **4.14B** | 116x |
+| 100K tok/s (moderate) | **8.28B** | 232x |
+| 150K tok/s (optimistic) | **12.42B** | 347x |
 
 ### Chinchilla comparison
 
 **Chinchilla says:** 20 tokens per parameter = **800M tokens** for 40M params.
 
-We can process **10-30x more** than Chinchilla-optimal. This is good news.
+We can process **~6-17x more** than Chinchilla-optimal even with the tighter 23h budget. This is good news.
 
 ### Predicted loss (Chinchilla scaling law)
 
@@ -359,9 +359,9 @@ With fitted constants from [Hoffmann et al.](https://arxiv.org/abs/2203.15556):
 | Scenario | Tokens (D) | Tokens/Param | Predicted Loss | ~Perplexity |
 |----------|-----------|-------------|---------------|-------------|
 | Chinchilla-optimal | 800M | 20x | ~4.75 | ~116 |
-| Conservative (48h) | 8.6B | 215x | ~3.97 | ~53 |
-| Moderate (48h) | 17B | 432x | ~3.76 | ~43 |
-| Optimistic (48h) | 26B | 648x | ~3.66 | ~39 |
+| Conservative (23h) | 4.14B | 116x | ~4.06 | ~58 |
+| Moderate (23h) | 8.28B | 232x | ~3.87 | ~48 |
+| Optimistic (23h) | 12.42B | 347x | ~3.78 | ~44 |
 
 > **Caveat:** These predictions extrapolate Chinchilla's scaling laws (calibrated at 70M-16B) down to 40M params. Exact numbers may differ.
 

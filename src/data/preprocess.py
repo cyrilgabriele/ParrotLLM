@@ -12,7 +12,7 @@ from pathlib import Path
 
 import fasttext
 import numpy as np
-from datasets import load_dataset, load_from_disk
+from datasets import load_from_disk
 from tqdm import tqdm
 from transformers import GPT2TokenizerFast
 
@@ -792,12 +792,13 @@ def run_preprocess(args):
         ds = load_from_disk(str(data_dir / "openwebtext-100"))
     else:
         local_path = data_dir / "openwebtext"
-        if local_path.exists():
-            print("[data] Loading full OpenWebText from disk...")
-            ds = load_from_disk(str(local_path))
-        else:
-            print("[data] Downloading full OpenWebText (this will take a while)...")
-            ds = load_dataset("Skylion007/openwebtext", split="train")
+        if not local_path.exists():
+            raise FileNotFoundError(
+                f"Full OpenWebText not found at {local_path}. "
+                "Run: uv run python src/scripts/download_data.py openwebtext-full"
+            )
+        print("[data] Loading full OpenWebText from disk...")
+        ds = load_from_disk(str(local_path))
 
     print(f"[data] Loaded {len(ds):,} documents")
 
@@ -832,8 +833,30 @@ def run_preprocess(args):
     total_docs = len(ds)
     print(f"[preprocess] Processing {total_docs:,} documents (num_workers={num_workers})...")
 
-    # ── Phase 1: Sanitization ────────────────────────────────────────────
-    print("\n[phase 1] Sanitization...")
+    # ── Phase 1: Decontamination ──────────────────────────────────────────
+    # Runs first on raw text so sanitization cannot alter hashes and let
+    # contaminated documents slip through.
+    if skip_decontam:
+        print("\n[phase 1] Decontamination... SKIPPED")
+        after_decontam = len(ds)
+    else:
+        print("\n[phase 1] Decontamination...")
+        ds = ds.map(
+            lambda batch: decontaminate_batch(batch["text"], test_index),
+            batched=True,
+            batch_size=256,
+            num_proc=num_workers,
+        )
+        before_decontam = len(ds)
+        ds = ds.filter(lambda row: row["decontam_status"] == "kept", num_proc=num_workers)
+        after_decontam = len(ds)
+        print(
+            f"  kept {after_decontam:,} / {before_decontam:,}"
+            f" (removed {before_decontam - after_decontam:,})"
+        )
+
+    # ── Phase 2: Sanitization ────────────────────────────────────────────
+    print("\n[phase 2] Sanitization...")
     ds = ds.map(
         lambda batch: sanitize_batch(batch["text"]),
         batched=True,
@@ -848,8 +871,8 @@ def run_preprocess(args):
         f" (removed {before_sanitize - after_sanitize:,})"
     )
 
-    # ── Phase 2: Language filter ─────────────────────────────────────────
-    print("\n[phase 2] Language detection...")
+    # ── Phase 3: Language filter ─────────────────────────────────────────
+    print("\n[phase 3] Language detection...")
     _lang_model_path = str(lang_model_path)
     ds = ds.map(
         lambda batch: detect_language_batch(batch["text"], _lang_model_path),
@@ -869,16 +892,16 @@ def run_preprocess(args):
         f" (removed {before_lang - after_lang:,})"
     )
 
-    # ── Phase 3: Code / artifact removal ─────────────────────────────────
+    # ── Phase 4: Code / artifact removal ─────────────────────────────────
     filter_mode = getattr(args, "filter_mode", "heuristic")
     skip_code_filter = getattr(args, "skip_code_filter", False)
     skip_quality_filter = getattr(args, "skip_quality_filter", False)
 
     if filter_mode == "none" or skip_code_filter:
-        print("\n[phase 3] Code/artifact removal... SKIPPED")
+        print("\n[phase 4] Code/artifact removal... SKIPPED")
         after_code = len(ds)
     elif filter_mode == "heuristic":
-        print("\n[phase 3] Code/artifact removal (heuristic)...")
+        print("\n[phase 4] Code/artifact removal (heuristic)...")
         ds = ds.map(
             lambda batch: heuristic_code_filter_batch(batch["text"]),
             batched=True,
@@ -902,7 +925,7 @@ def run_preprocess(args):
                 f"Code classifier model not found at {code_model_path}. "
                 "Train it with: uv run python src/scripts/train_filter_models.py code-classifier"
             )
-        print("\n[phase 3] Code/artifact removal (classifier)...")
+        print("\n[phase 4] Code/artifact removal (classifier)...")
         _code_model_path = str(code_model_path)
         ds = ds.map(
             lambda batch: classifier_code_filter_batch(batch["text"], _code_model_path),
@@ -921,12 +944,12 @@ def run_preprocess(args):
             f" (removed {before_code - after_code:,})"
         )
 
-    # ── Phase 4: Quality / coherence filter ───────────────────────────────
+    # ── Phase 5: Quality / coherence filter ───────────────────────────────
     if filter_mode == "none" or skip_quality_filter:
-        print("\n[phase 4] Quality/coherence filter... SKIPPED")
+        print("\n[phase 5] Quality/coherence filter... SKIPPED")
         after_quality = len(ds)
     elif filter_mode == "heuristic":
-        print("\n[phase 4] Quality/coherence filter (heuristic)...")
+        print("\n[phase 5] Quality/coherence filter (heuristic)...")
         ds = ds.map(
             lambda batch: heuristic_quality_filter_batch(batch["text"]),
             batched=True,
@@ -963,7 +986,7 @@ def run_preprocess(args):
                 "kenlm is required for --filter-mode classifier. "
                 "Install with: pip install 'parrotllm[classifier]'"
             )
-        print("\n[phase 4] Quality/coherence filter (classifier)...")
+        print("\n[phase 5] Quality/coherence filter (classifier)...")
         _kenlm_model = _kenlm.Model(str(kenlm_path))
         _edu_path = str(edu_path)
         ds = ds.map(
@@ -985,13 +1008,13 @@ def run_preprocess(args):
             f" (removed {before_quality - after_quality:,})"
         )
 
-    # ── Phase 5: Fuzzy deduplication ──────────────────────────────────────
+    # ── Phase 6: Fuzzy deduplication ──────────────────────────────────────
     skip_dedup = getattr(args, "skip_dedup", False)
     if skip_dedup:
-        print("\n[phase 5] Fuzzy deduplication... SKIPPED")
+        print("\n[phase 6] Fuzzy deduplication... SKIPPED")
         after_dedup = len(ds)
     else:
-        print("\n[phase 5] Fuzzy deduplication...")
+        print("\n[phase 6] Fuzzy deduplication...")
         # Pass 1: compute signatures (parallel)
         ds = ds.map(
             _minhash_signature_batch,
@@ -1006,26 +1029,6 @@ def run_preprocess(args):
         ds = ds.select([i for i in range(len(ds)) if i not in dup_indices])
         after_dedup = len(ds)
         print(f"  kept {after_dedup:,} / {before_dedup:,} (removed {before_dedup - after_dedup:,} near-duplicates)")
-
-    # ── Phase 6: Decontamination ──────────────────────────────────────────
-    if skip_decontam:
-        print("\n[phase 6] Decontamination... SKIPPED")
-        after_decontam = len(ds)
-    else:
-        print("\n[phase 6] Decontamination...")
-        ds = ds.map(
-            lambda batch: decontaminate_batch(batch["text"], test_index),
-            batched=True,
-            batch_size=256,
-            num_proc=num_workers,
-        )
-        before_decontam = len(ds)
-        ds = ds.filter(lambda row: row["decontam_status"] == "kept", num_proc=num_workers)
-        after_decontam = len(ds)
-        print(
-            f"  kept {after_decontam:,} / {before_decontam:,}"
-            f" (removed {before_decontam - after_decontam:,})"
-        )
 
     # ── Phase 7: Tokenization ─────────────────────────────────────────────
     print("\n[phase 7] Tokenization...")
@@ -1048,12 +1051,12 @@ def run_preprocess(args):
     _skip_quality = filter_mode == "none" or skip_quality_filter
     print(f"\n[preprocess] Filter summary:")
     print(f"  input:            {total_docs:,}")
+    print(f"  after decontam:   {after_decontam:,}{' (skipped)' if skip_decontam else ''}")
     print(f"  after sanitize:   {after_sanitize:,}")
     print(f"  after lang:       {after_lang:,}")
     print(f"  after code filter:{after_code:,}{' (skipped)' if _skip_code else ''}")
     print(f"  after quality:    {after_quality:,}{' (skipped)' if _skip_quality else ''}")
     print(f"  after dedup:      {after_dedup:,}{' (skipped)' if skip_dedup else ''}")
-    print(f"  after decontam:   {after_decontam:,}{' (skipped)' if skip_decontam else ''}")
     print(f"  after tokenize:   {after_tok:,}")
 
     # ── Phase 8: Binary output ────────────────────────────────────────────

@@ -5,6 +5,15 @@
 - Implement the list from EDA (now only non-english removal and the eval dataset removel is in there)
 - Add a cleaning stage in `src/data/preprocess.py` to strip HTML tags, drop code snippets/markdown dumps, normalize or remove corrupted characters, and filter out noisy samples based on the EDA findings before tokenization.
 - Wire new CLI args (e.g. `--num-train-samples` and `--seed`) through `main.py` → `run_preprocess` so the preprocessing can reproducibly operate on a configurable subset size instead of the current small/full toggle.
+
+## HuggingFace Hub
+- Upload preprocessed subsets to Hub (`push_to_hub`, `private=True`)
+- Upload final train/val splits so teammates can skip the full pipeline
+
+## Caching
+- Clean up `data/processed/` between runs with different flags
+- Check `~/.cache/huggingface/datasets/` for stale cached variants
+
 ## Sample selection
 - Choose a smart way to select the training data when parameter is smaller than the trainingset
 - define and implement a way to select the best possible data 

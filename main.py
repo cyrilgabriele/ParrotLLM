@@ -1,5 +1,7 @@
 import argparse
 
+from configs import DEFAULT_LANG, PreprocessConfig
+
 
 def main():
     parser = argparse.ArgumentParser(description="ParrotLLM")
@@ -8,7 +10,13 @@ def main():
 
     # Data args
     parser.add_argument("--dataset-size", default="full", choices=["small", "full", "dummy"])
-    parser.add_argument("--lang", default="en")
+    # set this default value since we most likely will not change it
+    # this due to project restrictions of the TAs/Prof
+    parser.add_argument(
+        "--lang",
+        default=DEFAULT_LANG,
+        help="Target language ISO code (default: en for English)",
+    )
     parser.add_argument("--data-dir", default="data")
 
     # Training args
@@ -39,8 +47,9 @@ def main():
     args = parser.parse_args()
 
     if args.stage == "preprocess":
+        preprocessConfig = PreprocessConfig.from_args(args)
         from src.data.preprocess import run_preprocess
-        run_preprocess(args)
+        run_preprocess(preprocessConfig)
 
     elif args.stage == "train":
         from src.training.trainer import run_train

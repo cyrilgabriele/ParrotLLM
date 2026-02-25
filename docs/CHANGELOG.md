@@ -21,6 +21,25 @@ Track what was changed, why it was changed, and any important notes.
 
 ## Unreleased
 
+### [2026-02-25] - Cyril Gabriele
+
+#### What
+- Introduced a `configs` package exposing a typed `PreprocessConfig` and shared `DEFAULT_LANG` constant for the CLI
+- main.py now validates preprocess arguments via `PreprocessConfig` and passes the structured config to `run_preprocess`
+- Removed the unused `preprocess_document` helper and doubled the default worker count to `2 * os.cpu_count()` for better CPU saturation
+- Documented the default `--lang` behavior in `README.md` so users know when they must supply language models manually
+
+#### Why
+- Centralizing defaults keeps the CLI, docs, and pipeline in sync and surfaces invalid preprocessing flags early through Pydantic validation
+- Passing a config object simplifies extending the pipeline without modifying the CLI surface every time
+- Dropping dead code and increasing worker counts reduces confusion while improving throughput on multi-core hosts
+- The README note prevents misconfiguration when someone attempts to target a non-English dataset without the required fastText models
+
+#### Remarks
+- Pass `--num-workers` explicitly if `os.cpu_count()` misreports available cores on a host
+
+---
+
 ### [2026-02-24] - Christof
 
 #### What

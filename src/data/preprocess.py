@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+from configs import PreprocessConfig
+
 """Data preprocessing pipeline: filter, tokenize, and save as binary splits."""
 
 import hashlib
@@ -561,7 +563,6 @@ def normalized_fingerprint(text: str, lowercase: bool = True) -> str | None:
     return fingerprint
 
 
-
 def detect_language(text: str, model) -> tuple[str, float]:
     """Return (language_code, confidence) using fasttext."""
     first_line = text.split("\n")[0].strip()
@@ -736,48 +737,7 @@ def tokenize_batch(
 
 # ── Main pipeline ────────────────────────────────────────────────────────────
 
-
-def preprocess_document(
-    text: str,
-    tokenizer,
-    lang_model,
-    test_index: TestDecontaminationIndex,
-    lang: str = "en",
-    min_tokens: int = 64,
-    normalize_lowercase: bool = True,
-) -> tuple[list[int] | None, str]:
-    """Process one document. Returns (token_ids, status)."""
-    if not text or not text.strip():
-        return None, "empty"
-
-    text, sanitize_status = sanitize_document_text(text)
-    if text is None:
-        return None, sanitize_status or "empty_after_clean"
-
-    # Language filter
-    detected_lang, conf = detect_language(text, lang_model)
-    if detected_lang != lang or conf < 0.8:
-        return None, "non_english"
-
-    # Exact-match decontamination using normalized SHA-1 hashes
-    _, fingerprint = normalize_and_fingerprint(
-        text, lowercase=normalize_lowercase
-    )
-    if fingerprint is None:
-        return None, "empty_after_normalize"
-    if test_index.content_hashes and fingerprint in test_index.content_hashes:
-        return None, "test_overlap"
-
-    # Tokenize
-    tokens = tokenizer.encode(text)
-
-    if len(tokens) < min_tokens:
-        return None, "too_short"
-
-    return tokens, "kept"
-
-
-def run_preprocess(args):
+def run_preprocess(args: PreprocessConfig) -> None:
     """Entry point called from main.py --stage preprocess."""
     data_dir = Path(args.data_dir)
     out_dir = data_dir / "processed"
@@ -826,7 +786,7 @@ def run_preprocess(args):
     # Resolve num_workers
     num_workers = getattr(args, "num_workers", "auto")
     if num_workers == "auto":
-        num_workers = os.cpu_count() or 1
+        num_workers = 2 * os.cpu_count()
     else:
         num_workers = int(num_workers)
 

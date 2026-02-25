@@ -190,6 +190,8 @@ uv run python main.py --stage inference --checkpoint checkpoints/step_5000.pt \
 uv run python main.py --stage chat
 ```
 
+`--lang` defaults to `en` (English). Override it only if you have the required fastText language models for another language.
+
 ## Training Details
 
 - **Optimizer**: AdamW (betas 0.9/0.95, weight decay 0.1, decay on 2D params only)

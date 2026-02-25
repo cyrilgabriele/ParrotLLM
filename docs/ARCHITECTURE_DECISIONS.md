@@ -201,7 +201,29 @@ Our OpenWebText subset is the constraint. We should use **as much data as we can
 
 ---
 
-## 7. Attention: Standard MHA
+## 7. Tokenizer Standardization & Padding
+
+### The Evidence
+
+**Chowdhery et al.** (PaLM, Google, 2022 - [arXiv:2204.02311](https://arxiv.org/abs/2204.02311))
+
+PaLM uses a SentencePiece tokenizer with explicit pad/bos/eos tokens and packs documents into fixed-size blocks, masking loss contributions coming from padding:
+
+> "Packed examples are padded to the model context length, and padded positions are masked out from the loss computation." (Sec. 2.3)
+
+Even though GPT-2 legacy checkpoints omit a pad token, modern pretraining setups introduce a synthetic pad symbol to unlock the same packed-batching efficiencies PaLM reports.
+
+**Narayanan et al.** (Megatron-LM, 2021 - [arXiv:2104.04473](https://arxiv.org/abs/2104.04473))
+
+Showed that throughput on large GPU clusters hinges on sequence packing plus fused attention kernels. Their training recipe stores documents as contiguous binary streams split into fixed context windows, which requires a tokenizer with deterministic special-token ids shared between preprocessing and runtime.
+
+### Decision
+
+Standardize on the fast GPT-2 tokenizer (`openai-community/gpt2`, `use_fast=True`) but extend it with a dedicated `<|pad|>` token, right-side padding, and consistent pad/bos/eos ids baked into both preprocessing and model configs. This lets us pack documents into fixed-length blocks separated by EOS tokens while masking padded positions (`labels = -100`) during training, mirroring the proven PaLM/Megatron efficiencies without diverging from GPT-2 text normalization.
+
+---
+
+## 8. Attention: Standard MHA
 
 ### The Evidence
 
@@ -244,13 +266,16 @@ Source: [Pythia HuggingFace](https://huggingface.co/EleutherAI/pythia-70m), [Mob
 Given our constraint of **40M params, vocab=50,257, context=1024**:
 
 ```
-Tokenizer:       GPT-2 (fixed)                    [Constraint]
+Tokenizer:       GPT-2 (fixed, add_prefix_space=False)
+                                                  [Constraint; Radford et al. 2019]
 Weight Tying:    Yes                               [Press & Wolf 2017, MobileLLM 2024]
 Positional:      RoPE (or Learned as fallback)     [Su et al. 2021, Pythia]
 Norm:            RMSNorm, Pre-Norm                 [Zhang & Sennrich 2019, Xiong et al. 2020]
 Activation:      SwiGLU                            [Shazeer 2020, LLaMA, MobileLLM]
 Attention:       Standard MHA                      [Pythia-70M]
 ```
+
+Setting `add_prefix_space=False` matches the byte-level BPE tokenizer used in GPT-2 (Radford et al., 2019) and EleutherAI's Pythia replication (Biderman et al., 2023, arXiv:2304.01373). Keeping that flag off is the recommended practice in the field because enabling it subtly alters merge behavior and produces token statistics that no longer line up with published GPT-2-compatible vocabularies.
 
 ### Concrete Config: d_model=320, 16 layers
 

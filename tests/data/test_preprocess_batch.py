@@ -270,13 +270,13 @@ class TestDecontaminateBatch:
         assert result == {"decontam_status": []}
 
 
-from transformers import GPT2TokenizerFast
+from src.utils import build_tokenizer
 
 
 class TestTokenizeBatch:
     @pytest.fixture
     def tokenizer(self):
-        return GPT2TokenizerFast.from_pretrained("gpt2")
+        return build_tokenizer()
 
     def test_returns_dict_with_required_keys(self, tokenizer):
         from src.data.preprocess import tokenize_batch

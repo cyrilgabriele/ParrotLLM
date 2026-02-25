@@ -15,8 +15,7 @@ from pathlib import Path
 import fasttext
 import numpy as np
 from datasets import load_from_disk
-from tqdm import tqdm
-from transformers import GPT2TokenizerFast
+from src.utils import DEFAULT_TOKENIZER_NAME, build_tokenizer
 
 
 FINGERPRINT_LOWERCASE = True
@@ -763,7 +762,16 @@ def run_preprocess(args: PreprocessConfig) -> None:
     print(f"[data] Loaded {len(ds):,} documents")
 
     # Tokenizer
-    tokenizer = GPT2TokenizerFast.from_pretrained("gpt2")
+    tokenizer_name = getattr(args, "tokenizer_name", None) or DEFAULT_TOKENIZER_NAME
+    tokenizer = build_tokenizer(
+        tokenizer_name,
+        add_prefix_space=False,
+        padding_side="right",
+    )
+    print(
+        f"[data] Tokenizer: {tokenizer_name}"
+        f" (vocab_size={len(tokenizer):,}, pad_token={tokenizer.pad_token!r})"
+    )
 
     # Language detection model
     lang_model_path = data_dir / "lid.176.ftz"

@@ -3,10 +3,9 @@
 import sys
 
 import torch
-from transformers import AutoTokenizer
 
 from src.model import ParrotLLM
-from src.utils import get_device, load_config, set_seed
+from src.utils import build_tokenizer, get_device, load_config, set_seed
 
 
 @torch.no_grad()
@@ -76,7 +75,7 @@ def run_inference(args) -> None:
     model, ckpt_config = load_model_from_checkpoint(args.checkpoint, device)
     mc = ckpt_config["model"]
 
-    tokenizer = AutoTokenizer.from_pretrained("gpt2")
+    tokenizer = build_tokenizer()
 
     prompt = args.prompt or "The meaning of life is"
     input_ids = tokenizer.encode(prompt)

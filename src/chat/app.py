@@ -4,10 +4,9 @@ import glob
 import os
 
 import torch
-from transformers import AutoTokenizer
 
 from src.eval.inference import generate, load_model_from_checkpoint
-from src.utils import get_device, load_config
+from src.utils import build_tokenizer, get_device, load_config
 
 
 def run_chat(args) -> None:
@@ -16,7 +15,7 @@ def run_chat(args) -> None:
     config = load_config(args.config)
     cc = config.get("chat", {})
     device = get_device(cc.get("device", getattr(args, "device", "auto")))
-    tokenizer = AutoTokenizer.from_pretrained("gpt2")
+    tokenizer = build_tokenizer()
 
     state = {"model": None, "config": None}
 

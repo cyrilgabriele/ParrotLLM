@@ -4,10 +4,9 @@ import math
 
 import numpy as np
 import torch
-from transformers import AutoTokenizer
 
 from src.model import ParrotLLM
-from src.utils import get_device, load_config, set_seed
+from src.utils import build_tokenizer, get_device, load_config, set_seed
 
 
 def compute_perplexity(
@@ -49,7 +48,7 @@ def eval_wikitext(model, config, device):
 
     mc = config["model"]
     ec = config.get("eval", {})
-    tokenizer = AutoTokenizer.from_pretrained("gpt2")
+    tokenizer = build_tokenizer()
 
     ds = load_dataset("wikitext", "wikitext-103-raw-v1", split="test")
     text = "\n\n".join(ds["text"])

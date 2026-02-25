@@ -21,6 +21,19 @@ Track what was changed, why it was changed, and any important notes.
 
 ## Unreleased
 
+### [2026-02-26] - Assistant
+
+#### What
+- Added a shared `build_tokenizer` helper that always loads `openai-community/gpt2` with `use_fast=True`, right-side padding, and a dedicated `<|pad|>` token so preprocessing, eval, chat, and inference share identical vocabularies
+- Bumped the default tokenizer name in `PreprocessConfig`, increased the model `vocab_size` to 50,258, and stored the corresponding pad/bos/eos ids in `configs/default.yaml`
+- Updated tokenizer-dependent unit tests to use the shared helper, ensuring CI exercises the same tokenizer setup as production code
+
+#### Why
+- Standardizing on a single pad-aware GPT-2 tokenizer prevents subtle vocabulary drift between preprocessing and runtime components while enabling us to mask padded tokens during loss computation when we switch to packed sequence training
+
+#### Remarks
+- Follow-up: ensure the training loop sets `labels=-100` for padded positions once packed batches are introduced
+
 ### [2026-02-25] - Cyril Gabriele
 
 #### What

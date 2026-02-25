@@ -25,7 +25,7 @@ class PreprocessConfig(BaseModel):
     filter_mode: Literal["none", "heuristic", "classifier"] = "heuristic"
     skip_code_filter: bool = False
     skip_quality_filter: bool = False
-    tokenizer_name: str = "gpt2"
+    tokenizer_name: str = "openai-community/gpt2"
     append_eos_token: bool = False
     token_dtype: Literal["uint16", "uint32"] = "uint16"
     min_tokens: int = Field(default=64, ge=1)

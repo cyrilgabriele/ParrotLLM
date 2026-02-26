@@ -92,7 +92,7 @@ NGRAM_MAX_REPEATS = 3                    # Phase 4c: any 10-gram >3 times → dr
 
 # ── Ellipsis filter thresholds (Phase 6.1) ───────────────────────────────────
 ELLIPSIS_RE = re.compile(r"\.{3}|\u2026")
-ELLIPSIS_RATIO_THRESHOLD = 0.1           # Phase 6.5: ellipsis_count / word_count > 10% → drop
+ELLIPSIS_RATIO_THRESHOLD = 0.1           # Phase 6.1: ellipsis_count / word_count > 10% → drop
 
 # ── Classifier model paths ────────────────────────────────────────────────────
 CODE_CLASSIFIER_FILENAME = "code_vs_prose.ftz"
@@ -1029,10 +1029,10 @@ def run_preprocess(args: PreprocessConfig) -> None:
     # ── Phase 6.1: Ellipsis filter ──────────────────────────────────────────
     skip_ellipsis_filter = getattr(args, "skip_ellipsis_filter", False)
     if skip_ellipsis_filter:
-        print("\n[phase 6.5] Ellipsis filter... SKIPPED")
+        print("\n[phase 6.1] Ellipsis filter... SKIPPED")
         after_ellipsis = len(ds)
     else:
-        print("\n[phase 6.5] Ellipsis filter...")
+        print("\n[phase 6.1] Ellipsis filter...")
         ds = ds.map(
             lambda batch: ellipsis_filter_batch(batch["text"]),
             batched=True,

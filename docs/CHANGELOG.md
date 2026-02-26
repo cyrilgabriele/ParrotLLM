@@ -21,6 +21,20 @@ Track what was changed, why it was changed, and any important notes.
 
 ## Unreleased
 
+### [2026-02-26] - Tilman Haferbeck
+
+#### What
+- Added ellipsis density filter (Phase 6.1) in `preprocess.py`: documents where `ellipsis_count / word_count > 10 %` are dropped
+- Added `ELLIPSIS_RE` regex and `ELLIPSIS_RATIO_THRESHOLD = 0.1` constants
+- Exposed `skip_ellipsis_filter` in `PreprocessConfig` and `--skip-ellipsis-filter` CLI flag to bypass the phase
+
+#### Why
+- Ellipsis filtering was introduced in the lecture as a standard data quality heuristic and was therefore adopted
+- 10 % was chosen as the threshold because legitimate prose may use ellipses occasionally (style, quotations), but a ratio above 10 % reliably indicates truncated, fragmented, or scraped content where ellipses substitute for missing text rather than serving a stylistic purpose
+
+#### Remarks
+- None
+
 ### [2026-02-26] - Assistant
 
 #### What
@@ -33,6 +47,7 @@ Track what was changed, why it was changed, and any important notes.
 
 #### Remarks
 - Follow-up: ensure the training loop sets `labels=-100` for padded positions once packed batches are introduced
+
 
 ### [2026-02-25] - Cyril Gabriele
 

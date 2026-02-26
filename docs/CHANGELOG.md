@@ -35,6 +35,21 @@ Track what was changed, why it was changed, and any important notes.
 #### Remarks
 - None
 
+### [2026-02-26] - Tilman Haferbeck
+
+#### What
+- Added **Section 1b: Raw Dataset Statistics** to `01_data_preprocessing.ipynb`: character length and word count descriptives (mean, median, std, min, max, percentiles), short/long document fractions, approximate sentence structure, character composition breakdown (digits, punctuation, whitespace), top 20 most frequent non-stopword words, and 3 random document previews
+- Added **Section 4b: Token Sequence Length Distribution**: percentile table (p1–p99), a threshold impact table showing dropped docs and retained token coverage for candidate `min_tokens` cutoffs (16–1024), and an ASCII histogram of token length bins
+- Fixed the imports cell: removed `extract_ngrams` and `is_contaminated` from the `src.data.preprocess` import as both are defined locally in notebook cells and do not exist in the production module
+
+#### Why
+- Raw statistics give a quick, evidence-backed overview of the dataset before any filtering is applied, making it easier to spot noise and set cleaning thresholds
+- Token length analysis directly motivates the `min_tokens = 64` cutoff used in the pipeline by showing how little of the total token budget is lost when dropping very short sequences
+
+
+#### Remarks
+- None
+
 ### [2026-02-26] - Assistant
 
 #### What

@@ -90,6 +90,10 @@ MAX_WORD_LENGTH = 40                     # Phase 4b
 NGRAM_SIZE = 10                          # Phase 4c
 NGRAM_MAX_REPEATS = 3                    # Phase 4c: any 10-gram >3 times → drop
 
+# ── Ellipsis filter thresholds (Phase 6.1) ───────────────────────────────────
+ELLIPSIS_RE = re.compile(r"\.{3}|\u2026")
+ELLIPSIS_RATIO_THRESHOLD = 0.1           # Phase 6.5: ellipsis_count / word_count > 10% → drop
+
 # ── Classifier model paths ────────────────────────────────────────────────────
 CODE_CLASSIFIER_FILENAME = "code_vs_prose.ftz"
 QUALITY_CLASSIFIER_FILENAME = "educational_quality.ftz"
@@ -430,6 +434,30 @@ def heuristic_code_filter_batch(texts: list[str]) -> dict[str, list]:
         else:
             statuses.append("kept")
     return {"code_filter_status": statuses}
+
+
+def ellipsis_filter_batch(texts: list[str]) -> dict[str, list]:
+    """Phase 6.1: drop documents where ellipses are excessively frequent.
+
+    An ellipsis is defined as '...' or the Unicode character '\u2026'.
+    Documents are dropped when:
+        ellipsis_count / max(word_count, 1) > ELLIPSIS_RATIO_THRESHOLD
+
+    Returns {"ellipsis_filter_status": ["kept" | "excessive_ellipsis"]}
+    """
+    statuses: list[str] = []
+    for text in texts:
+        ellipsis_count = len(ELLIPSIS_RE.findall(text))
+        if ellipsis_count == 0:
+            statuses.append("kept")
+            continue
+        word_count = len(text.split())
+        ratio = ellipsis_count / max(word_count, 1)
+        if ratio > ELLIPSIS_RATIO_THRESHOLD:
+            statuses.append("excessive_ellipsis")
+        else:
+            statuses.append("kept")
+    return {"ellipsis_filter_status": statuses}
 
 
 def heuristic_quality_filter_batch(texts: list[str]) -> dict[str, list]:
@@ -998,6 +1026,27 @@ def run_preprocess(args: PreprocessConfig) -> None:
         after_dedup = len(ds)
         print(f"  kept {after_dedup:,} / {before_dedup:,} (removed {before_dedup - after_dedup:,} near-duplicates)")
 
+    # ── Phase 6.1: Ellipsis filter ──────────────────────────────────────────
+    skip_ellipsis_filter = getattr(args, "skip_ellipsis_filter", False)
+    if skip_ellipsis_filter:
+        print("\n[phase 6.5] Ellipsis filter... SKIPPED")
+        after_ellipsis = len(ds)
+    else:
+        print("\n[phase 6.5] Ellipsis filter...")
+        ds = ds.map(
+            lambda batch: ellipsis_filter_batch(batch["text"]),
+            batched=True,
+            batch_size=256,
+            num_proc=num_workers,
+        )
+        before_ellipsis = len(ds)
+        ds = ds.filter(lambda row: row["ellipsis_filter_status"] == "kept", num_proc=num_workers)
+        after_ellipsis = len(ds)
+        print(
+            f"  kept {after_ellipsis:,} / {before_ellipsis:,}"
+            f" (removed {before_ellipsis - after_ellipsis:,})"
+        )
+
     # ── Phase 7: Tokenization ─────────────────────────────────────────────
     print("\n[phase 7] Tokenization...")
     ds = ds.map(
@@ -1025,6 +1074,7 @@ def run_preprocess(args: PreprocessConfig) -> None:
     print(f"  after code filter:{after_code:,}{' (skipped)' if _skip_code else ''}")
     print(f"  after quality:    {after_quality:,}{' (skipped)' if _skip_quality else ''}")
     print(f"  after dedup:      {after_dedup:,}{' (skipped)' if skip_dedup else ''}")
+    print(f"  after ellipsis:   {after_ellipsis:,}{' (skipped)' if skip_ellipsis_filter else ''}")
     print(f"  after tokenize:   {after_tok:,}")
 
     # ── Phase 8: Binary output ────────────────────────────────────────────

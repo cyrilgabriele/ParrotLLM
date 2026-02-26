@@ -42,6 +42,8 @@ def main():
                         help="Skip code/artifact removal phase")
     parser.add_argument("--skip-quality-filter", action="store_true",
                         help="Skip quality/coherence filter phase")
+    parser.add_argument("--skip-ellipsis-filter", action="store_true",
+                        help="Skip ellipsis-density filter phase (Phase 6.1)")
     parser.add_argument("--leaderboard", action="store_true")
 
     args = parser.parse_args()

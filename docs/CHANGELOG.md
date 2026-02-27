@@ -21,6 +21,25 @@ Track what was changed, why it was changed, and any important notes.
 
 ## Unreleased
 
+### [2026-02-27] - Tilman Haferbeck
+
+#### What
+- Added **Section 1c: Extended Text Quality Analysis** to `01_data_preprocessing.ipynb`, comprising 7 new subsections after Section 1b:
+  - **1c-1** Punctuation density, uppercase ratio, average line length per document
+  - **1c-2** Type-Token Ratio (TTR, computed over first 200 words to remove length bias)
+  - **1c-3** URL density (`url/word`) and digit/number ratio per document
+  - **1c-4** Paragraph count, ALL-CAPS heading-like lines, and quote density
+  - **1c-5** Corpus-level unigram log-probability as a model-free coherence proxy
+  - **1c-6** Social media signal and legal boilerplate regex scans
+  - **1c-7** 9×9 Pearson cross-signal correlation matrix across all computed signals
+
+#### Why
+- To gain a deeper understanding of the dataset's noise profile. Each signal targets a distinct category of low-quality content (markup artifacts, repetitive text, link dumps, incoherent text, scraped boilerplate) and directly informs candidate filter thresholds in `src/data/preprocess.py`
+
+#### Remarks
+- The correlation matrix (1c-7) identifies redundant signals before any are promoted to production filters
+
+
 ### [2026-02-26] - Tilman Haferbeck
 
 #### What

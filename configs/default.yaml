@@ -2,7 +2,10 @@
 # ──────────────────────────────────────────────────────────
 
 model:
-  vocab_size: 50257          # GPT-2 tokenizer vocabulary
+  vocab_size: 50258          # GPT-2 tokenizer vocabulary (+ pad token)
+  pad_token_id: 50257        # dedicated <|pad|>
+  bos_token_id: 50256        # GPT-2 reuses eos as bos
+  eos_token_id: 50256        # </s>
   d_model: 320               # hidden dimension
   n_layers: 16               # transformer blocks
   n_heads: 8                 # attention heads (d_head = d_model / n_heads = 40)

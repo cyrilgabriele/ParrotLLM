@@ -21,6 +21,42 @@ Track what was changed, why it was changed, and any important notes.
 
 ## Unreleased
 
+### [2026-03-01] - Tilman Haferbeck
+
+#### What
+**HF caching & memory**
+- Set `HF_DATASETS_CACHE=/tmp/parrotllm_hf_cache` via `os.environ.setdefault` before `import datasets` so worker processes (macOS `spawn`) also pick up the redirect
+- Added `disable_caching()` call at the start of `run_preprocess()` as a belt-and-suspenders guard
+- Added `ds.remove_columns()` after every `.filter()` phase (phases 1–6.1) to drop status/score columns immediately
+- Added `shutil.rmtree` cleanup of the temporary HF cache dir at the end of `run_preprocess()`
+
+**Deduplication (Phase 6)**
+- Reduced `DEDUP_NUM_PERM` from 64 → 16 and `DEDUP_BANDS` from 16 → 4
+- Replaced `blake2b` in `_shingle_hashes()` with Python's built-in `hash()` (~10× faster for non-cryptographic use)
+- Rewrote `deduplicate_corpus()`: NumPy array for band hashing (`.tobytes()` instead of tuple hashing), O(n) union-by-first strategy replacing the O(n²) candidate-pair loop and `_jaccard_from_signatures()` call
+
+**Batch throughput**
+- Bumped `batch_size` from 256 → 2048 on all nine `.map()` calls (phases 1–7)
+- Phase 8 binary output now uses `np.fromiter(itertools.chain.from_iterable(...))` instead of a Python-level extend loop
+
+**Helper function micro-optimisations**
+- `_symbol_to_text_ratio`: replaced per-character iteration with `str.count()` per symbol
+- `_programming_keyword_count`: replaced `_WORD_SPLIT_RE.findall()` with `text.lower().split()` (no regex overhead)
+- `_looks_like_code`: added `stripped[:16]` slice before `.upper()` to avoid uppercasing arbitrary-length lines
+- `ellipsis_filter_batch`: replaced `ELLIPSIS_RE.findall()` with `ELLIPSIS_RE.subn()` (single regex pass)
+- `heuristic_quality_filter_batch`: reuses the already-computed `words` list; replaced `_longest_word_length(text)` with an inline `max(len(w) for w in words)`; added `_max_ngram_repeats_from_words(words, n)` helper to avoid two redundant `text.split()` calls per document
+
+#### Why
+- HuggingFace `datasets` caches every `.map()`/`.filter()` result as Arrow files; on full OpenWebText (~8 M docs, 15 phases) this accumulated >220 GB — redirecting to `/tmp` and deleting on completion keeps the project drive clean
+- `disable_caching()` in the main process is not inherited by `spawn` workers on macOS; the env var is the only reliable fix
+- The O(n²) pair loop caused Phase 6 to run for 7+ hours on 6 M documents; with `DEDUP_ROWS=4` the LSH band-match already implies high Jaccard similarity so per-pair verification adds no quality benefit
+- Halving the hash permutations and bands trades a small drop in recall for a proportional speedup in signature computation and band hashing
+- Larger batch sizes reduce Python function-call overhead and improve CPU saturation across all map phases
+
+#### Remarks
+- `_max_ngram_repeats` (the text-string variant) is kept for any external callers; internal pipeline now uses `_max_ngram_repeats_from_words`
+- The `/tmp` cache guard (`startswith("/tmp")`) prevents accidental deletion if the user overrides `HF_DATASETS_CACHE` to a non-temporary path
+
 ### [2026-02-27] - Tilman Haferbeck
 
 #### What

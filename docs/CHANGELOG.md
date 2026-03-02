@@ -105,7 +105,7 @@ Track what was changed, why it was changed, and any important notes.
 #### Remarks
 - None
 
-### [2026-02-26] - Assistant
+### [2026-02-26] - Cyril Gabriele
 
 #### What
 - Added a shared `build_tokenizer` helper that always loads `openai-community/gpt2` with `use_fast=True`, right-side padding, and a dedicated `<|pad|>` token so preprocessing, eval, chat, and inference share identical vocabularies

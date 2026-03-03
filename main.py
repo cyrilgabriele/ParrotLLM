@@ -44,6 +44,22 @@ def main():
                         help="Skip quality/coherence filter phase")
     parser.add_argument("--skip-ellipsis-filter", action="store_true",
                         help="Skip ellipsis-density filter phase (Phase 6.1)")
+    parser.add_argument("--target-tokens", type=int, default=None,
+                        metavar="N",
+                        help="Target token count for the output binary. When set, a seeded "
+                             "random subset of OpenWebText is downloaded automatically "
+                             "(see --subset-seed). Overrides --dataset-size.")
+    parser.add_argument("--subset-seed", type=int, default=42,
+                        help="Random seed for the subset shuffle (default: 42). "
+                             "Same seed always produces the same subset.")
+    parser.add_argument("--topics", nargs="+", default=None,
+                        metavar="CLASS[:WEIGHT]",
+                        help="Topic classes to keep after RoBERTa classification (Phase 6.2). "
+                             "Valid classes: World, Sports, Business, Sci/Tech. "
+                             "Optionally append :weight for distribution resampling, "
+                             "e.g. --topics Sports:0.4 Business:0.4 World:0.2")
+    parser.add_argument("--skip-topic-filter", action="store_true",
+                        help="Skip RoBERTa topic classification and resampling (Phase 6.2)")
     parser.add_argument("--leaderboard", action="store_true")
 
     args = parser.parse_args()

@@ -21,6 +21,60 @@ Track what was changed, why it was changed, and any important notes.
 
 ## Unreleased
 
+// ...existing code...
+## Unreleased
+
+### [2026-03-03] - Tilman Haferbeck
+
+#### What
+**Seeded subset download**
+- Added `download_openwebtext_subset_by_tokens(target_tokens, seed, attrition_rate, avg_tokens_per_doc)` to `src/scripts/download_data.py`
+- Estimates required document count as `ceil(target_tokens / avg_tokens_per_doc / (1 - attrition_rate))` and streams exactly that many documents from `Skylion007/openwebtext` using `.shuffle(seed=seed, buffer_size=100_000).take(n_docs)`
+- Saves the result to `data/openwebtext-subset-{target_tokens}-seed{seed}/` as a HuggingFace Arrow dataset
+- Added `tqdm` progress bar to the streaming loop so the download is visibly alive
+- Added `--target-tokens` and `--subset-seed` CLI flags to `src/scripts/download_data.py`
+
+**Topic classification & distribution resampling (Phase 3.5)**
+- Added `TOPIC_MODEL_NAME = "textattack/roberta-base-ag-news"` and `TOPIC_LABEL_MAP` constant mapping `LABEL_0–3` to `World`, `Sports`, `Business`, `Sci/Tech`
+- Added `_get_topic_pipeline()` with automatic device selection (`mps` > `cuda` > `cpu`) and module-level pipeline cache
+- Added `topic_classify_batch()` truncating input to 512 characters before classification
+- Phase 3.5 filters documents to the requested topic classes, then optionally resamples within those classes to match a user-specified distribution using `subset_seed` for reproducibility
+- Per-class doc count and percentage printed after resampling
+
+**Unified `--topics` CLI argument**
+- Added `--topics CLASS[:WEIGHT] [CLASS[:WEIGHT] ...]` to `main.py` replacing the two separate `--topic-classes` and `--topic-distribution` arguments
+- Added `parse_topics()` static method to `PreprocessConfig` that splits each token on `:` and returns `(topic_classes, topic_distribution)` — if no weights are provided, `topic_distribution` is `None` and no resampling is performed
+- Added `--skip-topic-filter` flag to `main.py` and `PreprocessConfig`
+- Added `target_tokens`, `subset_seed`, `topic_classes`, `topic_distribution`, `skip_topic_filter` fields to `PreprocessConfig`
+
+**Tail-token padding (Phase 8)**
+- Added `context_length: int = Field(default=1024, ge=1)` to `PreprocessConfig`
+- Phase 8 now pads both `train_tokens` and `val_tokens` with EOS token (`50256`) to the nearest exact multiple of `context_length + 1` before writing to disk
+- Prints padded token count and complete chunk count for both splits
+
+**Pipeline ordering**
+- Moved topic filter from Phase 6.2 to Phase 3.5 (immediately after language detection, before code filter, quality filter, and dedup)
+
+**Progress bars & timing**
+- Added per-phase elapsed time (`[Xs]`) to the summary print of every phase
+- Added `tqdm` band-level and per-band inner progress bars to `deduplicate_corpus()`
+- Added `tqdm` batch-level progress bar to the Phase 3.5 classification loop
+
+**README**
+- Added test command (`--target-tokens 10000000`) to Quick Start section (step 3b)
+- Added production command (`--target-tokens 1000000000`) with full topic distribution to CLI Reference section
+
+#### Why
+- A seeded subset download allows fully reproducible dataset construction without downloading all 38 GB of OpenWebText; only the ~13 shards needed for the target doc count are fetched
+- Topic filtering with RoBERTa reduces noise in the training data by keeping only topically relevant documents; placing it at Phase 3.5 means the expensive deduplication and quality phases process a smaller, already-filtered set
+- The unified `--topics` argument reduces CLI surface and makes the relationship between class selection and distribution explicit in a single parameter
+- Padding the binary output to exact chunk multiples prevents the training data loader's integer division from silently discarding up to `context_length - 1` tokens at the tail of each split
+
+
+#### Remarks
+- `context_length` is hardcoded to `1024` in `PreprocessConfig` as a course requirement; no CLI flag is exposed for it
+
+
 ### [2026-03-01] - Tilman Haferbeck
 
 #### What

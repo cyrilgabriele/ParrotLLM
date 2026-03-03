@@ -8,8 +8,10 @@ import hashlib
 import html
 import itertools
 import os
+import random as _random
 import re
 import shutil
+import time
 import unicodedata
 from dataclasses import dataclass
 from pathlib import Path
@@ -96,6 +98,18 @@ NGRAM_MAX_REPEATS = 3                    # Phase 4c: any 10-gram >3 times → dr
 # ── Ellipsis filter thresholds (Phase 6.1) ───────────────────────────────────
 ELLIPSIS_RE = re.compile(r"\.{3}|\u2026")
 ELLIPSIS_RATIO_THRESHOLD = 0.1           # Phase 6.1: ellipsis_count / word_count > 10% → drop
+
+# ── Topic classification (Phase 6.2) ─────────────────────────────────────────
+TOPIC_MODEL_NAME = "textattack/roberta-base-ag-news"
+# Map the model's generic LABEL_N outputs to human-readable AG News class names
+TOPIC_LABEL_MAP: dict[str, str] = {
+    "LABEL_0": "World",
+    "LABEL_1": "Sports",
+    "LABEL_2": "Business",
+    "LABEL_3": "Sci/Tech",
+}
+# Module-level cache so the model is loaded only once per process
+_TOPIC_PIPELINE = None
 
 # ── Classifier model paths ────────────────────────────────────────────────────
 CODE_CLASSIFIER_FILENAME = "code_vs_prose.ftz"
@@ -201,14 +215,15 @@ def deduplicate_corpus(ds) -> set[int]:
     # Load all signatures into a single NumPy array: shape (n, DEDUP_NUM_PERM)
     sigs = np.array(ds["minhash_sig"], dtype=np.int64)
 
+    from tqdm import tqdm
     uf = UnionFind()
-    for band_idx in range(DEDUP_BANDS):
+    for band_idx in tqdm(range(DEDUP_BANDS), desc="Dedup bands", unit="band"):
         start = band_idx * DEDUP_ROWS
         band_sigs = sigs[:, start : start + DEDUP_ROWS]  # (n, DEDUP_ROWS)
 
         # Hash each row to bytes — much faster than tuple hashing in pure Python
         buckets: dict[bytes, list[int]] = {}
-        for doc_idx in range(n):
+        for doc_idx in tqdm(range(n), desc=f"  band {band_idx} hashing", unit="doc", leave=False):
             key = band_sigs[doc_idx].tobytes()
             buckets.setdefault(key, []).append(doc_idx)
 
@@ -463,6 +478,52 @@ def ellipsis_filter_batch(texts: list[str]) -> dict[str, list]:
         else:
             statuses.append("kept")
     return {"ellipsis_filter_status": statuses}
+
+
+def _get_topic_pipeline():
+    """Load (and cache) the RoBERTa AG News topic classifier.
+
+    Automatically selects MPS (Apple Silicon) > CUDA > CPU.
+    """
+    global _TOPIC_PIPELINE
+    if _TOPIC_PIPELINE is None:
+        import torch
+        from transformers import pipeline  # lazy import
+        if torch.backends.mps.is_available():
+            device = "mps"    # Apple Silicon GPU — ~8× faster than CPU
+        elif torch.cuda.is_available():
+            device = "cuda"
+        else:
+            device = "cpu"
+        print(f"  [topic] Loading RoBERTa on device={device!r}...")
+        _TOPIC_PIPELINE = pipeline(
+            "text-classification",
+            model=TOPIC_MODEL_NAME,
+            device=device,
+            truncation=True,
+            max_length=512,
+        )
+    return _TOPIC_PIPELINE
+
+
+def topic_classify_batch(texts: list[str]) -> dict[str, list]:
+    """Phase 6.2: classify documents by topic using RoBERTa (AG News model).
+
+    Returns dict with 'topic_label' and 'topic_score' columns.
+    Label values: 'World', 'Sports', 'Business', 'Sci/Tech'
+    """
+    if not texts:
+        return {"topic_label": [], "topic_score": []}
+
+    pipe = _get_topic_pipeline()
+    # Truncate to first 512 chars — topic signal is in the opening sentence;
+    # avoids tokenizing full multi-thousand-word documents unnecessarily
+    truncated = [t[:512] for t in texts]
+    results = pipe(truncated, batch_size=256, truncation=True)
+    # Map LABEL_N → human-readable class name; fall back to raw label if unknown
+    labels = [TOPIC_LABEL_MAP.get(r["label"], r["label"]) for r in results]
+    scores = [float(r["score"]) for r in results]
+    return {"topic_label": labels, "topic_score": scores}
 
 
 def heuristic_quality_filter_batch(texts: list[str]) -> dict[str, list]:
@@ -780,10 +841,31 @@ def run_preprocess(args: PreprocessConfig) -> None:
     out_dir.mkdir(parents=True, exist_ok=True)
 
     # Load dataset
-    if args.dataset_size == "small":
+    target_tokens = getattr(args, "target_tokens", None)
+    subset_seed = getattr(args, "subset_seed", 42)
+
+    if target_tokens is not None:
+        subset_path = data_dir / f"openwebtext-subset-{target_tokens}-seed{subset_seed}"
+        if not subset_path.exists():
+            print(
+                f"[data] Subset not found at {subset_path}. "
+                "Downloading now..."
+            )
+            from src.scripts.download_data import download_openwebtext_subset_by_tokens
+            download_openwebtext_subset_by_tokens(
+                target_tokens=target_tokens,
+                seed=subset_seed,
+                data_dir=data_dir,
+            )
+        print(
+            f"[data] Loading token-budget subset "
+            f"(target={target_tokens:,} tokens, seed={subset_seed})..."
+        )
+        ds = load_from_disk(str(subset_path))
+    elif args.dataset_size == "small":
         print("[data] Loading 10k subset...")
         ds = load_from_disk(str(data_dir / "openwebtext-10k"))
-    elif args.dataset_size == "dummy": 
+    elif args.dataset_size == "dummy":
         print("[data] Loading 100 subset...")
         ds = load_from_disk(str(data_dir / "openwebtext-100"))
     else:
@@ -837,6 +919,7 @@ def run_preprocess(args: PreprocessConfig) -> None:
 
     total_docs = len(ds)
     print(f"[preprocess] Processing {total_docs:,} documents (num_workers={num_workers})...")
+    _t = time.time()
 
     # ── Phase 1: Decontamination ──────────────────────────────────────────
     # Runs first on raw text so sanitization cannot alter hashes and let
@@ -845,6 +928,7 @@ def run_preprocess(args: PreprocessConfig) -> None:
         print("\n[phase 1] Decontamination... SKIPPED")
         after_decontam = len(ds)
     else:
+        _t = time.time()
         print("\n[phase 1] Decontamination...")
         ds = ds.map(
             lambda batch: decontaminate_batch(batch["text"], test_index),
@@ -859,9 +943,11 @@ def run_preprocess(args: PreprocessConfig) -> None:
         print(
             f"  kept {after_decontam:,} / {before_decontam:,}"
             f" (removed {before_decontam - after_decontam:,})"
+            f"  [{time.time() - _t:.0f}s]"
         )
 
     # ── Phase 2: Sanitization ────────────────────────────────────────────
+    _t = time.time()
     print("\n[phase 2] Sanitization...")
     ds = ds.map(
         lambda batch: sanitize_batch(batch["text"]),
@@ -876,9 +962,11 @@ def run_preprocess(args: PreprocessConfig) -> None:
     print(
         f"  kept {after_sanitize:,} / {before_sanitize:,}"
         f" (removed {before_sanitize - after_sanitize:,})"
+        f"  [{time.time() - _t:.0f}s]"
     )
 
     # ── Phase 3: Language filter ─────────────────────────────────────────
+    _t = time.time()
     print("\n[phase 3] Language detection...")
     _lang_model_path = str(lang_model_path)
     ds = ds.map(
@@ -898,7 +986,97 @@ def run_preprocess(args: PreprocessConfig) -> None:
     print(
         f"  kept {after_lang:,} / {before_lang:,}"
         f" (removed {before_lang - after_lang:,})"
+        f"  [{time.time() - _t:.0f}s]"
     )
+
+    # ── Phase 3.5: Topic classification & distribution resampling ──────────────
+    # Runs after language filter but before code/quality/dedup so that the
+    # expensive later phases only process topic-relevant documents.
+    topic_classes = getattr(args, "topic_classes", None)
+    skip_topic_filter = getattr(args, "skip_topic_filter", False)
+    topic_distribution = getattr(args, "topic_distribution", None)
+    subset_seed = getattr(args, "subset_seed", 42)
+
+    if not topic_classes or skip_topic_filter:
+        print("\n[phase 3.5] Topic filter... SKIPPED")
+        after_topic = len(ds)
+    else:
+        _t = time.time()
+        print(f"\n[phase 3.5] Topic classification (keep: {topic_classes})...")
+        print(f"  Model: {TOPIC_MODEL_NAME}")
+
+        # Call the pipeline directly in the main process — never via ds.map().
+        # datasets.map() always forks a subprocess even with num_proc=1 on
+        # Python 3.14/macOS.  MPS (Metal) cannot survive fork() because the
+        # GPU context was already initialized in the parent; macOS raises
+        # "+[MPSGraphObject initialize] may have been in progress in another
+        # thread when fork() was called" and crashes the child.
+        pipe = _get_topic_pipeline()
+        from tqdm import tqdm as _tqdm
+        all_texts = ds["text"]
+        batch_size_cls = 256
+        labels: list[str] = []
+        scores: list[float] = []
+        for i in _tqdm(range(0, len(all_texts), batch_size_cls),
+                       desc="  classifying", unit="batch"):
+            batch = [t[:512] for t in all_texts[i : i + batch_size_cls]]
+            results = pipe(batch, truncation=True, batch_size=batch_size_cls)
+            for r in results:
+                labels.append(TOPIC_LABEL_MAP.get(r["label"], r["label"]))
+                scores.append(float(r["score"]))
+
+        before_topic = len(ds)
+
+        # Step 1: keep only documents matching the requested classes
+        keep_indices = [i for i, lbl in enumerate(labels) if lbl in topic_classes]
+        ds = ds.select(keep_indices)
+        kept_labels = [labels[i] for i in keep_indices]
+
+        # Step 2 (optional): resample to match requested class distribution
+        if topic_distribution:
+            rng = _random.Random(subset_seed)
+            total_after_filter = len(ds)
+            weight_sum = sum(topic_distribution.values())
+
+            class_indices: dict[str, list[int]] = {cls: [] for cls in topic_classes}
+            for idx, label in enumerate(kept_labels):
+                if label in class_indices:
+                    class_indices[label].append(idx)
+
+            final_indices: list[int] = []
+            for cls in topic_classes:
+                available = class_indices.get(cls, [])
+                if cls in topic_distribution:
+                    target_count = int(
+                        total_after_filter * topic_distribution[cls] / weight_sum
+                    )
+                    if len(available) < target_count:
+                        print(
+                            f"  [warn] '{cls}': only {len(available):,} docs "
+                            f"available, target was {target_count:,} — using all."
+                        )
+                        final_indices.extend(available)
+                    else:
+                        final_indices.extend(rng.sample(available, target_count))
+                else:
+                    final_indices.extend(available)
+
+            final_indices.sort()
+            ds = ds.select(final_indices)
+            kept_labels = [kept_labels[i] for i in final_indices]
+
+        for cls in topic_classes:
+            n_cls = sum(1 for lbl in kept_labels if lbl == cls)
+            pct = 100.0 * n_cls / max(len(ds), 1)
+            print(f"  {cls}: {n_cls:,} docs ({pct:.1f}%)")
+
+        after_topic = len(ds)
+        print(
+            f"  kept {after_topic:,} / {before_topic:,}"
+            f" (removed {before_topic - after_topic:,})"
+            f"  [{time.time() - _t:.0f}s]"
+        )
+
 
     # ── Phase 4: Code / artifact removal ─────────────────────────────────
     filter_mode = getattr(args, "filter_mode", "heuristic")
@@ -1065,7 +1243,10 @@ def run_preprocess(args: PreprocessConfig) -> None:
             f" (removed {before_ellipsis - after_ellipsis:,})"
         )
 
+    # (Phase 6.2 removed — topic filter moved earlier to Phase 3.5)
+
     # ── Phase 7: Tokenization ─────────────────────────────────────────────
+    _t = time.time()
     print("\n[phase 7] Tokenization...")
     ds = ds.map(
         lambda batch: tokenize_batch(batch["text"], tokenizer),
@@ -1079,16 +1260,19 @@ def run_preprocess(args: PreprocessConfig) -> None:
     print(
         f"  kept {after_tok:,} / {before_tok:,}"
         f" (removed {before_tok - after_tok:,} short docs)"
+        f"  [{time.time() - _t:.0f}s]"
     )
 
     # ── Summary ──────────────────────────────────────────────────────────
     _skip_code = filter_mode == "none" or skip_code_filter
     _skip_quality = filter_mode == "none" or skip_quality_filter
+    _skip_topic = not topic_classes or skip_topic_filter
     print(f"\n[preprocess] Filter summary:")
     print(f"  input:            {total_docs:,}")
     print(f"  after decontam:   {after_decontam:,}{' (skipped)' if skip_decontam else ''}")
     print(f"  after sanitize:   {after_sanitize:,}")
     print(f"  after lang:       {after_lang:,}")
+    print(f"  after topic:      {after_topic:,}{' (skipped)' if _skip_topic else ''}")
     print(f"  after code filter:{after_code:,}{' (skipped)' if _skip_code else ''}")
     print(f"  after quality:    {after_quality:,}{' (skipped)' if _skip_quality else ''}")
     print(f"  after dedup:      {after_dedup:,}{' (skipped)' if skip_dedup else ''}")
@@ -1110,14 +1294,35 @@ def run_preprocess(args: PreprocessConfig) -> None:
     val_tokens = token_array[:n_val]
     train_tokens = token_array[n_val:]
 
+    # Pad both splits to exact multiples of (context_length + 1).
+    # The data loader at PretrainingDataset.__init__ computes:
+    #   self.n_chunks = len(self.data) // (context_length + 1)
+    # which silently drops any trailing tokens that don’t fill a complete
+    # chunk.  Padding with the EOS token ensures every token is seen during
+    # training, while giving the model a meaningful document-boundary signal
+    # at the seam rather than an arbitrary filler token.
+    chunk_size = args.context_length + 1
+    eos_id = tokenizer.eos_token_id if tokenizer.eos_token_id is not None else 0
+
+    def _pad_to_chunk(arr: np.ndarray) -> np.ndarray:
+        remainder = len(arr) % chunk_size
+        if remainder == 0:
+            return arr
+        return np.concatenate([arr, np.full(chunk_size - remainder, eos_id, dtype=arr.dtype)])
+
+    train_tokens = _pad_to_chunk(train_tokens)
+    val_tokens   = _pad_to_chunk(val_tokens)
+    print(f"  train: {len(train_tokens):,} tokens → {len(train_tokens) // chunk_size:,} complete chunks (chunk_size={chunk_size})")
+    print(f"  val:   {len(val_tokens):,} tokens → {len(val_tokens) // chunk_size:,} complete chunks")
+
     # Save
     train_path = out_dir / "train.bin"
     val_path = out_dir / "val.bin"
     train_tokens.tofile(str(train_path))
     val_tokens.tofile(str(val_path))
 
-    print(f"\n[done] train: {len(train_tokens):,} tokens ({train_tokens.nbytes / 1e6:.1f} MB) -> {train_path}")
-    print(f"[done] val:   {len(val_tokens):,} tokens ({val_tokens.nbytes / 1e6:.1f} MB) -> {val_path}")
+    print(f"\n[done] train: {train_tokens.nbytes / 1e6:.1f} MB -> {train_path}")
+    print(f"[done] val:   {val_tokens.nbytes / 1e6:.1f} MB -> {val_path}")
 
     # Clean up temporary HF dataset cache written during this run
     _hf_cache = Path(os.environ.get("HF_DATASETS_CACHE", "/tmp/parrotllm_hf_cache"))

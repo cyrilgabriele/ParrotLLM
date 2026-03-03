@@ -16,6 +16,9 @@ uv run python src/scripts/download_data.py
 uv run python main.py --stage preprocess --dataset-size small   # 10k docs, fast
 uv run python main.py --stage preprocess --dataset-size full    # full OpenWebText
 
+# 3b. Preprocess with seeded token-budget subset + topic filtering
+uv run python main.py --stage preprocess --target-tokens 1000000000 --subset-seed 42 --topics World:0.30 Sci/Tech:0.35 Business:0.20 Sports:0.15
+
 # 4. Train
 uv run python main.py --stage train
 
@@ -171,6 +174,14 @@ All stages go through `main.py`:
 ```bash
 # Preprocess
 uv run python main.py --stage preprocess [--dataset-size small|full] [--lang en]
+
+# Preprocess with seeded token-budget subset + topic filtering
+# --target-tokens: desired output token count (pipeline downloads just enough docs)
+# --subset-seed:   reproducible shuffle seed
+# --topics:        RoBERTa AG News classes with optional resampling weights
+uv run python main.py --stage preprocess \
+    --target-tokens 1000000000 --subset-seed 42 \
+    --topics World:0.30 Sci/Tech:0.35 Business:0.20 Sports:0.15
 
 # Train
 uv run python main.py --stage train [--config configs/default.yaml] [--checkpoint path.pt]

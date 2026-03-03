@@ -1,6 +1,7 @@
 """Download all datasets needed for the project."""
 
 import argparse
+import math
 import urllib.request
 from pathlib import Path
 
@@ -8,6 +9,12 @@ from datasets import load_dataset
 
 
 DATA_DIR = Path("data")
+
+# ── Subset download constants ─────────────────────────────────────────────────
+# Empirical average tokens per raw OpenWebText document (from Section 4 analysis)
+_AVG_TOKENS_PER_DOC = 1085
+# Estimated fraction of docs removed by the full preprocessing pipeline
+_PIPELINE_ATTRITION_RATE = 0.30
 NLP26_OWT_EVAL_URLS = (
     "https://drive.switch.ch/index.php/s/6TLGQFEIkAPJ72K/download",
 )
@@ -26,6 +33,66 @@ def _download_openwebtext_subset(count: int, suffix: str):
     ds_subset = Dataset.from_list(subset)
     ds_subset.save_to_disk(str(out))
     print(f"[done] {len(ds_subset)} documents -> {out}")
+
+
+def download_openwebtext_subset_by_tokens(
+    target_tokens: int,
+    seed: int = 42,
+    attrition_rate: float = _PIPELINE_ATTRITION_RATE,
+    avg_tokens_per_doc: float = _AVG_TOKENS_PER_DOC,
+    data_dir: Path = DATA_DIR,
+) -> Path:
+    """Download a seeded random subset of OpenWebText sized to hit a token budget.
+
+    Estimates how many raw documents to fetch as:
+
+        n_docs = ceil(target_tokens / avg_tokens_per_doc / (1 - attrition_rate))
+
+    The shuffle uses a fixed-size buffer (100k) for approximate uniform sampling;
+    the same seed always produces the same subset.
+
+    Args:
+        target_tokens:    Desired token count in the final processed binary.
+        seed:             Random seed for the shuffle.
+        attrition_rate:   Fraction of docs expected to be removed by preprocessing.
+        avg_tokens_per_doc: Estimated average tokens per raw document.
+        data_dir:         Directory to save the downloaded subset.
+
+    Returns:
+        Path to the saved dataset directory.
+    """
+    from datasets import Dataset  # local import keeps module-level imports light
+
+    out = data_dir / f"openwebtext-subset-{target_tokens}-seed{seed}"
+    if out.exists():
+        print(f"[skip] {out} already exists")
+        return out
+
+    n_docs = math.ceil(target_tokens / avg_tokens_per_doc / (1.0 - attrition_rate))
+    print(
+        f"[download] Streaming ~{n_docs:,} docs from OpenWebText "
+        f"(target={target_tokens:,} tokens, seed={seed}, "
+        f"attrition={attrition_rate:.0%}, avg_tok/doc={avg_tokens_per_doc})..."
+    )
+
+    ds = load_dataset(
+        "Skylion007/openwebtext",
+        split="train",
+        streaming=True,
+    )
+    ds = ds.shuffle(seed=seed, buffer_size=100_000)
+
+    from tqdm import tqdm
+    subset = []
+    with tqdm(total=n_docs, desc="Downloading docs", unit="doc", dynamic_ncols=True) as pbar:
+        for doc in ds.take(n_docs):
+            subset.append(doc)
+            pbar.update(1)
+
+    ds_subset = Dataset.from_list(subset)
+    ds_subset.save_to_disk(str(out))
+    print(f"[done] {len(ds_subset):,} documents -> {out}")
+    return out
 
 
 def download_openwebtext_10k():
@@ -156,11 +223,35 @@ def main(argv: list[str] | None = None):
         "targets",
         nargs="*",
         choices=sorted(DOWNLOAD_TARGETS.keys()),
-        help="Datasets to download (default: all).",
+        help="Datasets to download (default: all). Ignored when --target-tokens is set.",
+    )
+    parser.add_argument(
+        "--target-tokens",
+        type=int,
+        default=None,
+        metavar="N",
+        help=(
+            "Download a seeded random subset sized for this token budget "
+            "(e.g. --target-tokens 10000000). "
+            "Saves to data/openwebtext-subset-<N>-seed<SEED>."
+        ),
+    )
+    parser.add_argument(
+        "--subset-seed",
+        type=int,
+        default=42,
+        help="Random seed for the subset shuffle (default: 42).",
     )
     args = parser.parse_args(argv)
 
     DATA_DIR.mkdir(exist_ok=True)
+
+    if args.target_tokens is not None:
+        download_openwebtext_subset_by_tokens(
+            target_tokens=args.target_tokens,
+            seed=args.subset_seed,
+        )
+        return
 
     targets = args.targets or list(DOWNLOAD_TARGETS.keys())
     for target in targets:

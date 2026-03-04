@@ -24,6 +24,22 @@ Track what was changed, why it was changed, and any important notes.
 // ...existing code...
 ## Unreleased
 
+### [2026-03-04] - Gian Seifert
+
+#### What
+- Implemented basic model from lecture with LayerNorm, normal initialization, Multi-Head Attention, learned positional encoding, GELU, dense FFN, dropout and full causal attention
+- Added a comprehensive test suite in `tests/model/test_transformer.py` to verify if it works as expected (shape, loss, causality, and parameter count).
+
+#### Why
+- Establish a simple baseline model where we can build up from; for this, the lecture recommendations were taken.
+- The test case was added to verify if it works as expected and ensure structural integrity.
+
+#### Remarks
+- `LayerNorm` parameters were found to include biases even when the global `bias` flag is set to `False` in the config, as `nn.LayerNorm` defaults to `elementwise_affine=True`. The parameter count test was adjusted to account for this.
+
+---
+
+
 ### [2026-03-03] - Tilman Haferbeck
 
 #### What
@@ -203,7 +219,8 @@ Track what was changed, why it was changed, and any important notes.
 #### Remarks
 ---
 
-<!-- Add new entries here -->
+
+---
 
 ### [2026-02-19] - Christof
 

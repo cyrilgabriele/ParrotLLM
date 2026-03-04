@@ -7,52 +7,6 @@ import torch.nn as nn
 import torch.nn.functional as F
 
 
-# ── RMSNorm ──────────────────────────────────────────────────────────────────
-
-class RMSNorm(nn.Module):
-    def __init__(self, dim: int, eps: float = 1e-6):
-        super().__init__()
-        self.eps = eps
-        self.weight = nn.Parameter(torch.ones(dim))
-
-    def forward(self, x: torch.Tensor) -> torch.Tensor:
-        norm = torch.rsqrt(x.float().pow(2).mean(-1, keepdim=True) + self.eps)
-        return (x.float() * norm).type_as(x) * self.weight
-
-
-# ── Rotary Positional Embedding ──────────────────────────────────────────────
-
-class RotaryEmbedding(nn.Module):
-    def __init__(self, dim: int, max_seq_len: int = 4096, theta: float = 10000.0):
-        super().__init__()
-        inv_freq = 1.0 / (theta ** (torch.arange(0, dim, 2).float() / dim))
-        self.register_buffer("inv_freq", inv_freq)
-        self._build_cache(max_seq_len)
-
-    def _build_cache(self, seq_len: int) -> None:
-        t = torch.arange(seq_len, device=self.inv_freq.device).float()
-        freqs = torch.outer(t, self.inv_freq)
-        self.register_buffer("cos_cached", freqs.cos(), persistent=False)
-        self.register_buffer("sin_cached", freqs.sin(), persistent=False)
-
-    def forward(self, seq_len: int) -> tuple[torch.Tensor, torch.Tensor]:
-        if seq_len > self.cos_cached.shape[0]:
-            self._build_cache(seq_len)
-        return self.cos_cached[:seq_len], self.sin_cached[:seq_len]
-
-
-def apply_rotary_emb(
-    x: torch.Tensor, cos: torch.Tensor, sin: torch.Tensor
-) -> torch.Tensor:
-    """Apply rotary embeddings to x of shape (B, n_heads, T, d_head)."""
-    d_half = x.shape[-1] // 2
-    x1, x2 = x[..., :d_half], x[..., d_half:]
-    cos = cos.unsqueeze(0).unsqueeze(0)  # (1, 1, T, d_half)
-    sin = sin.unsqueeze(0).unsqueeze(0)
-    out = torch.cat([x1 * cos - x2 * sin, x2 * cos + x1 * sin], dim=-1)
-    return out
-
-
 # ── Multi-Head Attention ─────────────────────────────────────────────────────
 
 class MultiHeadAttention(nn.Module):
@@ -67,38 +21,48 @@ class MultiHeadAttention(nn.Module):
         self.k_proj = nn.Linear(d_model, d_model, bias=bias)
         self.v_proj = nn.Linear(d_model, d_model, bias=bias)
         self.o_proj = nn.Linear(d_model, d_model, bias=bias)
-        self.dropout = dropout
+        
+        self.attn_dropout = dropout
+        self.resid_dropout = nn.Dropout(dropout)
 
-    def forward(self, x: torch.Tensor, cos: torch.Tensor,
-                sin: torch.Tensor) -> torch.Tensor:
-        B, T, _ = x.shape
+    def forward(self, x: torch.Tensor) -> torch.Tensor:
+        B, T, C = x.shape
 
+        # Calculate query, key, values for all heads in batch and move head forward to be the batch dim
         q = self.q_proj(x).view(B, T, self.n_heads, self.d_head).transpose(1, 2)
         k = self.k_proj(x).view(B, T, self.n_heads, self.d_head).transpose(1, 2)
         v = self.v_proj(x).view(B, T, self.n_heads, self.d_head).transpose(1, 2)
 
-        q = apply_rotary_emb(q, cos, sin)
-        k = apply_rotary_emb(k, cos, sin)
-
+        # Causal self-attention; Flash Attention if available
         out = F.scaled_dot_product_attention(
             q, k, v, is_causal=True,
-            dropout_p=self.dropout if self.training else 0.0,
+            dropout_p=self.attn_dropout if self.training else 0.0,
         )
-        out = out.transpose(1, 2).contiguous().view(B, T, -1)
-        return self.o_proj(out)
+        
+        # Re-assemble all head outputs side by side
+        out = out.transpose(1, 2).contiguous().view(B, T, C)
+        
+        # Output projection and residual dropout
+        out = self.resid_dropout(self.o_proj(out))
+        return out
 
 
-# ── SwiGLU Feed-Forward Network ─────────────────────────────────────────────
+# ── GELU MLP ─────────────────────────────────────────────────────────────────
 
-class SwiGLUFFN(nn.Module):
-    def __init__(self, d_model: int, d_ff: int, bias: bool = False):
+class GELUMLP(nn.Module):
+    def __init__(self, d_model: int, d_ff: int, bias: bool = False, dropout: float = 0.0):
         super().__init__()
-        self.gate_proj = nn.Linear(d_model, d_ff, bias=bias)
-        self.up_proj = nn.Linear(d_model, d_ff, bias=bias)
-        self.down_proj = nn.Linear(d_ff, d_model, bias=bias)
+        self.c_fc = nn.Linear(d_model, d_ff, bias=bias)
+        self.gelu = nn.GELU(approximate='tanh')
+        self.c_proj = nn.Linear(d_ff, d_model, bias=bias)
+        self.dropout = nn.Dropout(dropout)
 
     def forward(self, x: torch.Tensor) -> torch.Tensor:
-        return self.down_proj(F.silu(self.gate_proj(x)) * self.up_proj(x))
+        x = self.c_fc(x)
+        x = self.gelu(x)
+        x = self.c_proj(x)
+        x = self.dropout(x)
+        return x
 
 
 # ── Transformer Block ───────────────────────────────────────────────────────
@@ -107,15 +71,14 @@ class TransformerBlock(nn.Module):
     def __init__(self, d_model: int, n_heads: int, d_ff: int,
                  bias: bool = False, dropout: float = 0.0):
         super().__init__()
-        self.attn_norm = RMSNorm(d_model)
+        self.ln_1 = nn.LayerNorm(d_model)
         self.attn = MultiHeadAttention(d_model, n_heads, bias, dropout)
-        self.ffn_norm = RMSNorm(d_model)
-        self.ffn = SwiGLUFFN(d_model, d_ff, bias)
+        self.ln_2 = nn.LayerNorm(d_model)
+        self.mlp = GELUMLP(d_model, d_ff, bias, dropout)
 
-    def forward(self, x: torch.Tensor, cos: torch.Tensor,
-                sin: torch.Tensor) -> torch.Tensor:
-        x = x + self.attn(self.attn_norm(x), cos, sin)
-        x = x + self.ffn(self.ffn_norm(x))
+    def forward(self, x: torch.Tensor) -> torch.Tensor:
+        x = x + self.attn(self.ln_1(x))
+        x = x + self.mlp(self.ln_2(x))
         return x
 
 
@@ -128,11 +91,9 @@ class ParrotLLM(nn.Module):
         self.config = mc
 
         self.tok_emb = nn.Embedding(mc["vocab_size"], mc["d_model"])
-        self.rope = RotaryEmbedding(
-            mc["d_model"] // mc["n_heads"],
-            mc["context_length"],
-            mc.get("rope_theta", 10000.0),
-        )
+        self.pos_emb = nn.Embedding(mc["context_length"], mc["d_model"])
+        self.dropout = nn.Dropout(mc.get("dropout", 0.0))
+        
         self.blocks = nn.ModuleList([
             TransformerBlock(
                 mc["d_model"], mc["n_heads"], mc["d_ff"],
@@ -140,7 +101,7 @@ class ParrotLLM(nn.Module):
             )
             for _ in range(mc["n_layers"])
         ])
-        self.final_norm = RMSNorm(mc["d_model"])
+        self.ln_f = nn.LayerNorm(mc["d_model"])
         self.lm_head = nn.Linear(mc["d_model"], mc["vocab_size"], bias=False)
 
         # weight tying
@@ -150,29 +111,34 @@ class ParrotLLM(nn.Module):
 
     def _init_weights(self) -> None:
         n_layers = self.config["n_layers"]
-        residual_scale = 0.02 / math.sqrt(2 * n_layers)
-
+        # GPT-2 style initialization
         for name, p in self.named_parameters():
-            if p.dim() < 2:
-                continue
-            # scaled init for residual projections
-            if name.endswith("o_proj.weight") or name.endswith("down_proj.weight"):
-                nn.init.normal_(p, mean=0.0, std=residual_scale)
-            else:
-                nn.init.normal_(p, mean=0.0, std=0.02)
+            if name.endswith("weight") and p.dim() >= 2:
+                # Scaled init for residual projections
+                if name.endswith("o_proj.weight") or name.endswith("c_proj.weight"):
+                    nn.init.normal_(p, mean=0.0, std=0.02 / math.sqrt(2 * n_layers))
+                else:
+                    nn.init.normal_(p, mean=0.0, std=0.02)
+            elif name.endswith("bias"):
+                nn.init.zeros_(p)
 
     def forward(
         self, idx: torch.Tensor, targets: torch.Tensor | None = None,
     ) -> tuple[torch.Tensor, torch.Tensor | None]:
         B, T = idx.shape
-        x = self.tok_emb(idx)
-        cos, sin = self.rope(T)
-        cos, sin = cos.to(x.device), sin.to(x.device)
+        device = idx.device
+        
+        pos = torch.arange(0, T, dtype=torch.long, device=device)
+        
+        tok_emb = self.tok_emb(idx) # (B, T, d_model)
+        pos_emb = self.pos_emb(pos) # (T, d_model)
+        
+        x = self.dropout(tok_emb + pos_emb)
 
         for block in self.blocks:
-            x = block(x, cos, sin)
+            x = block(x)
 
-        x = self.final_norm(x)
+        x = self.ln_f(x)
         logits = self.lm_head(x)
 
         loss = None

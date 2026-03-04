@@ -216,4 +216,6 @@ checkpoints/*.pt
 # Weights & Biases
 wandb/
 
+# Custom
 .DS_Store
+src/parrotllm.egg-info

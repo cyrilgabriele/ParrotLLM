@@ -1,4 +1,6 @@
+import os
 import random
+from pathlib import Path
 
 import numpy as np
 import torch
@@ -12,6 +14,20 @@ PAD_TOKEN = "<|pad|>"
 def load_config(path: str = "configs/default.yaml") -> dict:
     with open(path) as f:
         return yaml.safe_load(f)
+
+
+def maybe_load_hf_token(env_path: str | Path = Path(".env")) -> str | None:
+    """Return the HF token if explicitly provided, otherwise None."""
+
+    token = os.environ.get("HF_TOKEN")
+    if token:
+        return token
+
+    path = Path(env_path)
+    if not path.exists():
+        return None
+    
+    return None
 
 
 def build_tokenizer(

@@ -26,9 +26,13 @@ def main():
     # Inference args (leaderboard contract)
     parser.add_argument("--prompt", default=None)
     parser.add_argument("--max-tokens", type=int, default=128)
-    parser.add_argument("--temperature", type=float, default=0.0)
+    parser.add_argument("--temperature", type=float, default=None,
+                        help="Override sampling temperature (default pulled from config)")
     parser.add_argument("--device", default="auto")
     parser.add_argument("--seed", type=int, default=0)
+    parser.add_argument("--mock-testing", action="store_true",
+                        help="Use a tiny pretrained GPT-2 checkpoint for inference"
+                             " instead of a ParrotLLM checkpoint")
     parser.add_argument("--num-workers", default="auto",
                         help="Number of CPU workers for preprocessing (default: auto = all cores)")
     parser.add_argument("--skip-dedup", action="store_true",

@@ -21,6 +21,25 @@ Track what was changed, why it was changed, and any important notes.
 
 ## Unreleased
 
+### [2026-03-05] - Cyril Gabriele
+
+#### What
+- Introduced the `--mock-testing` CLI flag and taught inference to load Hugging Face GPT-2 when it's set
+- Documented the mock inference workflow in `README.md`
+- Let inference pull the sampling temperature from `configs/default.yaml` unless the CLI flag overrides it, fixing the greedy-only bug
+- Added a second Hugging Face adapter for the full `openai-community/gpt2` checkpoint and wired `--mock-testing` to use it for more realistic smoke tests
+- Added `src/model/hf_gpt2.py` to house the reusable HF GPT-2 adapter
+- Auto-load an `HF_TOKEN`/`HUGGINGFACEHUB_API_TOKEN` from the environment or `.env` so mock inference downloads authenticate automatically when available
+
+#### Why
+- Enables running inference end-to-end without training or downloading a ParrotLLM checkpoint, which is ideal for quick smoke tests and demos
+- Ensures config-driven inference hyperparameters actually take effect without manual flags
+- Provides higher-quality mock generations via the standard GPT-2 weights
+- Authenticated downloads avoid Hugging Face’s anonymous throttling, making mock inference setup faster by default
+
+#### Remarks
+- First run with `--mock-testing` downloads the Hugging Face weights; afterwards they are reused from cache
+
 // ...existing code...
 ## Unreleased
 

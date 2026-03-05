@@ -100,7 +100,7 @@ ELLIPSIS_RE = re.compile(r"\.{3}|\u2026")
 ELLIPSIS_RATIO_THRESHOLD = 0.1           # Phase 6.1: ellipsis_count / word_count > 10% → drop
 
 # ── Topic classification (Phase 6.2) ─────────────────────────────────────────
-TOPIC_MODEL_NAME = "textattack/roberta-base-ag-news"
+TOPIC_MODEL_NAME = "textattack/distilbert-base-uncased-ag-news"
 # Map the model's generic LABEL_N outputs to human-readable AG News class names
 TOPIC_LABEL_MAP: dict[str, str] = {
     "LABEL_0": "World",
@@ -516,10 +516,10 @@ def topic_classify_batch(texts: list[str]) -> dict[str, list]:
         return {"topic_label": [], "topic_score": []}
 
     pipe = _get_topic_pipeline()
-    # Truncate to first 512 chars — topic signal is in the opening sentence;
+    # Truncate to first 256 chars — topic signal is in the opening sentence;
     # avoids tokenizing full multi-thousand-word documents unnecessarily
-    truncated = [t[:512] for t in texts]
-    results = pipe(truncated, batch_size=256, truncation=True)
+    truncated = [t[:256] for t in texts]
+    results = pipe(truncated, batch_size=512, truncation=True)
     # Map LABEL_N → human-readable class name; fall back to raw label if unknown
     labels = [TOPIC_LABEL_MAP.get(r["label"], r["label"]) for r in results]
     scores = [float(r["score"]) for r in results]
@@ -1014,12 +1014,12 @@ def run_preprocess(args: PreprocessConfig) -> None:
         pipe = _get_topic_pipeline()
         from tqdm import tqdm as _tqdm
         all_texts = ds["text"]
-        batch_size_cls = 256
+        batch_size_cls = 512
         labels: list[str] = []
         scores: list[float] = []
         for i in _tqdm(range(0, len(all_texts), batch_size_cls),
                        desc="  classifying", unit="batch"):
-            batch = [t[:512] for t in all_texts[i : i + batch_size_cls]]
+            batch = [t[:256] for t in all_texts[i : i + batch_size_cls]]
             results = pipe(batch, truncation=True, batch_size=batch_size_cls)
             for r in results:
                 labels.append(TOPIC_LABEL_MAP.get(r["label"], r["label"]))

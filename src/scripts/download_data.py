@@ -82,15 +82,40 @@ def download_openwebtext_subset_by_tokens(
     )
     ds = ds.shuffle(seed=seed, buffer_size=100_000)
 
+    import shutil
     from tqdm import tqdm
-    subset = []
+
+    # Stream docs and flush to disk in chunks to avoid materialising the full
+    # ~1.3M-document Python list in RAM (~6-7 GB), which silently OOMs on macOS.
+    CHUNK_SIZE = 50_000          # ~250 MB per shard in RAM
+    chunks_dir = data_dir / f".tmp_chunks_{seed}"
+    chunks_dir.mkdir(exist_ok=True)
+
+    chunk_paths: list[Path] = []
+    current_chunk: list = []
+
     with tqdm(total=n_docs, desc="Downloading docs", unit="doc", dynamic_ncols=True) as pbar:
         for doc in ds.take(n_docs):
-            subset.append(doc)
+            current_chunk.append(doc)
             pbar.update(1)
+            if len(current_chunk) >= CHUNK_SIZE:
+                chunk_path = chunks_dir / f"chunk_{len(chunk_paths):04d}"
+                Dataset.from_list(current_chunk).save_to_disk(str(chunk_path))
+                chunk_paths.append(chunk_path)
+                current_chunk = []
 
-    ds_subset = Dataset.from_list(subset)
+    # Flush any remaining docs
+    if current_chunk:
+        chunk_path = chunks_dir / f"chunk_{len(chunk_paths):04d}"
+        Dataset.from_list(current_chunk).save_to_disk(str(chunk_path))
+        chunk_paths.append(chunk_path)
+
+    print(f"  Flushed {len(chunk_paths)} shards — concatenating...")
+    from datasets import load_from_disk, concatenate_datasets
+    all_chunks = [load_from_disk(str(p)) for p in chunk_paths]
+    ds_subset = concatenate_datasets(all_chunks)
     ds_subset.save_to_disk(str(out))
+    shutil.rmtree(chunks_dir)
     print(f"[done] {len(ds_subset):,} documents -> {out}")
     return out
 

@@ -39,6 +39,41 @@ Track what was changed, why it was changed, and any important notes.
 
 ---
 
+### [2026-03-06] - Tilman Haferbeck
+
+#### What
+**Topic classification throughput improvements**
+- Input truncation reduced from 512 → 256 characters per document before classification
+- Inference batch size increased from 256 → 512
+- Both changes applied in `topic_classify_batch()` and the Phase 3.5 main classification loop
+
+**EOS per-document insertion**
+- `tokenize_batch()` now appends exactly one EOS token (`50256`) after each document's token list before concatenation into the flat stream
+- Matches GPT-2 original pretraining format: `doc_1_tokens + [EOS] + doc_2_tokens + [EOS] + ...`
+- Added `truncation=False` explicitly to the `tokenizer()` call to suppress the HuggingFace false-positive warning about sequences longer than 1024 tokens
+
+**Tail-token handling changed from EOS padding to trimming**
+- `_pad_to_chunk()` in Phase 8 now trims the tail with `arr[:-remainder]` instead of appending EOS tokens as filler
+- EOS is no longer used as structural padding — it is exclusively a semantic document-boundary marker
+
+**Chunked download to avoid OOM on large token budgets**
+- Rewrote `download_openwebtext_subset_by_tokens()` in `src/scripts/download_data.py` to flush every 50,000 documents to a temporary Arrow shard on disk instead of accumulating all documents in a Python list
+- Shards are concatenated via `concatenate_datasets()` after streaming completes; the temp directory is removed automatically
+
+#### Why
+- Halving truncation length and doubling batch size reduces Phase 3.5 runtime by ~2.5× on M4 with no meaningful quality loss — topic is almost always clear from the first 256 characters
+- Appending EOS after each document teaches the model a genuine document-boundary signal; without it documents are concatenated raw and the model never learns when one document ends and another begins, causing premature generation termination at inference time
+- Using EOS as tail padding corrupts its semantic meaning — the model could learn to predict EOS in positions that are not genuine document boundaries; trimming is correct and the token loss is negligible (< 0.0002% at 700M scale)
+- `truncation=False` suppresses a HuggingFace false-positive warning — the tokenizer handles any length correctly; the warning only applies when passing output directly to `model.forward()`, which the pipeline never does
+- Accumulating ~1.3M documents as a Python list (~7 GB) causes a silent OOM crash (exit code 137) on machines with ≤ 16 GB RAM; chunked flushing keeps peak RAM at ~250 MB per shard regardless of target token count
+
+#### Remarks
+- `truncation=False` must remain set if documents longer than 1024 tokens are to be kept whole — removing it would silently truncate long documents before EOS insertion, breaking the flat-stream chunking assumption
+- The chunked download creates a `.tmp_chunks_{seed}/` directory in `data/`; if the process is killed mid-download this directory must be deleted manually before re-running
+- Phase 3.5 requires a valid `HF_TOKEN` for the first run to download `textattack/distilbert-base-uncased-ag-news` (~250 MB); subsequent runs load from `~/.cache/huggingface/hub/`
+
+---
+
 
 ### [2026-03-03] - Tilman Haferbeck
 

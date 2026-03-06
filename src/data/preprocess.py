@@ -824,6 +824,12 @@ def tokenize_batch(
 
     encoded = tokenizer(texts, add_special_tokens=False, return_attention_mask=False)
     input_ids = encoded["input_ids"]
+    # Append EOS after every document — standard GPT-2 pretraining practice.
+    # Teaches the model that EOS = document boundary, which makes generation
+    # stop correctly at inference time.
+    eos_id = tokenizer.eos_token_id if tokenizer.eos_token_id is not None else 0
+    for ids in input_ids:
+        ids.append(eos_id)
     n_tokens = [len(ids) for ids in input_ids]
     return {"input_ids": input_ids, "n_tokens": n_tokens}
 
@@ -1302,13 +1308,11 @@ def run_preprocess(args: PreprocessConfig) -> None:
     # training, while giving the model a meaningful document-boundary signal
     # at the seam rather than an arbitrary filler token.
     chunk_size = args.context_length + 1
-    eos_id = tokenizer.eos_token_id if tokenizer.eos_token_id is not None else 0
-
     def _pad_to_chunk(arr: np.ndarray) -> np.ndarray:
         remainder = len(arr) % chunk_size
         if remainder == 0:
             return arr
-        return np.concatenate([arr, np.full(chunk_size - remainder, eos_id, dtype=arr.dtype)])
+        return arr[:-remainder]  # trim tail, never pad with EOS
 
     train_tokens = _pad_to_chunk(train_tokens)
     val_tokens   = _pad_to_chunk(val_tokens)

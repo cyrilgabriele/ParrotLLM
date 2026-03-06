@@ -1,0 +1,43 @@
+# Quick test config — 20 steps, small eval
+model:
+  vocab_size: 50258
+  pad_token_id: 50257
+  bos_token_id: 50256
+  eos_token_id: 50256
+  d_model: 320
+  n_layers: 16
+  n_heads: 8
+  d_ff: 854
+  context_length: 1024
+  bias: false
+  dropout: 0.0
+  rope_theta: 10000.0
+
+training:
+  seed: 42
+  device: auto
+  train_bin: data/processed/train.bin
+  val_bin: data/processed/val.bin
+  batch_size: 4
+  gradient_accumulation_steps: 1
+  learning_rate: 6.0e-4
+  min_lr: 6.0e-5
+  weight_decay: 0.1
+  beta1: 0.9
+  beta2: 0.95
+  grad_clip: 1.0
+  warmup_steps: 5
+  max_steps: 20
+  save_every: 10
+  eval_every: 10
+  checkpoint_dir: checkpoints
+  runs_dir: runs
+  log_every: 5
+
+logging:
+  console_level: INFO
+  file_level: DEBUG
+  components:
+    data_preprocessing: DEBUG
+    model_initialization: INFO
+    training: DEBUG

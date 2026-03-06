@@ -21,8 +21,19 @@ Track what was changed, why it was changed, and any important notes.
 
 ## Unreleased
 
-// ...existing code...
-## Unreleased
+### [2026-03-06] - Christof Steiner
+
+#### What
+- Added `src/logging_utils.py`: `setup_logger()`, `JSONLLogger`, `make_run_dir()`
+- Added `configs/trainingConfig.py`: Pydantic validation for training, model, and logging configs
+- Integrated logging into trainer: `train.log` (human-readable) + `metrics.jsonl` (machine-readable)
+- Added `tests/test_logging.py` (5 tests)
+
+#### Why
+- Logging will help us and the machine to understand and compare the differnet runs.
+
+#### Remarks
+- `default.yaml` batch_size=64 causes OOM on MPS; use `test.yaml` for local testing
 
 ### [2026-03-04] - Gian Seifert
 

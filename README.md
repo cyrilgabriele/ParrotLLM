@@ -207,7 +207,7 @@ uv run python main.py --stage chat
 
 Use `--mock-testing` during `--stage inference` to skip checkpoints entirely; it loads the standard Hugging Face `openai-community/gpt2` weights so you can validate the CLI without training first (the model is downloaded on demand).
 
-If you place `HF_TOKEN=...` inside `.env` (or export `HF_TOKEN`/`HUGGINGFACEHUB_API_TOKEN`), ParrotLLM picks it up automatically to unlock faster authenticated downloads.
+If you place `HF_TOKEN=...` inside `.env` (or export `HF_TOKEN`), ParrotLLM picks it up automatically to unlock faster authenticated downloads.
 
 `--lang` defaults to `en` (English). Override it only if you have the required fastText language models for another language.
 

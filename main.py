@@ -31,7 +31,7 @@ def main():
     parser.add_argument("--device", default="auto")
     parser.add_argument("--seed", type=int, default=0)
     parser.add_argument("--mock-testing", action="store_true",
-                        help="Use a tiny pretrained GPT-2 checkpoint for inference"
+                        help="Use pretrained GPT-2 checkpoint for inference"
                              " instead of a ParrotLLM checkpoint")
     parser.add_argument("--num-workers", default="auto",
                         help="Number of CPU workers for preprocessing (default: auto = all cores)")

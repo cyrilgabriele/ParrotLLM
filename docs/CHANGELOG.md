@@ -29,7 +29,7 @@ Track what was changed, why it was changed, and any important notes.
 - Let inference pull the sampling temperature from `configs/default.yaml` unless the CLI flag overrides it, fixing the greedy-only bug
 - Added a second Hugging Face adapter for the full `openai-community/gpt2` checkpoint and wired `--mock-testing` to use it for more realistic smoke tests
 - Added `src/model/hf_gpt2.py` to house the reusable HF GPT-2 adapter
-- Auto-load an `HF_TOKEN` from `.env` so mock inference downloads authenticate automatically when available
+- Auto-load an `HF_TOKEN` from `.env` or the environemnt so mock inference downloads authenticate automatically when available
 
 #### Why
 - Enables running inference end-to-end without training or downloading a ParrotLLM checkpoint, which is ideal for quick smoke tests and demos
@@ -40,8 +40,6 @@ Track what was changed, why it was changed, and any important notes.
 #### Remarks
 - First run with `--mock-testing` downloads the Hugging Face weights; afterwards they are reused from cache
 
-// ...existing code...
-## Unreleased
 
 ### [2026-03-04] - Gian Seifert
 

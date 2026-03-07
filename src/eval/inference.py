@@ -87,7 +87,10 @@ def run_inference(args) -> None:
 
     tokenizer = build_tokenizer()
 
-    prompt = args.prompt
+    if args.prompt: 
+        prompt = args.prompt
+    else: 
+        prompt = "Parrot are amazing because"
     input_ids = tokenizer.encode(prompt)
     idx = torch.tensor([input_ids], dtype=torch.long, device=device)
 

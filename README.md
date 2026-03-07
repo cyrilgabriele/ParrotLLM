@@ -29,6 +29,10 @@ uv run python main.py --stage eval --checkpoint checkpoints/step_5000.pt
 uv run python main.py --stage inference --checkpoint checkpoints/step_5000.pt \
     --prompt "The meaning of life is"
 
+# 6b. Mock inference (downloads Hugging Face GPT-2, no ParrotLLM training)
+uv run python main.py --stage inference --mock-testing \
+    --prompt "The meaning of life is"
+
 # 7. Chat UI
 uv run python main.py --stage chat
 ```
@@ -200,6 +204,10 @@ uv run python main.py --stage inference --checkpoint checkpoints/step_5000.pt \
 # Chat UI
 uv run python main.py --stage chat
 ```
+
+Use `--mock-testing` during `--stage inference` to skip checkpoints entirely; it loads the standard Hugging Face `openai-community/gpt2` weights so you can validate the CLI without training first (the model is downloaded on demand).
+
+If you place `HF_TOKEN=...` inside `.env` (or export `HF_TOKEN`), ParrotLLM picks it up automatically to unlock faster authenticated downloads.
 
 `--lang` defaults to `en` (English). Override it only if you have the required fastText language models for another language.
 

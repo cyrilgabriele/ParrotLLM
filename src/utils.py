@@ -6,6 +6,7 @@ import numpy as np
 import torch
 import yaml
 from transformers import GPT2TokenizerFast
+from dotenv import load_dotenv
 
 DEFAULT_TOKENIZER_NAME = "openai-community/gpt2"
 PAD_TOKEN = "<|pad|>"
@@ -19,7 +20,8 @@ def load_config(path: str = "configs/default.yaml") -> dict:
 def maybe_load_hf_token(env_path: str | Path = Path(".env")) -> str | None:
     """Return the HF token if explicitly provided, otherwise None."""
 
-    token = os.environ.get("HF_TOKEN")
+    load_dotenv()
+    token = os.getenv("HF_TOKEN")
     if token:
         return token
 

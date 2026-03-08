@@ -171,15 +171,17 @@ class UnionFind:
 
 
 def _shingle_hashes(text: str, size: int = DEDUP_SHINGLE_SIZE) -> set[int]:
-    """Normalize text, split into words, extract word-level shingles, hash each."""
+    """Normalize text, build word shingles, and return hashed shingle IDs.
+
+    Uses Python's built-in hash for speed because cryptographic strength is
+    unnecessary for approximate near-duplicate detection within one run.
+    """
     words = text.lower().split()
     if len(words) < size:
         return set()
     hashes = set()
     for i in range(len(words) - size + 1):
         shingle = " ".join(words[i : i + size])
-        # Built-in hash() is ~10× faster than blake2b; cryptographic strength
-        # is not needed for dedup shingles (consistent within a single run).
         hashes.add(hash(shingle) % _DEDUP_PRIME)
     return hashes
 
@@ -219,7 +221,7 @@ def deduplicate_corpus(ds) -> set[int]:
     uf = UnionFind()
     for band_idx in tqdm(range(DEDUP_BANDS), desc="Dedup bands", unit="band"):
         start = band_idx * DEDUP_ROWS
-        band_sigs = sigs[:, start : start + DEDUP_ROWS]  # (n, DEDUP_ROWS)
+        band_sigs = sigs[:, start : start + DEDUP_ROWS]
 
         # Hash each row to bytes — much faster than tuple hashing in pure Python
         buckets: dict[bytes, list[int]] = {}
@@ -273,6 +275,7 @@ def normalize_text(
 
 
 def _strip_boilerplate_markers(text: str) -> str:
+    """Remove known boilerplate marker lines and return compact multi-line text."""
     cleaned_lines: list[str] = []
     for raw_line in text.splitlines():
         stripped = raw_line.strip()
@@ -288,6 +291,7 @@ def _strip_boilerplate_markers(text: str) -> str:
 
 
 def _strip_html_tags(text: str) -> str:
+    """Remove HTML comments/tags and unescape entities when HTML-like content exists."""
     has_tags = "<" in text
     has_entities = "&" in text
     if not has_tags and not has_entities:
@@ -300,12 +304,14 @@ def _strip_html_tags(text: str) -> str:
 
 
 def _remove_special_characters(text: str) -> tuple[str, bool]:
+    """Strip control characters and report whether any character was removed."""
     cleaned = text.replace("\t", " ")
     result = _CONTROL_RE.sub("", cleaned)
     return result, len(result) != len(cleaned)
 
 
 def _looks_like_code(text: str) -> bool:
+    """Heuristically detect whether text primarily contains source code fragments."""
     if CODE_FENCE_RE.search(text):
         return True
 
@@ -405,6 +411,10 @@ def _max_ngram_repeats_from_words(words: list[str], n: int = NGRAM_SIZE) -> int:
 
 
 def sanitize_document_text(text: str) -> tuple[str | None, str | None]:
+    """Sanitize one document and return ``(cleaned_text, status)``.
+
+    Returns ``(None, reason)`` when the document becomes empty or looks like code.
+    """
     cleaned = _strip_html_tags(text)
     cleaned, _ = _remove_special_characters(cleaned)
     cleaned = URL_RE.sub("", cleaned)
@@ -488,9 +498,9 @@ def _get_topic_pipeline():
     global _TOPIC_PIPELINE
     if _TOPIC_PIPELINE is None:
         import torch
-        from transformers import pipeline  # lazy import
+        from transformers import pipeline
         if torch.backends.mps.is_available():
-            device = "mps"    # Apple Silicon GPU — ~8× faster than CPU
+            device = "mps"
         elif torch.cuda.is_available():
             device = "cuda"
         else:
@@ -520,7 +530,6 @@ def topic_classify_batch(texts: list[str]) -> dict[str, list]:
     # avoids tokenizing full multi-thousand-word documents unnecessarily
     truncated = [t[:256] for t in texts]
     results = pipe(truncated, batch_size=512, truncation=True)
-    # Map LABEL_N → human-readable class name; fall back to raw label if unknown
     labels = [TOPIC_LABEL_MAP.get(r["label"], r["label"]) for r in results]
     scores = [float(r["score"]) for r in results]
     return {"topic_label": labels, "topic_score": scores}
@@ -747,7 +756,7 @@ def build_test_decontamination_index(
         dataset = load_from_disk(str(path))
         before_hashes = len(content_hashes)
 
-        _lc = lowercase  # capture for closure
+        _lc = lowercase
 
         def _compute_index_batch(batch):
             """Compute fingerprints for a batch."""
@@ -818,15 +827,13 @@ def tokenize_batch(
     """Batch tokenization using the fast tokenizer's Rust backend.
 
     Returns dict with 'input_ids' (list of token ID lists) and 'n_tokens' (lengths).
+    Appends one EOS token per document to encode explicit document boundaries.
     """
     if not texts:
         return {"input_ids": [], "n_tokens": []}
 
     encoded = tokenizer(texts, add_special_tokens=False, return_attention_mask=False)
     input_ids = encoded["input_ids"]
-    # Append EOS after every document — standard GPT-2 pretraining practice.
-    # Teaches the model that EOS = document boundary, which makes generation
-    # stop correctly at inference time.
     eos_id = tokenizer.eos_token_id if tokenizer.eos_token_id is not None else 0
     for ids in input_ids:
         ids.append(eos_id)
@@ -837,9 +844,12 @@ def tokenize_batch(
 # ── Main pipeline ────────────────────────────────────────────────────────────
 
 def run_preprocess(args: PreprocessConfig) -> None:
-    """Entry point called from main.py --stage preprocess."""
-    # Disable HuggingFace dataset caching to avoid writing intermediate Arrow
-    # copies to disk for every .map()/.filter() call (~220 GB on full OWT).
+    """Run the full preprocessing pipeline and emit train/val binary token files.
+
+    Pipeline steps include dataset loading, decontamination, sanitization,
+    language/topic filtering, optional code/quality filtering, fuzzy dedup,
+    tokenization, chunk alignment, and binary output persistence.
+    """
     disable_caching()
 
     data_dir = Path(args.data_dir)
@@ -1190,7 +1200,7 @@ def run_preprocess(args: PreprocessConfig) -> None:
             ),
             batched=True,
             batch_size=2048,
-            num_proc=1,  # kenlm not fork-safe
+            num_proc=1,
         )
         before_quality = len(ds)
         ds = ds.filter(
@@ -1211,7 +1221,6 @@ def run_preprocess(args: PreprocessConfig) -> None:
         after_dedup = len(ds)
     else:
         print("\n[phase 6] Fuzzy deduplication...")
-        # Pass 1: compute signatures (parallel)
         ds = ds.map(
             _minhash_signature_batch,
             input_columns=["text"],
@@ -1249,16 +1258,13 @@ def run_preprocess(args: PreprocessConfig) -> None:
             f" (removed {before_ellipsis - after_ellipsis:,})"
         )
 
-    # (Phase 6.2 removed — topic filter moved earlier to Phase 3.5)
-
-    # ── Phase 7: Tokenization ─────────────────────────────────────────────
     _t = time.time()
     print("\n[phase 7] Tokenization...")
     ds = ds.map(
         lambda batch: tokenize_batch(batch["text"], tokenizer),
         batched=True,
         batch_size=2048,
-        num_proc=1,  # Rust tokenizer parallelizes internally
+        num_proc=1,
     )
     before_tok = len(ds)
     ds = ds.filter(lambda row: row["n_tokens"] >= 64, num_proc=1)
@@ -1269,7 +1275,6 @@ def run_preprocess(args: PreprocessConfig) -> None:
         f"  [{time.time() - _t:.0f}s]"
     )
 
-    # ── Summary ──────────────────────────────────────────────────────────
     _skip_code = filter_mode == "none" or skip_code_filter
     _skip_quality = filter_mode == "none" or skip_quality_filter
     _skip_topic = not topic_classes or skip_topic_filter
@@ -1285,7 +1290,6 @@ def run_preprocess(args: PreprocessConfig) -> None:
     print(f"  after ellipsis:   {after_ellipsis:,}{' (skipped)' if skip_ellipsis_filter else ''}")
     print(f"  after tokenize:   {after_tok:,}")
 
-    # ── Phase 8: Binary output ────────────────────────────────────────────
     print("\n[phase 8] Writing binary output...")
     # itertools.chain is ~5× faster than a Python-level extend loop over 6M rows
     token_array = np.fromiter(
@@ -1295,7 +1299,6 @@ def run_preprocess(args: PreprocessConfig) -> None:
     )
     print(f"  Total tokens kept: {len(token_array):,}")
 
-    # Train/val split (99% / 1%)
     n_val = max(1, int(len(token_array) * 0.01))
     val_tokens = token_array[:n_val]
     train_tokens = token_array[n_val:]
@@ -1312,7 +1315,7 @@ def run_preprocess(args: PreprocessConfig) -> None:
         remainder = len(arr) % chunk_size
         if remainder == 0:
             return arr
-        return arr[:-remainder]  # trim tail, never pad with EOS
+        return arr[:-remainder]
 
     train_tokens = _pad_to_chunk(train_tokens)
     val_tokens   = _pad_to_chunk(val_tokens)

@@ -4,8 +4,8 @@ import sys
 
 import torch
 
-from src.model import ParrotLLM
-from src.utils import build_tokenizer, get_device, load_config, set_seed
+from src.model import HuggingFaceGPT2, ParrotLLM
+from src.utils import build_tokenizer, get_device, load_config, maybe_load_hf_token, set_seed
 
 
 @torch.no_grad()
@@ -70,19 +70,35 @@ def run_inference(args) -> None:
     set_seed(seed)
 
     device = get_device(getattr(args, "device", ic.get("device", "auto")))
-    assert args.checkpoint, "--checkpoint required for inference"
+    use_mock = getattr(args, "mock_testing", False)
 
-    model, ckpt_config = load_model_from_checkpoint(args.checkpoint, device)
-    mc = ckpt_config["model"]
+    if use_mock:
+        token = maybe_load_hf_token()
+        if token:
+            print("[inference] Using Hugging Face token from .env")
+        model = HuggingFaceGPT2().to(device)
+        mc = {"context_length": getattr(model, "context_length", 1024)}
+        print("[inference] mock_testing enabled: using openai-community/gpt2")
+    else:
+        assert args.checkpoint, "--checkpoint required for inference"
+        model, ckpt_config = load_model_from_checkpoint(args.checkpoint, device)
+        mc = ckpt_config["model"]
+    model.eval()
 
     tokenizer = build_tokenizer()
 
-    prompt = args.prompt or "The meaning of life is"
+    if args.prompt: 
+        prompt = args.prompt
+    else: 
+        prompt = "Parrot are amazing because"
     input_ids = tokenizer.encode(prompt)
     idx = torch.tensor([input_ids], dtype=torch.long, device=device)
 
     max_tokens = getattr(args, "max_tokens", ic.get("max_tokens", 128))
-    temperature = getattr(args, "temperature", ic.get("temperature", 0.0))
+    if getattr(args, "temperature", None) is not None:
+        temperature = args.temperature
+    else:
+        temperature = ic.get("temperature", 0.0)
     top_k = ic.get("top_k", 50)
     top_p = ic.get("top_p", 0.9)
 

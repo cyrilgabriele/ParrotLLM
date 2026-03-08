@@ -56,22 +56,22 @@ CODE_KEYWORD_RE = re.compile(
 )
 CODE_FENCE_RE = re.compile(r"```|~~~|<code>|</code>|&lt;/?code&gt;", re.IGNORECASE)
 CODE_STRUCTURAL_RE = re.compile(
-    r"^\s*[\[\{]|[\]\}]\s*[,;]?\s*$"  # lines that are mostly JSON/config brackets
+    r"^\s*[\[\{]|[\]\}]\s*[,;]?\s*$"  
 )
 
 # Corpus deduplication (MinHash LSH)
-DEDUP_NUM_PERM = 16     # reduced from 64 — 4× faster signature compute + 4× less memory
-DEDUP_BANDS = 4         # reduced from 16 — must satisfy BANDS × ROWS == NUM_PERM
+DEDUP_NUM_PERM = 16     
+DEDUP_BANDS = 4         
 DEDUP_ROWS = 4
-DEDUP_SHINGLE_SIZE = 5  # 5-word shingles
-DEDUP_THRESHOLD = 0.8   # Jaccard similarity threshold
-_DEDUP_PRIME = (1 << 61) - 1  # Mersenne prime for universal hashing
+DEDUP_SHINGLE_SIZE = 5  
+DEDUP_THRESHOLD = 0.8   
+_DEDUP_PRIME = (1 << 61) - 1  
 _DEDUP_MAX_HASH = (1 << 32) - 1
 
 # ── Heuristic filter thresholds (Phase 3 + 4) ────────────────────────────────
-HTML_TAG_DENSITY_THRESHOLD = 0.02        # Phase 3a: >2 % HTML tag chars → drop
+HTML_TAG_DENSITY_THRESHOLD = 0.02        
 CODE_SYMBOL_CHARS = frozenset("{}[]<>=\\_")
-CODE_SYMBOL_RATIO_THRESHOLD = 0.10       # Phase 3b: strictly >10 % → drop
+CODE_SYMBOL_RATIO_THRESHOLD = 0.10       
 PROGRAMMING_KEYWORDS = frozenset({
     # Python (code-specific only — excludes from, as, with, pass, class, import, return)
     "def", "elif", "except", "finally", "lambda", "self", "yield", "assert",
@@ -87,17 +87,17 @@ PROGRAMMING_KEYWORDS = frozenset({
     "println", "printf", "malloc", "nullptr", "stdin", "stdout",
     "argv", "argc", "endl", "iostream", "strcmp",
 })
-PROGRAMMING_KEYWORD_MAX = 3              # Phase 3c: >3 distinct → drop
+PROGRAMMING_KEYWORD_MAX = 3              
 
-MIN_WORD_COUNT = 50                      # Phase 4a
-MIN_CHAR_COUNT = 200                     # Phase 4a
-MAX_WORD_LENGTH = 40                     # Phase 4b
-NGRAM_SIZE = 10                          # Phase 4c
-NGRAM_MAX_REPEATS = 3                    # Phase 4c: any 10-gram >3 times → drop
+MIN_WORD_COUNT = 50                      
+MIN_CHAR_COUNT = 200                     
+MAX_WORD_LENGTH = 40                     
+NGRAM_SIZE = 10                          
+NGRAM_MAX_REPEATS = 3                    
 
 # ── Ellipsis filter thresholds (Phase 6.1) ───────────────────────────────────
 ELLIPSIS_RE = re.compile(r"\.{3}|\u2026")
-ELLIPSIS_RATIO_THRESHOLD = 0.1           # Phase 6.1: ellipsis_count / word_count > 10% → drop
+ELLIPSIS_RATIO_THRESHOLD = 0.1           
 
 # ── Topic classification (Phase 6.2) ─────────────────────────────────────────
 TOPIC_MODEL_NAME = "textattack/distilbert-base-uncased-ag-news"
@@ -155,7 +155,7 @@ class UnionFind:
             self._rank[x] = 0
             return x
         while self.parent[x] != x:
-            self.parent[x] = self.parent[self.parent[x]]  # path halving
+            self.parent[x] = self.parent[self.parent[x]]  
             x = self.parent[x]
         return x
 

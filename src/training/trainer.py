@@ -270,8 +270,9 @@ def run_train(args) -> None:
     mc_model = ModelConfig.model_validate(config["model"])
     lc_model = LoggingConfig.model_validate(config.get("logging", {}))
 
-    tc = config["training"]
-    mc = config["model"]
+    # Use validated configs (including any type coercions) for downstream logic
+    tc = tc_model.model_dump()
+    mc = mc_model.model_dump()
     set_seed(tc_model.seed)
 
     # ── run directory & loggers ───────────────────────────────────────────────

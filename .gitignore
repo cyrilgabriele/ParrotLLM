@@ -213,6 +213,9 @@ __marimo__/
 # Checkpoints (large .pt files)
 checkpoints/*.pt
 
+# Training runs (logs, metrics, checkpoints)
+runs/
+
 # Weights & Biases
 wandb/
 

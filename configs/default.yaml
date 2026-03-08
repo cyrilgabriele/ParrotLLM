@@ -45,9 +45,17 @@ training:
   checkpoint_dir: checkpoints
 
   # logging
-  wandb_project: parrotllm
-  wandb_run_name: null       # auto-generated if null
+  runs_dir: runs             # base directory for run outputs
   log_every: 10              # log to console every N steps
+
+logging:
+  console_level: INFO
+  file_level: DEBUG
+  # per-component log level overrides
+  components:
+    data_preprocessing: DEBUG
+    model_initialization: INFO
+    training: INFO
 
 eval:
   device: auto

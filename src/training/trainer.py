@@ -1,5 +1,7 @@
 """Training loop for ParrotLLM pretraining."""
 
+import json
+import logging
 import math
 import os
 import time
@@ -8,6 +10,8 @@ import numpy as np
 import torch
 import torch.nn as nn
 
+from configs import LoggingConfig, ModelConfig, TrainingConfig
+from src.logging_utils import JSONLLogger, make_run_dir, setup_logger
 from src.model import ParrotLLM
 from src.utils import get_device, load_config, set_seed
 
@@ -76,11 +80,11 @@ def get_autocast_context(device: torch.device):
 # ── Checkpointing ────────────────────────────────────────────────────────────
 
 def save_checkpoint(model: nn.Module, optimizer: torch.optim.Optimizer,
-                    config: dict, step: int,
+                    config: dict, step: int, epoch: int,
                     scaler: torch.amp.GradScaler | None,
                     checkpoint_dir: str) -> None:
     os.makedirs(checkpoint_dir, exist_ok=True)
-    path = os.path.join(checkpoint_dir, f"step_{step}.pt")
+    path = os.path.join(checkpoint_dir, f"{epoch:02d}_epoch_{step}_step")
     # unwrap compiled model if needed
     raw_model = model._orig_mod if hasattr(model, "_orig_mod") else model
     state = {
@@ -92,7 +96,7 @@ def save_checkpoint(model: nn.Module, optimizer: torch.optim.Optimizer,
     if scaler is not None:
         state["scaler"] = scaler.state_dict()
     torch.save(state, path)
-    print(f"[checkpoint] saved {path}")
+    logging.getLogger("parrotllm").debug(f"Checkpoint saved: {path}")
 
 
 def load_checkpoint(path: str, model: nn.Module,
@@ -134,14 +138,161 @@ def estimate_loss(model: nn.Module, dataset: PretrainingDataset,
 
 # ── Training ─────────────────────────────────────────────────────────────────
 
+def _log_model_architecture(log: logging.Logger, jlog: JSONLLogger,
+                            model: nn.Module, mc: dict,
+                            device: torch.device, batch_size: int) -> None:
+    """Log model architecture summary matching the slide 12 example."""
+    n_params = model.count_parameters()
+    n_all = sum(p.numel() for p in model.parameters())
+    n_trainable = sum(p.numel() for p in model.parameters() if p.requires_grad)
+    n_non_trainable = n_all - n_trainable
+
+    # Embedding param count
+    tok_emb_params = model.tok_emb.weight.numel()
+    pos_emb_params = model.pos_emb.weight.numel()
+    n_non_emb = n_params - pos_emb_params  # tok_emb is tied with lm_head
+
+    def _fmt(n: int) -> str:
+        if n >= 1_000_000:
+            return f"{n:,} ({n / 1e6:.2f}M)"
+        if n >= 1_000:
+            return f"{n:,} ({n / 1e3:.1f}K)"
+        return f"{n:,}"
+
+    log.info("")
+    log.info("=" * 60)
+    log.info("MODEL ARCHITECTURE SUMMARY")
+    log.info("=" * 60)
+    log.info("")
+    log.info("Configuration:")
+    log.info(f"  Vocab size: {mc['vocab_size']}")
+    log.info(f"  Block size (context): {mc['context_length']}")
+    log.info(f"  Layers: {mc['n_layers']}")
+    log.info(f"  Heads: {mc['n_heads']}")
+    log.info(f"  Embedding dim: {mc['d_model']}")
+    log.info(f"  FFN hidden dim: {mc['d_ff']}")
+    log.info(f"  Dropout: {mc.get('dropout', 0.0)}")
+    log.info(f"  Bias: {mc.get('bias', False)}")
+    log.info("")
+    log.info("Parameters:")
+    log.info(f"  Total (non-embedding): {_fmt(n_non_emb)}")
+    log.info(f"  Total (all): {_fmt(n_params)}")
+    log.info(f"  Position embeddings: {_fmt(pos_emb_params)}")
+    log.info("")
+
+    # torchinfo summary (if available)
+    try:
+        from torchinfo import summary
+        B = batch_size
+        T = mc["context_length"]
+        dummy_input = torch.randint(0, mc["vocab_size"], (B, T), device=device)
+        stats = summary(
+            model, input_data=(dummy_input,),
+            col_names=("input_size", "output_size", "num_params", "trainable"),
+            depth=3, verbose=0,
+        )
+        for line in str(stats).splitlines():
+            log.info(line)
+    except ImportError:
+        log.debug("torchinfo not installed, skipping layer-wise summary")
+
+    log.info("")
+    log.info(f"Trainable params: {n_trainable:,}")
+    log.info(f"Non-trainable params: {n_non_trainable:,}")
+    log.info(f"Params size (MB): {n_all * 4 / 1e6:.2f}")
+    log.info("")
+    log.info("=" * 60)
+
+    # JSONL: structured architecture record
+    jlog.log("pretraining", "model_architecture",
+             vocab_size=mc["vocab_size"],
+             context_length=mc["context_length"],
+             n_layers=mc["n_layers"],
+             n_heads=mc["n_heads"],
+             d_model=mc["d_model"],
+             d_ff=mc["d_ff"],
+             dropout=mc.get("dropout", 0.0),
+             bias=mc.get("bias", False),
+             total_params=n_params,
+             total_params_non_embedding=n_non_emb,
+             trainable_params=n_trainable,
+             non_trainable_params=n_non_trainable,
+             params_size_mb=round(n_all * 4 / 1e6, 2))
+
+
+def _render_ascii_loss_curve(
+    loss_history: list[tuple[int, float]], width: int = 50, height: int = 8,
+) -> list[str]:
+    """Render a simple ASCII loss curve for the training log."""
+    if not loss_history:
+        return []
+
+    steps = [s for s, _ in loss_history]
+    losses = [l for _, l in loss_history]
+    min_loss, max_loss = min(losses), max(losses)
+    min_step, max_step = min(steps), max(steps)
+
+    if max_loss == min_loss:
+        max_loss = min_loss + 1
+
+    # Build character grid
+    grid = [[" " for _ in range(width)] for _ in range(height)]
+    step_range = max(max_step - min_step, 1)
+    loss_range = max_loss - min_loss
+
+    for s, l in loss_history:
+        x = int((s - min_step) / step_range * (width - 1))
+        y = int((l - min_loss) / loss_range * (height - 1))
+        y = height - 1 - y  # flip so high loss is at top
+        x = max(0, min(width - 1, x))
+        y = max(0, min(height - 1, y))
+        grid[y][x] = "*"
+
+    lines = ["Loss Curve:", "  Loss", "  ^"]
+    for i, row in enumerate(grid):
+        if i == 0:
+            label = f"{max_loss:>8.2f}"
+        elif i == height - 1:
+            label = f"{min_loss:>8.2f}"
+        else:
+            label = "        "
+        lines.append(f"{label} |{''.join(row)}")
+    lines.append(f"         +{'-' * width}> step")
+    lines.append(f"         {min_step:<{width // 2}}{max_step:>{width - width // 2}}")
+    return lines
+
+
 def run_train(args) -> None:
     config = load_config(args.config)
-    tc = config["training"]
-    mc = config["model"]
-    set_seed(tc["seed"])
+
+    # ── Validate config with Pydantic ─────────────────────────────────────────
+    tc_model = TrainingConfig.model_validate(config["training"])
+    mc_model = ModelConfig.model_validate(config["model"])
+    lc_model = LoggingConfig.model_validate(config.get("logging", {}))
+
+    # Use validated configs (including any type coercions) for downstream logic
+    tc = tc_model.model_dump()
+    mc = mc_model.model_dump()
+    set_seed(tc_model.seed)
+
+    # ── run directory & loggers ───────────────────────────────────────────────
+    run_dir = make_run_dir(tc_model.runs_dir)
+    log = setup_logger(
+        run_dir,
+        console_level=lc_model.console_level,
+        file_level=lc_model.file_level,
+        component_levels=lc_model.components if lc_model.components else None,
+    )
+    jlog = JSONLLogger(run_dir)
+
+    # Save full config to run directory for reproducibility
+    config_path = os.path.join(run_dir, "config.json")
+    with open(config_path, "w") as f:
+        json.dump(config, f, indent=2)
+    jlog.log("pretraining", "config", **tc)
 
     device = get_device(tc.get("device", args.device))
-    print(f"[train] device={device}")
+    log.info(f"device={device}")
 
     # data
     train_ds = PretrainingDataset(tc["train_bin"], mc["context_length"])
@@ -155,11 +306,13 @@ def run_train(args) -> None:
 
     # model
     model = ParrotLLM(config).to(device)
-    print(f"[train] parameters: {model.count_parameters():,}")
 
-    # torch.compile — ~20-40% speedup on CUDA (noop on MPS/CPU)
+    # ── Architecture log (slide 12 style) ─────────────────────────────────────
+    _log_model_architecture(log, jlog, model, mc, device, tc["batch_size"])
+
+    # torch.compile
     if device.type == "cuda":
-        print("[train] compiling model with torch.compile...")
+        log.info("compiling model with torch.compile...")
         model = torch.compile(model)
 
     # optimizer
@@ -170,28 +323,39 @@ def run_train(args) -> None:
     start_step = 0
     if args.checkpoint:
         start_step, _ = load_checkpoint(args.checkpoint, model, optimizer, scaler, device)
-        print(f"[train] resumed from step {start_step}")
+        log.info(f"resumed from step {start_step}")
 
-    # wandb
-    try:
-        import wandb
-        wandb.init(
-            project=tc.get("wandb_project", "parrotllm"),
-            name=tc.get("wandb_run_name"),
-            config=config,
-        )
-        use_wandb = True
-    except Exception:
-        use_wandb = False
-        print("[train] wandb not available, logging to console only")
+    # ── initial evaluation ────────────────────────────────────────────────────
+    if val_ds is not None:
+        log.info("Starting evaluation...")
+        val_metrics = estimate_loss(model, val_ds, device, autocast_ctx, tc["batch_size"])
+        jlog.log("pretraining", "initial_validation",
+                 val_loss=val_metrics["loss"], val_ppl=val_metrics["perplexity"])
+        log.info(f"  Initial val: loss={val_metrics['loss']:.4f}, ppl={val_metrics['perplexity']:.2f}")
 
-    # training loop
+    # ── training loop ─────────────────────────────────────────────────────────
     model.train()
     grad_accum = tc["gradient_accumulation_steps"]
+    steps_per_epoch = len(train_loader) // grad_accum if len(train_loader) > 0 else 1
     data_iter = iter(train_loader)
-    t0 = time.time()
+    train_start = time.time()
+    t0 = train_start
+    best_val_loss = float("inf")
+    current_epoch = 0
+    prev_epoch = 0
+    loss_history: list[tuple[int, float]] = []
+
+    log.info("")
+    log.info("=" * 60)
+    log.info("Starting training...")
+    log.info(f"  Steps per epoch (approx): {steps_per_epoch}")
+    log.info(f"  Max steps: {tc['max_steps']}")
+    log.info("=" * 60)
+    log.info("")
 
     for step in range(start_step, tc["max_steps"]):
+        epoch = step // steps_per_epoch if steps_per_epoch > 0 else 0
+
         lr = get_lr(step, tc["warmup_steps"], tc["max_steps"],
                     tc["learning_rate"], tc["min_lr"])
         for pg in optimizer.param_groups:
@@ -218,10 +382,12 @@ def run_train(args) -> None:
                 loss.backward()
             accum_loss += loss.item()
 
+        # gradient norm (for debug logging)
+        grad_norm = 0.0
         if tc["grad_clip"] > 0:
             if scaler is not None:
                 scaler.unscale_(optimizer)
-            nn.utils.clip_grad_norm_(model.parameters(), tc["grad_clip"])
+            grad_norm = nn.utils.clip_grad_norm_(model.parameters(), tc["grad_clip"]).item()
 
         if scaler is not None:
             scaler.step(optimizer)
@@ -229,31 +395,95 @@ def run_train(args) -> None:
         else:
             optimizer.step()
 
-        # logging
+        ppl = math.exp(accum_loss) if accum_loss == accum_loss else float("nan")
+
+        # console/file log (every log_every steps)
         if step % tc["log_every"] == 0:
             dt = time.time() - t0
-            print(f"step {step:>6d} | loss {accum_loss:.4f} | lr {lr:.2e} | {dt:.1f}s")
-            if use_wandb:
-                wandb.log({"train/loss": accum_loss, "train/lr": lr, "train/step": step})
+            log.info(
+                f"step {step:>6d} | epoch {epoch} | "
+                f"loss {accum_loss:.4f} | lr {lr:.2e} | grad {grad_norm:.4f}"
+            )
+            log.debug(
+                f"step {step:>6d} | ppl {ppl:.2f} | dt {dt:.1f}s"
+            )
             t0 = time.time()
 
-        # eval
-        if val_ds is not None and step > 0 and step % tc["eval_every"] == 0:
+        # JSONL: every step (for plots)
+        jlog.log("pretraining", "step",
+                 epoch=epoch, step=step,
+                 train_loss=accum_loss, perplexity=ppl, lr=lr)
+
+        loss_history.append((step, accum_loss))
+
+        # epoch boundary detection
+        is_epoch_boundary = epoch > prev_epoch
+        is_eval_step = (val_ds is not None and step > 0
+                        and step % tc["eval_every"] == 0)
+
+        if val_ds is not None and (is_epoch_boundary or is_eval_step):
+            log.info("Starting evaluation...")
+            log.info("-" * 60)
             val_metrics = estimate_loss(model, val_ds, device, autocast_ctx, tc["batch_size"])
-            print(f"step {step:>6d} | val_loss {val_metrics['loss']:.4f} | val_ppl {val_metrics['perplexity']:.2f}")
-            if use_wandb:
-                wandb.log({
-                    "val/loss": val_metrics["loss"],
-                    "val/perplexity": val_metrics["perplexity"],
-                    "train/step": step,
-                })
+            val_loss = val_metrics["loss"]
+            val_ppl = val_metrics["perplexity"]
+
+            if is_epoch_boundary:
+                log.info(f"Epoch {prev_epoch + 1} complete:")
+            log.info(f"  Train: loss={accum_loss:.4f}, ppl={ppl:.2f}")
+            log.info(f"  Val:   loss={val_loss:.4f}, ppl={val_ppl:.2f}")
+
+            jlog.log("pretraining", "eval",
+                     step=step, epoch=epoch,
+                     val_loss=val_loss, val_ppl=val_ppl)
+
+            if val_loss < best_val_loss:
+                best_val_loss = val_loss
+                log.info("  ** New best validation loss! **")
+            log.info("-" * 60)
+
+        if is_epoch_boundary:
+            prev_epoch = epoch
 
         # checkpoint
         if step > 0 and step % tc["save_every"] == 0:
-            save_checkpoint(model, optimizer, config, step, scaler, tc["checkpoint_dir"])
+            save_checkpoint(model, optimizer, config, step, epoch, scaler, run_dir)
+            ckpt_path = os.path.join(run_dir, f"{epoch:02d}_epoch_{step}_step")
+            log.info(f"Saved checkpoint: {ckpt_path}")
+            jlog.log("pretraining", "checkpoint",
+                     step=step, epoch=epoch, path=ckpt_path)
 
     # final save
-    save_checkpoint(model, optimizer, config, tc["max_steps"], scaler, tc["checkpoint_dir"])
-    if use_wandb:
-        wandb.finish()
-    print("[train] done")
+    save_checkpoint(model, optimizer, config, tc["max_steps"], epoch, scaler, run_dir)
+    final_ckpt = os.path.join(run_dir, f"{epoch:02d}_epoch_{tc['max_steps']}_step")
+    jlog.log("pretraining", "checkpoint",
+             step=tc["max_steps"], epoch=epoch, path=final_ckpt)
+
+    # ── ASCII loss curve ───────────────────────────────────────────────────────
+    log.info("")
+    for line in _render_ascii_loss_curve(loss_history):
+        log.info(line)
+
+    # ── training complete summary (slide 12 style) ────────────────────────────
+    total_seconds = time.time() - train_start
+    total_hours = total_seconds / 3600
+    log.info("")
+    log.info("=" * 60)
+    log.info("TRAINING COMPLETE")
+    log.info("=" * 60)
+    log.info(f"  Epochs: {epoch + 1}")
+    log.info(f"  Total steps: {tc['max_steps']}")
+    log.info(f"  Total time: {total_hours:.2f} hours")
+    log.info(f"  Best validation loss: {best_val_loss:.4f}")
+    log.info(f"  Run directory: {run_dir}")
+    log.info("=" * 60)
+
+    jlog.log("pretraining", "training_complete",
+             epochs=epoch + 1,
+             total_steps=tc["max_steps"],
+             total_time_hours=round(total_hours, 2),
+             best_val_loss=best_val_loss if best_val_loss != float("inf") else None,
+             run_dir=run_dir)
+
+    jlog.close()
+    log.info("done")

@@ -72,7 +72,7 @@ eval:
 inference:
   device: auto
   max_tokens: 128
-  temperature: 0.0           # 0 = greedy
+  temperature: 0.2           # 0 = greedy
   top_k: 50
   top_p: 0.9
   seed: 42

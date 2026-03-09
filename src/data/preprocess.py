@@ -1,8 +1,33 @@
+"""Data preprocessing pipeline: filter, tokenize, and save as binary splits.
+
+The pipeline processes raw OpenWebText documents through a series of numbered
+phases before writing the final token arrays to disk as train.bin / val.bin:
+
+  Phase 1  – Decontamination   : drop any doc whose normalised hash matches a
+                                  held-out evaluation/test split.
+  Phase 2  – Sanitisation      : strip HTML tags, control chars, URLs, and
+                                  boilerplate markers; discard code snippets.
+  Phase 3  – Language filter   : keep only documents detected as the target
+                                  language with ≥80 % fastText confidence.
+  Phase 3.5 – Topic filter     : (optional) keep only docs matching specified
+                                  AG-News topic classes; optionally resample to
+                                  a desired class distribution.
+  Phase 4  – Code filter       : remove documents identified as source code
+                                  (heuristic rules or a fastText classifier).
+  Phase 5  – Quality filter    : remove low-quality / incoherent documents
+                                  (heuristic rules or KenLM + fastText).
+  Phase 6  – Fuzzy dedup       : MinHash-LSH near-duplicate removal.
+  Phase 6.1 – Ellipsis filter  : drop documents with an excessive rate of
+                                  ellipsis characters (common in scraped text).
+  Phase 7  – Tokenisation      : convert text to BPE token IDs; discard docs
+                                  shorter than 64 tokens after encoding.
+  Phase 8  – Binary output     : concatenate token IDs into a flat uint16 array
+                                  and write train.bin / val.bin.
+"""
+
 from __future__ import annotations
 
 from configs import PreprocessConfig
-
-"""Data preprocessing pipeline: filter, tokenize, and save as binary splits."""
 
 import hashlib
 import html
@@ -56,22 +81,25 @@ CODE_KEYWORD_RE = re.compile(
 )
 CODE_FENCE_RE = re.compile(r"```|~~~|<code>|</code>|&lt;/?code&gt;", re.IGNORECASE)
 CODE_STRUCTURAL_RE = re.compile(
-    r"^\s*[\[\{]|[\]\}]\s*[,;]?\s*$"  
+    r"^\s*[\[\{]|[\]\}]\s*[,;]?\s*$"  # lines that are pure JSON/config bracket scaffolding
 )
 
 # Corpus deduplication (MinHash LSH)
-DEDUP_NUM_PERM = 16     
-DEDUP_BANDS = 4         
-DEDUP_ROWS = 4
-DEDUP_SHINGLE_SIZE = 5  
-DEDUP_THRESHOLD = 0.8   
-_DEDUP_PRIME = (1 << 61) - 1  
-_DEDUP_MAX_HASH = (1 << 32) - 1
+# MinHash approximates Jaccard similarity between documents using random hash
+# functions.  LSH (Locality-Sensitive Hashing) groups only documents that share
+# at least one identical band, making the check sub-quadratic in corpus size.
+DEDUP_NUM_PERM = 16      # hash permutations per document; higher → fewer false positives, more RAM
+DEDUP_BANDS = 4          # number of LSH bands; must satisfy BANDS × ROWS == NUM_PERM
+DEDUP_ROWS = 4           # rows per band; controls the sensitivity of the similarity threshold curve
+DEDUP_SHINGLE_SIZE = 5   # word n-gram window used to fingerprint documents
+DEDUP_THRESHOLD = 0.8    # Jaccard similarity above which two docs are near-duplicates
+_DEDUP_PRIME = (1 << 61) - 1   # Mersenne prime 2^61-1 used as modulus for universal hash functions
+_DEDUP_MAX_HASH = (1 << 32) - 1  # sentinel min-hash value returned for an empty shingle set
 
 # ── Heuristic filter thresholds (Phase 3 + 4) ────────────────────────────────
-HTML_TAG_DENSITY_THRESHOLD = 0.02        
-CODE_SYMBOL_CHARS = frozenset("{}[]<>=\\_")
-CODE_SYMBOL_RATIO_THRESHOLD = 0.10       
+HTML_TAG_DENSITY_THRESHOLD = 0.02         # max fraction of characters that may be HTML/XML tags
+CODE_SYMBOL_CHARS = frozenset("{}[]<>=\\_")  # characters that strongly suggest source code
+CODE_SYMBOL_RATIO_THRESHOLD = 0.10        # max allowed fraction of those code-symbol characters
 PROGRAMMING_KEYWORDS = frozenset({
     # Python (code-specific only — excludes from, as, with, pass, class, import, return)
     "def", "elif", "except", "finally", "lambda", "self", "yield", "assert",
@@ -87,17 +115,17 @@ PROGRAMMING_KEYWORDS = frozenset({
     "println", "printf", "malloc", "nullptr", "stdin", "stdout",
     "argv", "argc", "endl", "iostream", "strcmp",
 })
-PROGRAMMING_KEYWORD_MAX = 3              
+PROGRAMMING_KEYWORD_MAX = 3               # max distinct programming keywords before a doc is flagged as code
 
-MIN_WORD_COUNT = 50                      
-MIN_CHAR_COUNT = 200                     
-MAX_WORD_LENGTH = 40                     
-NGRAM_SIZE = 10                          
-NGRAM_MAX_REPEATS = 3                    
+MIN_WORD_COUNT = 50                       # documents with fewer words are discarded as too thin
+MIN_CHAR_COUNT = 200                      # character-level lower bound (catches single-sentence stubs)
+MAX_WORD_LENGTH = 40                      # tokens longer than this are likely URLs or hash strings
+NGRAM_SIZE = 10                           # sliding-window size for n-gram repetition detection
+NGRAM_MAX_REPEATS = 3                     # a doc is dropped if any 10-gram appears more than this
 
 # ── Ellipsis filter thresholds (Phase 6.1) ───────────────────────────────────
-ELLIPSIS_RE = re.compile(r"\.{3}|\u2026")
-ELLIPSIS_RATIO_THRESHOLD = 0.1           
+ELLIPSIS_RE = re.compile(r"\.{3}|\u2026")  # matches '...' or the Unicode ellipsis character U+2026
+ELLIPSIS_RATIO_THRESHOLD = 0.1             # max ellipsis count per word; exceeding this drops the doc
 
 # ── Topic classification (Phase 6.2) ─────────────────────────────────────────
 TOPIC_MODEL_NAME = "textattack/distilbert-base-uncased-ag-news"
@@ -115,10 +143,10 @@ _TOPIC_PIPELINE = None
 CODE_CLASSIFIER_FILENAME = "code_vs_prose.ftz"
 QUALITY_CLASSIFIER_FILENAME = "educational_quality.ftz"
 KENLM_MODEL_FILENAME = "wikipedia_en.arpa.bin"
-CODE_CLASSIFIER_THRESHOLD = 0.5
-KENLM_PERPLEXITY_LOW = 10.0
-KENLM_PERPLEXITY_HIGH = 100000.0
-EDUCATIONAL_QUALITY_MIN = 2
+CODE_CLASSIFIER_THRESHOLD = 0.5     # minimum fastText confidence to classify a doc as code and drop it
+KENLM_PERPLEXITY_LOW = 10.0         # perplexity floor; below this the text is unnaturally repetitive
+KENLM_PERPLEXITY_HIGH = 100000.0    # perplexity ceiling; above this the text is incoherent / garbled
+EDUCATIONAL_QUALITY_MIN = 2         # fastText edu-quality (0–5 scale); docs scoring below this are dropped
 
 
 class MinHasher:
@@ -128,6 +156,9 @@ class MinHasher:
         import random
         rng = random.Random(seed)
         self.num_perm = num_perm
+        # Each permutation is defined by a random pair (a, b) from the hash family
+        # h_i(x) = (a_i * x + b_i) mod p.  Using a fixed seed makes signatures
+        # reproducible across runs so the same corpus always deduplicates identically.
         self._a = [rng.randint(1, _DEDUP_PRIME - 1) for _ in range(num_perm)]
         self._b = [rng.randint(0, _DEDUP_PRIME - 1) for _ in range(num_perm)]
 
@@ -150,6 +181,12 @@ class UnionFind:
         self._rank: dict[int, int] = {}
 
     def find(self, x: int) -> int:
+        """Return the root of x's component, registering x on first access.
+
+        Uses path halving (every other pointer is short-circuited) so successive
+        find() calls converge towards the root, giving near-constant amortised
+        time via the inverse-Ackermann function α(n).
+        """
         if x not in self.parent:
             self.parent[x] = x
             self._rank[x] = 0
@@ -160,6 +197,11 @@ class UnionFind:
         return x
 
     def union(self, x: int, y: int) -> None:
+        """Merge the components containing x and y using union by rank.
+
+        The component with the smaller rank is attached under the larger one,
+        keeping tree height logarithmically bounded and find() fast.
+        """
         rx, ry = self.find(x), self.find(y)
         if rx == ry:
             return
@@ -255,6 +297,14 @@ def deduplicate_corpus(ds) -> set[int]:
 
 @dataclass
 class TestDecontaminationIndex:
+    """Lookup table of SHA-1 fingerprints built from held-out evaluation/test splits.
+
+    Constructed once before preprocessing starts and checked in Phase 1 to
+    prevent any test document from leaking into the training corpus.
+    Fingerprints are computed on normalised (lowercased, whitespace-collapsed)
+    text so minor formatting differences between train and test copies of the
+    same document are still detected and removed.
+    """
     content_hashes: set[str]
 
 
@@ -896,7 +946,7 @@ def run_preprocess(args: PreprocessConfig) -> None:
 
     print(f"[data] Loaded {len(ds):,} documents")
 
-    # Tokenizer
+    # Load Tokenizer
     tokenizer_name = getattr(args, "tokenizer_name", None) or DEFAULT_TOKENIZER_NAME
     tokenizer = build_tokenizer(
         tokenizer_name,
@@ -908,7 +958,7 @@ def run_preprocess(args: PreprocessConfig) -> None:
         f" (vocab_size={len(tokenizer):,}, pad_token={tokenizer.pad_token!r})"
     )
 
-    # Language detection model
+    # Load Language detection model
     lang_model_path = data_dir / "lid.176.ftz"
     if not lang_model_path.exists():
         raise FileNotFoundError(
@@ -1021,12 +1071,6 @@ def run_preprocess(args: PreprocessConfig) -> None:
         print(f"\n[phase 3.5] Topic classification (keep: {topic_classes})...")
         print(f"  Model: {TOPIC_MODEL_NAME}")
 
-        # Call the pipeline directly in the main process — never via ds.map().
-        # datasets.map() always forks a subprocess even with num_proc=1 on
-        # Python 3.14/macOS.  MPS (Metal) cannot survive fork() because the
-        # GPU context was already initialized in the parent; macOS raises
-        # "+[MPSGraphObject initialize] may have been in progress in another
-        # thread when fork() was called" and crashes the child.
         pipe = _get_topic_pipeline()
         from tqdm import tqdm as _tqdm
         all_texts = ds["text"]
@@ -1258,6 +1302,7 @@ def run_preprocess(args: PreprocessConfig) -> None:
             f" (removed {before_ellipsis - after_ellipsis:,})"
         )
 
+# ── Phase 7: Tokenization ──────────────────────────────────────────
     _t = time.time()
     print("\n[phase 7] Tokenization...")
     ds = ds.map(
@@ -1274,7 +1319,8 @@ def run_preprocess(args: PreprocessConfig) -> None:
         f" (removed {before_tok - after_tok:,} short docs)"
         f"  [{time.time() - _t:.0f}s]"
     )
-
+ 
+    # Print final filter summary with conditional skip annotations
     _skip_code = filter_mode == "none" or skip_code_filter
     _skip_quality = filter_mode == "none" or skip_quality_filter
     _skip_topic = not topic_classes or skip_topic_filter
@@ -1291,7 +1337,10 @@ def run_preprocess(args: PreprocessConfig) -> None:
     print(f"  after tokenize:   {after_tok:,}")
 
     print("\n[phase 8] Writing binary output...")
-    # itertools.chain is ~5× faster than a Python-level extend loop over 6M rows
+    # Flatten all per-document token ID lists into a single contiguous array.
+    # use of itertools.chain.from_iterable as it is ~5× faster than a Python-level extend loop
+    # over millions of rows because the chaining happens in C.  Providing the
+    # exact element count to np.fromiter avoids any intermediate allocation.
     token_array = np.fromiter(
         itertools.chain.from_iterable(ds["input_ids"]),
         dtype=np.uint16,
@@ -1299,19 +1348,23 @@ def run_preprocess(args: PreprocessConfig) -> None:
     )
     print(f"  Total tokens kept: {len(token_array):,}")
 
+    # Reserve the first 1 % of tokens for validation; the rest become training data.
+    # Taking from the front keeps val tokens contiguous on disk; the 1 % figure
+    # is intentionally small because LM evaluation needs only a few token chunks.
     n_val = max(1, int(len(token_array) * 0.01))
     val_tokens = token_array[:n_val]
     train_tokens = token_array[n_val:]
 
-    # Pad both splits to exact multiples of (context_length + 1).
-    # The data loader at PretrainingDataset.__init__ computes:
-    #   self.n_chunks = len(self.data) // (context_length + 1)
-    # which silently drops any trailing tokens that don’t fill a complete
-    # chunk.  Padding with the EOS token ensures every token is seen during
-    # training, while giving the model a meaningful document-boundary signal
-    # at the seam rather than an arbitrary filler token.
+
     chunk_size = args.context_length + 1
     def _pad_to_chunk(arr: np.ndarray) -> np.ndarray:
+        """Trim arr to the largest multiple of chunk_size by discarding tail tokens.
+
+        The data loader slices the flat token array into chunks of exactly
+        context_length + 1 tokens (input + label shifted by one position).
+        Any remainder shorter than a full chunk would be silently ignored at
+        load time; trimming here keeps the printed token counts accurate.
+        """
         remainder = len(arr) % chunk_size
         if remainder == 0:
             return arr

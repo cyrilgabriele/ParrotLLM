@@ -8,7 +8,7 @@ import torch
 
 from configs import EvalDatasetConfig, ProjectConfig
 from src.model import ParrotLLM
-from src.utils import build_tokenizer, maybe_load_hf_token
+from src.utils import build_tokenizer
 from datasets import load_dataset
 
 

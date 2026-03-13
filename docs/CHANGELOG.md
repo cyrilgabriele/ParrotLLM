@@ -28,6 +28,9 @@ Track what was changed, why it was changed, and any important notes.
 - Rebuilt `main.py` CLI to load the config once, set the global seed/device, and dispatch stage runners with that single source of truth
 - Updated training, evaluation, inference, and chat modules to consume the centralized config/runtime context instead of pulling CLI flags ad hoc
 - Hardened seeding via `src/utils.set_seed()` (now also sets `PYTHONHASHSEED` and seeds MPS) and refreshed README docs to explain the new workflow
+- Threaded HF token handling through eval/inference so a single HF_TOKEN env var covers all downloads.
+- Added stage-specific dummy configs plus a logging schema to speed up smoke tests.
+- Tightened preprocessing/tests/utilities to fit the single-source config rules (tokenizer helpers, seed plumbing, etc.).
 - Removed every `*.seed` knob from the YAML configs so the single in-code seed remains the only randomness control
 - Removed all implicit defaults from `configs/preprocessConfig.py`, `configs/trainingConfig.py`, and the eval/inference/chat sections in `configs/project_config.py`, forcing every YAML entry to spell out the desired values explicitly
 

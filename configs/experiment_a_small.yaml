@@ -1,0 +1,62 @@
+# Validation config for Experiment-A with a smaller, faster-to-train model
+
+model:
+  vocab_size: 50258
+  pad_token_id: 50257
+  bos_token_id: 50256
+  eos_token_id: 50256
+  d_model: 256          # Reduced from 320
+  n_layers: 4           # Reduced from 16 for much faster convergence
+  n_heads: 8
+  d_ff: 682             # Scaled to ~8/3 * d_model
+  context_length: 256   # Shorter context for faster validation
+  bias: false
+  dropout: 0.05         # Slight dropout for better generalization on small data
+  rope_theta: 10000.0
+
+training:
+  device: auto
+  train_bin: data/experiment-a/train.bin
+  val_bin: data/experiment-a/val.bin
+  batch_size: 16        # Larger batch for stability
+  gradient_accumulation_steps: 1
+  learning_rate: 1.0e-3 # Higher LR for small models
+  min_lr: 1.0e-4
+  weight_decay: 0.1
+  beta1: 0.9
+  beta2: 0.95
+  grad_clip: 1.0
+  warmup_steps: 50      # Longer warmup for stability
+  max_steps: 5000       # Enough steps to see actual progress
+  save_every: 200
+  eval_every: 100
+  checkpoint_dir: checkpoints
+  runs_dir: runs
+  log_every: 10
+
+logging:
+  console_level: INFO
+  file_level: DEBUG
+  components:
+    data_preprocessing: DEBUG
+    model_initialization: INFO
+    training: DEBUG
+
+# Required for the inference stage later
+inference:
+  device: cpu
+  max_tokens: 64
+  temperature: 0.8
+  top_k: 50
+  top_p: 0.95
+
+# Required for the eval stage
+eval:
+  device: cpu
+  batch_size: 16
+  max_sequences: 50
+  datasets:
+    - name: "wikitext103-test"
+      subset: "wikitext-103-raw-v1"
+      split: "test"
+      path: "data/wikitext-103-test/test.bin"

@@ -63,7 +63,7 @@ def eval_wikitext(
 
     load_kwargs = {"split": split}
     if hf_token:
-        load_kwargs["use_auth_token"] = hf_token
+        load_kwargs["token"] = hf_token
     ds = load_dataset("wikitext", subset, **load_kwargs)
     text = "\n\n".join(ds["text"])
     token_ids = torch.tensor(tokenizer.encode(text), dtype=torch.long)
@@ -124,17 +124,18 @@ def run_eval(
 
     # Wikitext-103
     try:
-        wt_dataset = datasets.get("wikitext")
-        wt_ppl = eval_wikitext(
-            model,
-            ckpt_config,
-            device,
-            wt_dataset,
-            eval_cfg.batch_size,
-            eval_cfg.max_sequences,
-            hf_token,
-        )
-        print(f"[eval] Wikitext-103 perplexity: {wt_ppl:.2f}")
+        wt_dataset = datasets.get("wikitext") or datasets.get("wikitext103-test")
+        if wt_dataset:
+            wt_ppl = eval_wikitext(
+                model,
+                ckpt_config,
+                device,
+                wt_dataset,
+                eval_cfg.batch_size,
+                eval_cfg.max_sequences,
+                hf_token,
+            )
+            print(f"[eval] Wikitext-103 perplexity: {wt_ppl:.2f}")
     except Exception as e:
         print(f"[eval] Wikitext-103 skipped: {e}")
 

@@ -5,22 +5,23 @@ import os
 
 import torch
 
+from configs import ProjectConfig
 from src.eval.inference import generate, load_model_from_checkpoint
-from src.utils import build_tokenizer, get_device, load_config
+from src.utils import build_tokenizer
 
 
-def run_chat(args) -> None:
+def run_chat(project_config: ProjectConfig, *, device: torch.device) -> None:
     import gradio as gr
 
-    config = load_config(args.config)
-    cc = config.get("chat", {})
-    device = get_device(cc.get("device", getattr(args, "device", "auto")))
+    chat_cfg = project_config.chat
+    if chat_cfg is None:
+        raise ValueError("Chat configuration missing; cannot start chat UI.")
     tokenizer = build_tokenizer()
 
     state = {"model": None, "config": None}
 
     def list_checkpoints():
-        ckpt_dir = cc.get("checkpoint_dir", "checkpoints")
+        ckpt_dir = chat_cfg.checkpoint_dir
         if not os.path.isdir(ckpt_dir):
             return []
         return sorted(glob.glob(os.path.join(ckpt_dir, "*.pt")))
@@ -48,16 +49,16 @@ def run_chat(args) -> None:
 
         input_ids = tokenizer.encode(context)
         # truncate to fit context window
-        max_ctx = mc["context_length"] - cc.get("max_tokens", 256)
+        max_ctx = mc["context_length"] - chat_cfg.max_tokens
         if len(input_ids) > max_ctx:
             input_ids = input_ids[-max_ctx:]
 
         idx = torch.tensor([input_ids], dtype=torch.long, device=device)
         output = generate(
-            state["model"], idx, cc.get("max_tokens", 256),
-            temperature=cc.get("temperature", 0.7),
-            top_k=cc.get("top_k", 50),
-            top_p=cc.get("top_p", 0.9),
+            state["model"], idx, chat_cfg.max_tokens,
+            temperature=chat_cfg.temperature,
+            top_k=chat_cfg.top_k,
+            top_p=chat_cfg.top_p,
             context_length=mc["context_length"],
         )
         generated = tokenizer.decode(output[0, len(input_ids):].tolist())

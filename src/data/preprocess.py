@@ -3,25 +3,25 @@
 The pipeline processes raw OpenWebText documents through a series of numbered
 phases before writing the final token arrays to disk as train.bin / val.bin:
 
-  Phase 1  – Decontamination   : drop any doc whose normalised hash matches a
+  Phase 1  - Decontamination   : drop any doc whose normalised hash matches a
                                   held-out evaluation/test split.
-  Phase 2  – Sanitisation      : strip HTML tags, control chars, URLs, and
+  Phase 2  - Sanitisation      : strip HTML tags, control chars, URLs, and
                                   boilerplate markers; discard code snippets.
-  Phase 3  – Language filter   : keep only documents detected as the target
+  Phase 3  - Language filter   : keep only documents detected as the target
                                   language with ≥80 % fastText confidence.
-  Phase 3.5 – Topic filter     : (optional) keep only docs matching specified
+  Phase 3.5 - Topic filter     : (optional) keep only docs matching specified
                                   AG-News topic classes; optionally resample to
                                   a desired class distribution.
-  Phase 4  – Code filter       : remove documents identified as source code
+  Phase 4  - Code filter       : remove documents identified as source code
                                   (heuristic rules or a fastText classifier).
-  Phase 5  – Quality filter    : remove low-quality / incoherent documents
+  Phase 5  - Quality filter    : remove low-quality / incoherent documents
                                   (heuristic rules or KenLM + fastText).
-  Phase 6  – Fuzzy dedup       : MinHash-LSH near-duplicate removal.
-  Phase 6.1 – Ellipsis filter  : drop documents with an excessive rate of
+  Phase 6  - Fuzzy dedup       : MinHash-LSH near-duplicate removal.
+  Phase 6.1 - Ellipsis filter  : drop documents with an excessive rate of
                                   ellipsis characters (common in scraped text).
-  Phase 7  – Tokenisation      : convert text to BPE token IDs; discard docs
+  Phase 7  - Tokenisation      : convert text to BPE token IDs; discard docs
                                   shorter than 64 tokens after encoding.
-  Phase 8  – Binary output     : concatenate token IDs into a flat uint16 array
+  Phase 8  - Binary output     : concatenate token IDs into a flat uint16 array
                                   and write train.bin / val.bin.
 """
 
@@ -45,7 +45,7 @@ import fasttext
 import numpy as np
 os.environ.setdefault("HF_DATASETS_CACHE", "/tmp/parrotllm_hf_cache")
 from datasets import disable_caching, load_from_disk
-from src.utils import DEFAULT_TOKENIZER_NAME, build_tokenizer
+from src.utils import build_tokenizer
 
 
 FINGERPRINT_LOWERCASE = True
@@ -146,7 +146,7 @@ KENLM_MODEL_FILENAME = "wikipedia_en.arpa.bin"
 CODE_CLASSIFIER_THRESHOLD = 0.5     # minimum fastText confidence to classify a doc as code and drop it
 KENLM_PERPLEXITY_LOW = 10.0         # perplexity floor; below this the text is unnaturally repetitive
 KENLM_PERPLEXITY_HIGH = 100000.0    # perplexity ceiling; above this the text is incoherent / garbled
-EDUCATIONAL_QUALITY_MIN = 2         # fastText edu-quality (0–5 scale); docs scoring below this are dropped
+EDUCATIONAL_QUALITY_MIN = 2         # fastText edu-quality (0-5 scale); docs scoring below this are dropped
 
 
 class MinHasher:
@@ -893,7 +893,7 @@ def tokenize_batch(
 
 # ── Main pipeline ────────────────────────────────────────────────────────────
 
-def run_preprocess(args: PreprocessConfig) -> None:
+def run_preprocess(args: PreprocessConfig, seed: int) -> None:
     """Run the full preprocessing pipeline and emit train/val binary token files.
 
     Pipeline steps include dataset loading, decontamination, sanitization,
@@ -906,9 +906,17 @@ def run_preprocess(args: PreprocessConfig) -> None:
     out_dir = data_dir / "processed"
     out_dir.mkdir(parents=True, exist_ok=True)
 
+    '''
+    # if the random seed is set: the output stream must be the same 
+    # i.e. if run twice same 
+    import random
+    print(random.randint(1, 10))
+    print(random.randint(1, 10))
+    '''
+
     # Load dataset
     target_tokens = getattr(args, "target_tokens", None)
-    subset_seed = getattr(args, "subset_seed", 42)
+    subset_seed = seed
 
     if target_tokens is not None:
         subset_path = data_dir / f"openwebtext-subset-{target_tokens}-seed{subset_seed}"
@@ -947,14 +955,13 @@ def run_preprocess(args: PreprocessConfig) -> None:
     print(f"[data] Loaded {len(ds):,} documents")
 
     # Load Tokenizer
-    tokenizer_name = getattr(args, "tokenizer_name", None) or DEFAULT_TOKENIZER_NAME
+    from src.utils import DEFAULT_TOKENIZER_NAME
     tokenizer = build_tokenizer(
-        tokenizer_name,
         add_prefix_space=False,
         padding_side="right",
     )
     print(
-        f"[data] Tokenizer: {tokenizer_name}"
+        f"[data] Tokenizer: {DEFAULT_TOKENIZER_NAME}"
         f" (vocab_size={len(tokenizer):,}, pad_token={tokenizer.pad_token!r})"
     )
 
@@ -1061,7 +1068,7 @@ def run_preprocess(args: PreprocessConfig) -> None:
     topic_classes = getattr(args, "topic_classes", None)
     skip_topic_filter = getattr(args, "skip_topic_filter", False)
     topic_distribution = getattr(args, "topic_distribution", None)
-    subset_seed = getattr(args, "subset_seed", 42)
+    subset_seed = seed
 
     if not topic_classes or skip_topic_filter:
         print("\n[phase 3.5] Topic filter... SKIPPED")

@@ -13,20 +13,18 @@ uv sync
 uv run python src/scripts/download_data.py
 
 # 3. Preprocess (tokenize + filter + decontaminate)
-uv run python main.py --stage preprocess --dataset-size small   # 10k docs, fast
-uv run python main.py --stage preprocess --dataset-size full    # full OpenWebText
-
-# 3b. Preprocess with seeded token-budget subset + topic filtering
-uv run python main.py --stage preprocess --target-tokens 1000000000 --subset-seed 42 --topics World:0.30 Sci/Tech:0.35 Business:0.20 Sports:0.15
+uv run python main.py --stage preprocess --config configs/default.yaml
+#   edit configs/default.yaml:preprocess.* to switch between full/small/dummy datasets,
+#   token-budget subsets, topic filters, etc.
 
 # 4. Train
 uv run python main.py --stage train
 
 # 5. Evaluate
-uv run python main.py --stage eval --checkpoint checkpoints/step_5000.pt
+uv run python main.py --stage eval --config configs/default.yaml --checkpoint checkpoints/step_5000.pt
 
 # 6. Generate text
-uv run python main.py --stage inference --checkpoint checkpoints/step_5000.pt \
+uv run python main.py --stage inference --config configs/default.yaml --checkpoint checkpoints/step_5000.pt \
     --prompt "The meaning of life is"
 
 # 6b. Mock inference (downloads Hugging Face GPT-2, no ParrotLLM training)
@@ -34,7 +32,7 @@ uv run python main.py --stage inference --mock-testing \
     --prompt "The meaning of life is"
 
 # 7. Chat UI
-uv run python main.py --stage chat
+uv run python main.py --stage chat --config configs/default.yaml
 ```
 
 ## Setup for New Team Members
@@ -56,10 +54,11 @@ uv sync
 
 # Verify everything works
 uv run python -c "
-from src.utils import load_config
+from configs import load_project_config
 from src.model import ParrotLLM
 import torch
-config = load_config('configs/default.yaml')
+project = load_project_config('configs/default.yaml')
+config = project.model_dump(mode='python')
 model = ParrotLLM(config)
 print(f'Parameters: {model.count_parameters():,}')
 x = torch.randint(0, 50257, (2, 128))
@@ -82,7 +81,7 @@ ParrotLLM/
 ├── configs/
 │   └── default.yaml                 # single source of truth for all hyperparams
 ├── src/
-│   ├── utils.py                     # load_config, set_seed, get_device
+│   ├── utils.py                     # tokenizer helpers, set_seed, get_device
 │   ├── model/
 │   │   └── transformer.py           # RMSNorm, RoPE, MHA, SwiGLU, ParrotLLM
 │   ├── training/
@@ -144,12 +143,12 @@ All preprocessing runs via `main.py --stage preprocess` and applies 8 phases seq
 
 | Phase | What it does | Approach | Skippable |
 |-------|-------------|----------|-----------|
-| 1. Decontamination | Remove eval set overlaps | SHA-1 hash matching against Wikitext-103 & NLP26 OWT eval on raw text | `--skip-decontam` |
+| 1. Decontamination | Remove eval set overlaps | SHA-1 hash matching against Wikitext-103 & NLP26 OWT eval on raw text | `preprocess.skip_decontam` |
 | 2. Sanitization | Strip HTML, boilerplate, control chars, URLs | Regex rules | No |
 | 3. Language detection | Keep only target language (default: English) | fastText `lid.176.ftz`, threshold 0.8 | No |
-| 4. Code/artifact filter | Remove code dumps, HTML-heavy docs | Heuristic (symbol ratio, code fences) or fastText classifier | `--skip-code-filter` |
-| 5. Quality filter | Remove short, repetitive, incoherent text | Heuristic (min length, n-gram repetition) or KenLM + fastText edu-quality classifier | `--skip-quality-filter` |
-| 6. Fuzzy deduplication | Remove near-duplicate documents | MinHash LSH (64 perms, 16 bands, Jaccard ≥ 0.8) | `--skip-dedup` |
+| 4. Code/artifact filter | Remove code dumps, HTML-heavy docs | Heuristic (symbol ratio, code fences) or fastText classifier | `preprocess.skip_code_filter` |
+| 5. Quality filter | Remove short, repetitive, incoherent text | Heuristic (min length, n-gram repetition) or KenLM + fastText edu-quality classifier | `preprocess.skip_quality_filter` |
+| 6. Fuzzy deduplication | Remove near-duplicate documents | MinHash LSH (64 perms, 16 bands, Jaccard ≥ 0.8) | `preprocess.skip_dedup` |
 | 7. Tokenization | Tokenize with GPT-2, filter docs < 64 tokens | `GPT2TokenizerFast` | No |
 | 8. Binary output | Split 99/1 train/val, save as uint16 `.bin` | numpy `tofile` | No |
 
@@ -177,39 +176,32 @@ All stages go through `main.py`:
 
 ```bash
 # Preprocess
-uv run python main.py --stage preprocess [--dataset-size small|full] [--lang en]
-
-# Preprocess with seeded token-budget subset + topic filtering
-# --target-tokens: desired output token count (pipeline downloads just enough docs)
-# --subset-seed:   reproducible shuffle seed
-# --topics:        RoBERTa AG News classes with optional resampling weights
-uv run python main.py --stage preprocess \
-    --target-tokens 1000000000 --subset-seed 42 \
-    --topics World:0.30 Sci/Tech:0.35 Business:0.20 Sports:0.15
+uv run python main.py --stage preprocess --config configs/default.yaml
+#   tweak configs/*.yaml:preprocess.* to switch dataset sizes, token budgets, topics
 
 # Train
-uv run python main.py --stage train [--config configs/default.yaml] [--checkpoint path.pt]
+uv run python main.py --stage train --config configs/default.yaml [--checkpoint path.pt]
 
 # Evaluate perplexity
-uv run python main.py --stage eval --checkpoint checkpoints/step_5000.pt
+uv run python main.py --stage eval --config configs/default.yaml --checkpoint checkpoints/step_5000.pt
 
 # Generate text
-uv run python main.py --stage inference --checkpoint checkpoints/step_5000.pt \
+uv run python main.py --stage inference --config configs/default.yaml --checkpoint checkpoints/step_5000.pt \
     [--prompt "text"] [--max-tokens 128] [--temperature 0.0]
 
 # Leaderboard mode (stdout only, no logs)
-uv run python main.py --stage inference --checkpoint checkpoints/step_5000.pt \
+uv run python main.py --stage inference --config configs/default.yaml --checkpoint checkpoints/step_5000.pt \
     --prompt "The answer is" --leaderboard
 
 # Chat UI
-uv run python main.py --stage chat
+uv run python main.py --stage chat --config configs/default.yaml
 ```
 
 Use `--mock-testing` during `--stage inference` to skip checkpoints entirely; it loads the standard Hugging Face `openai-community/gpt2` weights so you can validate the CLI without training first (the model is downloaded on demand).
 
 If you place `HF_TOKEN=...` inside `.env` (or export `HF_TOKEN`), ParrotLLM picks it up automatically to unlock faster authenticated downloads.
 
-`--lang` defaults to `en` (English). Override it only if you have the required fastText language models for another language.
+All hyperparameters—including dataset selection, topic filtering, optimizer, inference sampling, and chat settings—live in the YAML config. The CLI only exposes the runtime knobs that make sense to change per command (prompt text, leaderboard/mocking flags, checkpoint path).
 
 ## Training Details
 

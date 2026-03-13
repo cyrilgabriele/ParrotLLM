@@ -5,62 +5,53 @@ from __future__ import annotations
 from pydantic import BaseModel, ConfigDict, Field
 
 
-class LoggingConfig(BaseModel):
-    model_config = ConfigDict(extra="ignore")
-
-    console_level: str = "INFO"
-    file_level: str = "DEBUG"
-    components: dict[str, str] = Field(default_factory=dict)
-
-
 class ModelConfig(BaseModel):
     model_config = ConfigDict(extra="ignore")
 
-    vocab_size: int = 50258
-    pad_token_id: int = 50257
-    bos_token_id: int = 50256
-    eos_token_id: int = 50256
-    d_model: int = 320
-    n_layers: int = 16
-    n_heads: int = 8
-    d_ff: int = 854
-    context_length: int = 1024
-    bias: bool = False
-    dropout: float = 0.0
-    rope_theta: float = 10000.0
+    vocab_size: int = Field(...)
+    pad_token_id: int = Field(...)
+    bos_token_id: int = Field(...)
+    eos_token_id: int = Field(...)
+    d_model: int = Field(...)
+    n_layers: int = Field(...)
+    n_heads: int = Field(...)
+    d_ff: int = Field(...)
+    context_length: int = Field(...)
+    bias: bool = Field(...)
+    dropout: float = Field(...)
+    rope_theta: float = Field(...)
 
 
 class TrainingConfig(BaseModel):
     model_config = ConfigDict(extra="ignore")
 
-    seed: int = 42
-    device: str = "auto"
+    device: str = Field(...)
 
     # data
-    train_bin: str = "data/processed/train.bin"
-    val_bin: str = "data/processed/val.bin"
+    train_bin: str = Field(...)
+    val_bin: str = Field(...)
 
     # batching
-    batch_size: int = 64
-    gradient_accumulation_steps: int = 4
+    batch_size: int = Field(...)
+    gradient_accumulation_steps: int = Field(...)
 
     # optimizer
-    learning_rate: float = 6e-4
-    min_lr: float = 6e-5
-    weight_decay: float = 0.1
-    beta1: float = 0.9
-    beta2: float = 0.95
-    grad_clip: float = 1.0
+    learning_rate: float = Field(...)
+    min_lr: float = Field(...)
+    weight_decay: float = Field(...)
+    beta1: float = Field(...)
+    beta2: float = Field(...)
+    grad_clip: float = Field(...)
 
     # schedule
-    warmup_steps: int = 2000
-    max_steps: int = 100000
+    warmup_steps: int = Field(...)
+    max_steps: int = Field(...)
 
     # checkpointing
-    save_every: int = 5000
-    eval_every: int = 500
-    checkpoint_dir: str = "checkpoints"
+    save_every: int = Field(...)
+    eval_every: int = Field(...)
+    checkpoint_dir: str = Field(...)
 
     # logging
-    runs_dir: str = "runs"
-    log_every: int = 10
+    runs_dir: str = Field(...)
+    log_every: int = Field(...)

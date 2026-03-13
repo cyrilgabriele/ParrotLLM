@@ -10,10 +10,9 @@ import numpy as np
 import torch
 import torch.nn as nn
 
-from configs import LoggingConfig, ModelConfig, TrainingConfig
+from configs import LoggingConfig, ProjectConfig
 from src.logging_utils import JSONLLogger, make_run_dir, setup_logger
 from src.model import ParrotLLM
-from src.utils import get_device, load_config, set_seed
 
 
 # ── Dataset ──────────────────────────────────────────────────────────────────
@@ -262,18 +261,21 @@ def _render_ascii_loss_curve(
     return lines
 
 
-def run_train(args) -> None:
-    config = load_config(args.config)
+def run_train(
+    project_config: ProjectConfig,
+    model_config_dict: dict,
+    *,
+    device: torch.device,
+    checkpoint: str | None = None,
+) -> None:
+    """Train ParrotLLM using a fully validated project configuration."""
 
-    # ── Validate config with Pydantic ─────────────────────────────────────────
-    tc_model = TrainingConfig.model_validate(config["training"])
-    mc_model = ModelConfig.model_validate(config["model"])
-    lc_model = LoggingConfig.model_validate(config.get("logging", {}))
+    tc_model = project_config.training
+    mc_model = project_config.model
+    lc_model = project_config.logging
 
-    # Use validated configs (including any type coercions) for downstream logic
     tc = tc_model.model_dump()
     mc = mc_model.model_dump()
-    set_seed(tc_model.seed)
 
     # ── run directory & loggers ───────────────────────────────────────────────
     run_dir = make_run_dir(tc_model.runs_dir)
@@ -287,11 +289,11 @@ def run_train(args) -> None:
 
     # Save full config to run directory for reproducibility
     config_path = os.path.join(run_dir, "config.json")
+    json_payload = project_config.model_dump(mode="json")
     with open(config_path, "w") as f:
-        json.dump(config, f, indent=2)
+        json.dump(json_payload, f, indent=2)
     jlog.log("pretraining", "config", **tc)
 
-    device = get_device(tc.get("device", args.device))
     log.info(f"device={device}")
 
     # data
@@ -305,7 +307,7 @@ def run_train(args) -> None:
     )
 
     # model
-    model = ParrotLLM(config).to(device)
+    model = ParrotLLM(model_config_dict).to(device)
 
     # ── Architecture log (slide 12 style) ─────────────────────────────────────
     _log_model_architecture(log, jlog, model, mc, device, tc["batch_size"])
@@ -321,8 +323,8 @@ def run_train(args) -> None:
 
     # resume
     start_step = 0
-    if args.checkpoint:
-        start_step, _ = load_checkpoint(args.checkpoint, model, optimizer, scaler, device)
+    if checkpoint:
+        start_step, _ = load_checkpoint(checkpoint, model, optimizer, scaler, device)
         log.info(f"resumed from step {start_step}")
 
     # ── initial evaluation ────────────────────────────────────────────────────
@@ -344,7 +346,7 @@ def run_train(args) -> None:
     current_epoch = 0
     prev_epoch = 0
     loss_history: list[tuple[int, float]] = []
-
+    
     log.info("")
     log.info("=" * 60)
     log.info("Starting training...")
@@ -447,14 +449,14 @@ def run_train(args) -> None:
 
         # checkpoint
         if step > 0 and step % tc["save_every"] == 0:
-            save_checkpoint(model, optimizer, config, step, epoch, scaler, run_dir)
+            save_checkpoint(model, optimizer, model_config_dict, step, epoch, scaler, run_dir)
             ckpt_path = os.path.join(run_dir, f"{epoch:02d}_epoch_{step}_step")
             log.info(f"Saved checkpoint: {ckpt_path}")
             jlog.log("pretraining", "checkpoint",
                      step=step, epoch=epoch, path=ckpt_path)
 
     # final save
-    save_checkpoint(model, optimizer, config, tc["max_steps"], epoch, scaler, run_dir)
+    save_checkpoint(model, optimizer, model_config_dict, tc["max_steps"], epoch, scaler, run_dir)
     final_ckpt = os.path.join(run_dir, f"{epoch:02d}_epoch_{tc['max_steps']}_step")
     jlog.log("pretraining", "checkpoint",
              step=tc["max_steps"], epoch=epoch, path=final_ckpt)

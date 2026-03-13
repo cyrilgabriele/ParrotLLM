@@ -1,0 +1,26 @@
+# Smoke-test config for the inference stage (works great with --mock-testing)
+
+model:
+  vocab_size: 50258
+  pad_token_id: 50257
+  bos_token_id: 50256
+  eos_token_id: 50256
+  d_model: 320
+  n_layers: 16
+  n_heads: 8
+  d_ff: 854
+  context_length: 1024
+  bias: false
+  dropout: 0.0
+  rope_theta: 10000.0
+
+logging:
+  console_level: INFO
+  file_level: DEBUG
+
+inference:
+  device: cpu
+  max_tokens: 32
+  temperature: 0.0
+  top_k: 50
+  top_p: 1.0

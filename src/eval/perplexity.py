@@ -1,12 +1,15 @@
 """Evaluate perplexity on Wikitext-103 and OWT validation split."""
 
 import math
+from typing import Dict
 
 import numpy as np
 import torch
 
+from configs import EvalDatasetConfig, ProjectConfig
 from src.model import ParrotLLM
-from src.utils import build_tokenizer, get_device, load_config, set_seed
+from src.utils import build_tokenizer
+from datasets import load_dataset
 
 
 def compute_perplexity(
@@ -43,65 +46,109 @@ def compute_perplexity(
     return math.exp(avg_loss)
 
 
-def eval_wikitext(model, config, device):
-    from datasets import load_dataset
-
+def eval_wikitext(
+    model: torch.nn.Module,
+    config: Dict,
+    device: torch.device,
+    dataset_cfg: EvalDatasetConfig | None,
+    batch_size: int,
+    max_sequences: int,
+    hf_token: str | None,
+):
     mc = config["model"]
-    ec = config.get("eval", {})
     tokenizer = build_tokenizer()
 
-    ds = load_dataset("wikitext", "wikitext-103-raw-v1", split="test")
+    subset = dataset_cfg.subset if dataset_cfg and dataset_cfg.subset else "wikitext-103-raw-v1"
+    split = dataset_cfg.split if dataset_cfg and dataset_cfg.split else "test"
+
+    load_kwargs = {"split": split}
+    if hf_token:
+        load_kwargs["use_auth_token"] = hf_token
+    ds = load_dataset("wikitext", subset, **load_kwargs)
     text = "\n\n".join(ds["text"])
     token_ids = torch.tensor(tokenizer.encode(text), dtype=torch.long)
 
     ppl = compute_perplexity(
-        model, token_ids, mc["context_length"], device,
-        ec.get("batch_size", 32), ec.get("max_sequences", 512),
+        model,
+        token_ids,
+        mc["context_length"],
+        device,
+        batch_size,
+        max_sequences,
     )
     return ppl
 
 
-def eval_owt_val(model, config, device):
+def eval_owt_val(
+    model, config, device, dataset_cfg: EvalDatasetConfig | None, batch_size: int, max_sequences: int
+):
     mc = config["model"]
-    ec = config.get("eval", {})
-    val_path = ec.get("datasets", [{}])[-1].get("path", "data/val.bin")
+    val_path = dataset_cfg.path if dataset_cfg and dataset_cfg.path else "data/processed/val.bin"
 
     data = np.memmap(val_path, dtype=np.uint16, mode="r")
     token_ids = torch.from_numpy(data.astype(np.int64))
 
     ppl = compute_perplexity(
-        model, token_ids, mc["context_length"], device,
-        ec.get("batch_size", 32), ec.get("max_sequences", 512),
+        model,
+        token_ids,
+        mc["context_length"],
+        device,
+        batch_size,
+        max_sequences,
     )
     return ppl
 
 
-def run_eval(args) -> None:
-    config = load_config(args.config)
-    ec = config.get("eval", {})
-    set_seed(config["training"]["seed"])
-    device = get_device(ec.get("device", args.device))
+def run_eval(
+    project_config: ProjectConfig,
+    full_config: dict,
+    *,
+    checkpoint: str,
+    device: torch.device,
+    hf_token: str | None = None,
+) -> None:
+    eval_cfg = project_config.eval
+    if eval_cfg is None:
+        raise ValueError("Eval configuration missing; cannot run eval stage.")
 
-    assert args.checkpoint, "--checkpoint required for eval"
-    ckpt = torch.load(args.checkpoint, map_location=device, weights_only=False)
-    ckpt_config = ckpt.get("config", config)
+    datasets = {ds.name: ds for ds in eval_cfg.datasets}
+
+    ckpt = torch.load(checkpoint, map_location=device, weights_only=False)
+    ckpt_config = ckpt.get("config", full_config)
 
     model = ParrotLLM(ckpt_config).to(device)
     model.load_state_dict(ckpt["model"])
     model.eval()
-    print(f"[eval] loaded checkpoint: {args.checkpoint}")
+    print(f"[eval] loaded checkpoint: {checkpoint}")
     print(f"[eval] parameters: {model.count_parameters():,}")
 
     # Wikitext-103
     try:
-        wt_ppl = eval_wikitext(model, ckpt_config, device)
+        wt_dataset = datasets.get("wikitext")
+        wt_ppl = eval_wikitext(
+            model,
+            ckpt_config,
+            device,
+            wt_dataset,
+            eval_cfg.batch_size,
+            eval_cfg.max_sequences,
+            hf_token,
+        )
         print(f"[eval] Wikitext-103 perplexity: {wt_ppl:.2f}")
     except Exception as e:
         print(f"[eval] Wikitext-103 skipped: {e}")
 
     # OWT val
     try:
-        owt_ppl = eval_owt_val(model, ckpt_config, device)
+        owt_dataset = datasets.get("owt_val")
+        owt_ppl = eval_owt_val(
+            model,
+            ckpt_config,
+            device,
+            owt_dataset,
+            eval_cfg.batch_size,
+            eval_cfg.max_sequences,
+        )
         print(f"[eval] OWT val perplexity: {owt_ppl:.2f}")
     except Exception as e:
         print(f"[eval] OWT val skipped: {e}")

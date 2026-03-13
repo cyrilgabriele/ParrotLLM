@@ -1,6 +1,26 @@
 # ParrotLLM — single source of truth for all hyperparameters
 # ──────────────────────────────────────────────────────────
 
+preprocess:
+  dataset_size: full
+  lang: en
+  data_dir: data
+  num_workers: auto
+  skip_dedup: false
+  skip_decontam: false
+  filter_mode: heuristic
+  skip_code_filter: false
+  skip_quality_filter: false
+  skip_ellipsis_filter: false
+  append_eos_token: false
+  token_dtype: uint16
+  min_tokens: 64
+  context_length: 1024
+  target_tokens: null
+  topic_classes: null
+  topic_distribution: null
+  skip_topic_filter: false
+
 model:
   vocab_size: 50258          # GPT-2 tokenizer vocabulary (+ pad token)
   pad_token_id: 50257        # dedicated <|pad|>
@@ -16,7 +36,6 @@ model:
   rope_theta: 10000.0        # RoPE base frequency
 
 training:
-  seed: 42
   device: auto
 
   # data (output of --stage preprocess)
@@ -75,7 +94,6 @@ inference:
   temperature: 0.2           # 0 = greedy
   top_k: 50
   top_p: 0.9
-  seed: 42
 
 chat:
   device: auto

@@ -1,0 +1,28 @@
+# Smoke-test config for the chat stage (CPU friendly)
+
+model:
+  vocab_size: 50258
+  pad_token_id: 50257
+  bos_token_id: 50256
+  eos_token_id: 50256
+  d_model: 320
+  n_layers: 16
+  n_heads: 8
+  d_ff: 854
+  context_length: 1024
+  bias: false
+  dropout: 0.0
+  rope_theta: 10000.0
+
+logging:
+  console_level: INFO
+  file_level: DEBUG
+
+chat:
+  device: cpu
+  max_tokens: 64
+  temperature: 0.7
+  top_k: 50
+  top_p: 0.9
+  system_prompt: "You are ParrotLLM, a helpful assistant."
+  checkpoint_dir: checkpoints

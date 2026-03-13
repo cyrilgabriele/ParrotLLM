@@ -4,17 +4,12 @@ from pathlib import Path
 
 import numpy as np
 import torch
-import yaml
 from transformers import GPT2TokenizerFast
 from dotenv import load_dotenv
 
-DEFAULT_TOKENIZER_NAME = "openai-community/gpt2"
+
 PAD_TOKEN = "<|pad|>"
-
-
-def load_config(path: str = "configs/default.yaml") -> dict:
-    with open(path) as f:
-        return yaml.safe_load(f)
+DEFAULT_TOKENIZER_NAME = "openai-community/gpt2"
 
 
 def maybe_load_hf_token(env_path: str | Path = Path(".env")) -> str | None:
@@ -33,7 +28,6 @@ def maybe_load_hf_token(env_path: str | Path = Path(".env")) -> str | None:
 
 
 def build_tokenizer(
-    tokenizer_name: str = DEFAULT_TOKENIZER_NAME,
     *,
     add_prefix_space: bool = False,
     padding_side: str = "right",
@@ -47,13 +41,7 @@ def build_tokenizer(
             add_prefix_space=add_prefix_space,
         )
 
-    name = tokenizer_name or DEFAULT_TOKENIZER_NAME
-    try:
-        tokenizer = _load(name)
-    except OSError:
-        if name != DEFAULT_TOKENIZER_NAME:
-            raise
-        tokenizer = _load("gpt2")
+    tokenizer = _load(DEFAULT_TOKENIZER_NAME)
 
     tokenizer.padding_side = padding_side
     if tokenizer.pad_token != PAD_TOKEN:
@@ -63,11 +51,14 @@ def build_tokenizer(
 
 
 def set_seed(seed: int) -> None:
+    os.environ["PYTHONHASHSEED"] = str(seed)
     random.seed(seed)
     np.random.seed(seed)
     torch.manual_seed(seed)
     if torch.cuda.is_available():
         torch.cuda.manual_seed_all(seed)
+    if hasattr(torch.backends, "mps") and torch.backends.mps.is_available():
+        torch.mps.manual_seed(seed)
 
 
 def get_device(device_str: str = "auto") -> torch.device:

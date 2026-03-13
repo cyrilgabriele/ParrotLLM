@@ -1,25 +1,4 @@
-# Quick test config — 20 steps, small eval
-
-preprocess:
-  dataset_size: small
-  lang: en
-  data_dir: data
-  num_workers: auto
-  skip_dedup: false
-  skip_decontam: false
-  filter_mode: heuristic
-  skip_code_filter: false
-  skip_quality_filter: false
-  skip_ellipsis_filter: false
-  tokenizer_name: openai-community/gpt2
-  append_eos_token: false
-  token_dtype: uint16
-  min_tokens: 64
-  context_length: 1024
-  target_tokens: null
-  topic_classes: null
-  topic_distribution: null
-  skip_topic_filter: false
+# Smoke-test config for the train stage (tiny batch/step counts)
 
 model:
   vocab_size: 50258
@@ -38,7 +17,9 @@ model:
 training:
   device: auto
   train_bin: data/processed/train.bin
-  val_bin: data/processed/val.bin
+  # Dummy preprocessing keeps almost no validation tokens, so point val_bin to a
+  # non-existent path to skip mmap/eval when running minimal smoke tests.
+  val_bin: data/processed/dummy_val.bin
   batch_size: 4
   gradient_accumulation_steps: 1
   learning_rate: 6.0e-4

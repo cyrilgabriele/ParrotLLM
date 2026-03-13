@@ -1,0 +1,25 @@
+# Smoke-test config for the preprocess stage (skips heavy filters and uses the dummy dataset)
+preprocess:
+  dataset_size: dummy
+  lang: en
+  data_dir: data
+  num_workers: auto
+  skip_dedup: true
+  skip_decontam: true
+  filter_mode: none
+  skip_code_filter: true
+  skip_quality_filter: true
+  skip_ellipsis_filter: true
+  tokenizer_name: openai-community/gpt2
+  append_eos_token: false
+  token_dtype: uint16
+  min_tokens: 8
+  context_length: 1024
+  target_tokens: null
+  topic_classes: null
+  topic_distribution: null
+  skip_topic_filter: true
+
+logging:
+  console_level: INFO
+  file_level: DEBUG

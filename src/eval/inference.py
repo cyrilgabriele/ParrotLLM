@@ -4,8 +4,9 @@ import sys
 
 import torch
 
+from configs import ProjectConfig
 from src.model import HuggingFaceGPT2, ParrotLLM
-from src.utils import build_tokenizer, get_device, load_config, maybe_load_hf_token, set_seed
+from src.utils import build_tokenizer, maybe_load_hf_token
 
 
 @torch.no_grad()
@@ -61,46 +62,48 @@ def load_model_from_checkpoint(checkpoint_path: str, device: torch.device):
     return model, config
 
 
-def run_inference(args) -> None:
-    config = load_config(args.config)
-    ic = config.get("inference", {})
-    leaderboard = getattr(args, "leaderboard", False)
+def run_inference(
+    project_config: ProjectConfig,
+    *,
+    checkpoint: str | None,
+    device: torch.device,
+    prompt: str | None,
+    max_tokens_override: int | None,
+    temperature_override: float | None,
+    leaderboard: bool,
+    mock_testing: bool,
+    hf_token: str | None = None,
+) -> None:
+    inference_cfg = project_config.inference
+    if inference_cfg is None:
+        raise ValueError("Inference configuration missing; cannot run inference stage.")
 
-    seed = getattr(args, "seed", ic.get("seed", 42))
-    set_seed(seed)
-
-    device = get_device(getattr(args, "device", ic.get("device", "auto")))
-    use_mock = getattr(args, "mock_testing", False)
+    use_mock = mock_testing
 
     if use_mock:
-        token = maybe_load_hf_token()
-        if token:
+        if hf_token:
             print("[inference] Using Hugging Face token from .env")
         model = HuggingFaceGPT2().to(device)
         mc = {"context_length": getattr(model, "context_length", 1024)}
         print("[inference] mock_testing enabled: using openai-community/gpt2")
     else:
-        assert args.checkpoint, "--checkpoint required for inference"
-        model, ckpt_config = load_model_from_checkpoint(args.checkpoint, device)
+        assert checkpoint, "--checkpoint required for inference"
+        model, ckpt_config = load_model_from_checkpoint(checkpoint, device)
         mc = ckpt_config["model"]
     model.eval()
 
     tokenizer = build_tokenizer()
 
-    if args.prompt: 
-        prompt = args.prompt
-    else: 
-        prompt = "Parrot are amazing because"
-    input_ids = tokenizer.encode(prompt)
+    input_text = prompt if prompt else "Parrot are amazing because"
+    input_ids = tokenizer.encode(input_text)
     idx = torch.tensor([input_ids], dtype=torch.long, device=device)
 
-    max_tokens = getattr(args, "max_tokens", ic.get("max_tokens", 128))
-    if getattr(args, "temperature", None) is not None:
-        temperature = args.temperature
-    else:
-        temperature = ic.get("temperature", 0.0)
-    top_k = ic.get("top_k", 50)
-    top_p = ic.get("top_p", 0.9)
+    max_tokens = max_tokens_override or inference_cfg.max_tokens
+    temperature = (
+        temperature_override if temperature_override is not None else inference_cfg.temperature
+    )
+    top_k = inference_cfg.top_k
+    top_p = inference_cfg.top_p
 
     output = generate(
         model, idx, max_tokens,
@@ -114,5 +117,5 @@ def run_inference(args) -> None:
         generated = tokenizer.decode(output[0, len(input_ids):].tolist())
         sys.stdout.write(generated)
     else:
-        print(f"[inference] prompt: {prompt}")
+        print(f"[inference] prompt: {input_text}")
         print(f"[inference] output: {text}")

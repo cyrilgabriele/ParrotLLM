@@ -1,0 +1,61 @@
+# Proxy-Optimized Experiment Config
+# Optimized to give reliable scaling signals for the final 16-layer/35M model.
+
+model:
+  vocab_size: 50258
+  pad_token_id: 50257
+  bos_token_id: 50256
+  eos_token_id: 50256
+  d_model: 256
+  n_layers: 8
+  n_heads: 4           # Refined: Gives head_dim=64, matching final model "physics"
+  d_ff: 682
+  context_length: 256
+  bias: false
+  dropout: 0.05
+  rope_theta: 10000.0
+
+training:
+  device: auto
+  train_bin: data/experiment-a/train.bin
+  val_bin: data/experiment-a/val.bin
+  batch_size: 16
+  gradient_accumulation_steps: 1
+  learning_rate: 8.0e-4 # Refined: More stable signal for dataset comparison
+  min_lr: 8.0e-5
+  weight_decay: 0.1
+  beta1: 0.9
+  beta2: 0.95
+  grad_clip: 1.0
+  warmup_steps: 100
+  max_steps: 10000
+  save_every: 500
+  eval_every: 200
+  checkpoint_dir: checkpoints
+  runs_dir: runs
+  log_every: 10
+
+logging:
+  console_level: INFO
+  file_level: DEBUG
+  components:
+    data_preprocessing: DEBUG
+    model_initialization: INFO
+    training: DEBUG
+
+inference:
+  device: cpu
+  max_tokens: 64
+  temperature: 0.8
+  top_k: 50
+  top_p: 0.95
+
+eval:
+  device: cpu
+  batch_size: 16
+  max_sequences: 100
+  datasets:
+    - name: "wikitext103-test"
+      subset: "wikitext-103-raw-v1"
+      split: "test"
+      path: "data/wikitext-103-test/test.bin"

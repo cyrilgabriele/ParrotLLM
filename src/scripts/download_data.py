@@ -2,8 +2,12 @@
 
 import argparse
 import math
+import sys
 import urllib.request
 from pathlib import Path
+
+# Add project root to sys.path to allow 'from src...' imports when run as a script
+sys.path.append(str(Path(__file__).resolve().parent.parent.parent))
 
 from datasets import load_dataset
 
@@ -231,6 +235,108 @@ def download_nlp26_eval():
         )
 
 
+def download_parrotlabs_preprocessed():
+    """Download preprocessed .bin files from the ParrotLabs HF group."""
+    import requests
+    from src.utils import maybe_load_hf_token
+
+    # Save to a dedicated folder for 800k
+    out_dir = DATA_DIR / "parrotlabs-800k"
+    out_dir.mkdir(parents=True, exist_ok=True)
+
+    repo_id = "ParrotLabs/Preprocessed"
+    subset = "800000tokens-seed42"
+    files = ["train.bin", "val.bin"]
+    
+    token = maybe_load_hf_token()
+    headers = {"Authorization": f"Bearer {token}"} if token else {}
+
+    print(f"[download] ParrotLabs/Preprocessed ({subset}) to {out_dir}...")
+    
+    for f_name in files:
+        target_path = out_dir / f_name
+        if target_path.exists():
+            print(f"  [skip] {f_name} already exists")
+            continue
+            
+        url = f"https://huggingface.co/datasets/{repo_id}/resolve/main/{subset}/{f_name}"
+        
+        print(f"  Downloading {f_name}...")
+        try:
+            with requests.get(url, headers=headers, stream=True) as r:
+                r.raise_for_status()
+                total_size = int(r.headers.get('content-length', 0))
+                with open(target_path, 'wb') as f:
+                    if total_size > 0:
+                        from tqdm import tqdm
+                        with tqdm(total=total_size, unit='B', unit_scale=True, desc=f"    {f_name}") as pbar:
+                            for chunk in r.iter_content(chunk_size=8192):
+                                f.write(chunk)
+                                pbar.update(len(chunk))
+                    else:
+                        for chunk in r.iter_content(chunk_size=8192):
+                            f.write(chunk)
+            print(f"  [done] -> {target_path}")
+        except Exception as e:
+            print(f"  [error] Failed to download {f_name}: {e}")
+            if target_path.exists():
+                target_path.unlink()
+            continue
+
+    print(f"[done] Dataset available at {out_dir}")
+
+
+def download_experiment_a():
+    """Download the ExperimentA dataset from ParrotLabs HF group."""
+    import requests
+    from src.utils import maybe_load_hf_token
+
+    # Save to a dedicated folder for ExperimentA
+    out_dir = DATA_DIR / "experiment-a"
+    out_dir.mkdir(parents=True, exist_ok=True)
+
+    repo_id = "ParrotLabs/Preprocessed"
+    subset = "ExperimentA"
+    files = ["train.bin", "val.bin"]
+    
+    token = maybe_load_hf_token()
+    headers = {"Authorization": f"Bearer {token}"} if token else {}
+
+    print(f"[download] ParrotLabs/Preprocessed ({subset}) to {out_dir}...")
+    
+    for f_name in files:
+        target_path = out_dir / f_name
+        if target_path.exists():
+            print(f"  [skip] {f_name} already exists")
+            continue
+            
+        url = f"https://huggingface.co/datasets/{repo_id}/resolve/main/{subset}/{f_name}"
+        
+        print(f"  Downloading {f_name}...")
+        try:
+            with requests.get(url, headers=headers, stream=True) as r:
+                r.raise_for_status()
+                total_size = int(r.headers.get('content-length', 0))
+                with open(target_path, 'wb') as f:
+                    if total_size > 0:
+                        from tqdm import tqdm
+                        with tqdm(total=total_size, unit='B', unit_scale=True, desc=f"    {f_name}") as pbar:
+                            for chunk in r.iter_content(chunk_size=8192):
+                                f.write(chunk)
+                                pbar.update(len(chunk))
+                    else:
+                        for chunk in r.iter_content(chunk_size=8192):
+                            f.write(chunk)
+            print(f"  [done] -> {target_path}")
+        except Exception as e:
+            print(f"  [error] Failed to download {f_name}: {e}")
+            if target_path.exists():
+                target_path.unlink()
+            continue
+
+    print(f"[done] Dataset available at {out_dir}")
+
+
 DOWNLOAD_TARGETS = {
     "openwebtext-100": download_openwebtext_100,
     "openwebtext-1k": download_openwebtext_1k,
@@ -239,6 +345,8 @@ DOWNLOAD_TARGETS = {
     "wikitext103-test": download_wikitext103_test,
     "fasttext-langdetect": download_fasttext_langdetect,
     "nlp26-eval": download_nlp26_eval,
+    "parrotlabs-800k": download_parrotlabs_preprocessed,
+    "experiment-a": download_experiment_a,
 }
 
 

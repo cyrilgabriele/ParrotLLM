@@ -222,3 +222,4 @@ wandb/
 # Custom
 .DS_Store
 src/parrotllm.egg-info
+local_files/

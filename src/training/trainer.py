@@ -144,13 +144,20 @@ def _log_model_architecture(log: logging.Logger, jlog: JSONLLogger,
                             model: nn.Module, mc: dict,
                             device: torch.device, batch_size: int) -> None:
     """Log model architecture summary."""
-    n_params = model.count_parameters()
-    n_all = sum(p.numel() for p in model.parameters())
-    n_trainable = sum(p.numel() for p in model.parameters() if p.requires_grad)
-    n_non_trainable = n_all - n_trainable
+    # Deduplicate by data_ptr to handle weight tying (tok_emb == lm_head)
+    seen = set()
+    n_total = 0
+    n_trainable = 0
+    for p in model.parameters():
+        if p.data_ptr() not in seen:
+            seen.add(p.data_ptr())
+            n_total += p.numel()
+            if p.requires_grad:
+                n_trainable += p.numel()
+    n_non_trainable = n_total - n_trainable
     pos_emb_params = model.pos_emb.weight.numel()
-    n_non_emb = n_params - pos_emb_params
-    params_size_mb = n_all * 4 / 1e6
+    n_non_emb = n_total - pos_emb_params
+    params_size_mb = n_total * 4 / 1e6
 
     # torchinfo summary (if available)
     torchinfo_str = None
@@ -170,7 +177,7 @@ def _log_model_architecture(log: logging.Logger, jlog: JSONLLogger,
 
     log.info(fmt_model_summary(
         mc,
-        n_params=n_params, n_non_emb=n_non_emb, pos_emb_params=pos_emb_params,
+        n_params=n_total, n_non_emb=n_non_emb, pos_emb_params=pos_emb_params,
         n_trainable=n_trainable, n_non_trainable=n_non_trainable,
         params_size_mb=params_size_mb, torchinfo=torchinfo_str,
     ))
@@ -181,7 +188,7 @@ def _log_model_architecture(log: logging.Logger, jlog: JSONLLogger,
              n_layers=mc["n_layers"], n_heads=mc["n_heads"],
              d_model=mc["d_model"], d_ff=mc["d_ff"],
              dropout=mc.get("dropout", 0.0), bias=mc.get("bias", False),
-             total_params=n_params, total_params_non_embedding=n_non_emb,
+             total_params=n_total, total_params_non_embedding=n_non_emb,
              trainable_params=n_trainable, non_trainable_params=n_non_trainable,
              params_size_mb=round(params_size_mb, 2))
 

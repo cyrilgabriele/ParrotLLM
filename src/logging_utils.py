@@ -154,21 +154,22 @@ def fmt_model_summary(
         f"  Dropout: {mc.get('dropout', 0.0)}",
         f"  Bias: {mc.get('bias', False)}",
         "",
-        "Parameters:",
-        f"  Total (non-embedding): {fmt_param_count(n_non_emb)}",
-        f"  Total (all): {fmt_param_count(n_params)}",
+        "Parameters (unique, weight-tied layers counted once):",
+        f"  Total: {fmt_param_count(n_params)}",
+        f"  Trainable: {fmt_param_count(n_trainable)}",
+        f"  Non-trainable: {fmt_param_count(n_non_trainable)}",
+        f"  Non-embedding: {fmt_param_count(n_non_emb)}",
         f"  Position embeddings: {fmt_param_count(pos_emb_params)}",
+        f"  Size (MB): {params_size_mb:.2f}",
     ]
     if torchinfo:
-        parts.append("")
-        parts.append(torchinfo)
-    parts += [
-        "",
-        f"Trainable params: {n_trainable:,}",
-        f"Non-trainable params: {n_non_trainable:,}",
-        f"Params size (MB): {params_size_mb:.2f}",
-        "=" * 60,
-    ]
+        parts += [
+            "",
+            "Layer-wise breakdown (torchinfo):",
+            "  Note: torchinfo double-counts weight-tied layers (tok_emb/lm_head).",
+            torchinfo,
+        ]
+    parts.append("=" * 60)
     return "\n".join(parts)
 
 

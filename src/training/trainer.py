@@ -10,8 +10,11 @@ import numpy as np
 import torch
 import torch.nn as nn
 
-from configs import LoggingConfig, ProjectConfig
-from src.logging_utils import JSONLLogger, make_run_dir, setup_logger
+from configs import ProjectConfig
+from src.logging_utils import (
+    JSONLLogger, fmt_model_summary, fmt_training_complete,
+    fmt_training_start, make_run_dir, render_ascii_loss_curve, setup_logger,
+)
 from src.model import ParrotLLM
 
 
@@ -95,7 +98,7 @@ def save_checkpoint(model: nn.Module, optimizer: torch.optim.Optimizer,
     if scaler is not None:
         state["scaler"] = scaler.state_dict()
     torch.save(state, path)
-    logging.getLogger("parrotllm").debug(f"Checkpoint saved: {path}")
+    logging.getLogger("parrotllm.training").debug(f"Checkpoint saved: {path}")
 
 
 def load_checkpoint(path: str, model: nn.Module,
@@ -140,125 +143,47 @@ def estimate_loss(model: nn.Module, dataset: PretrainingDataset,
 def _log_model_architecture(log: logging.Logger, jlog: JSONLLogger,
                             model: nn.Module, mc: dict,
                             device: torch.device, batch_size: int) -> None:
-    """Log model architecture summary matching the slide 12 example."""
+    """Log model architecture summary."""
     n_params = model.count_parameters()
     n_all = sum(p.numel() for p in model.parameters())
     n_trainable = sum(p.numel() for p in model.parameters() if p.requires_grad)
     n_non_trainable = n_all - n_trainable
-
-    # Embedding param count
-    tok_emb_params = model.tok_emb.weight.numel()
     pos_emb_params = model.pos_emb.weight.numel()
-    n_non_emb = n_params - pos_emb_params  # tok_emb is tied with lm_head
-
-    def _fmt(n: int) -> str:
-        if n >= 1_000_000:
-            return f"{n:,} ({n / 1e6:.2f}M)"
-        if n >= 1_000:
-            return f"{n:,} ({n / 1e3:.1f}K)"
-        return f"{n:,}"
-
-    log.info("")
-    log.info("=" * 60)
-    log.info("MODEL ARCHITECTURE SUMMARY")
-    log.info("=" * 60)
-    log.info("")
-    log.info("Configuration:")
-    log.info(f"  Vocab size: {mc['vocab_size']}")
-    log.info(f"  Block size (context): {mc['context_length']}")
-    log.info(f"  Layers: {mc['n_layers']}")
-    log.info(f"  Heads: {mc['n_heads']}")
-    log.info(f"  Embedding dim: {mc['d_model']}")
-    log.info(f"  FFN hidden dim: {mc['d_ff']}")
-    log.info(f"  Dropout: {mc.get('dropout', 0.0)}")
-    log.info(f"  Bias: {mc.get('bias', False)}")
-    log.info("")
-    log.info("Parameters:")
-    log.info(f"  Total (non-embedding): {_fmt(n_non_emb)}")
-    log.info(f"  Total (all): {_fmt(n_params)}")
-    log.info(f"  Position embeddings: {_fmt(pos_emb_params)}")
-    log.info("")
+    n_non_emb = n_params - pos_emb_params
+    params_size_mb = n_all * 4 / 1e6
 
     # torchinfo summary (if available)
+    torchinfo_str = None
     try:
         from torchinfo import summary
-        B = batch_size
-        T = mc["context_length"]
-        dummy_input = torch.randint(0, mc["vocab_size"], (B, T), device=device)
+        dummy_input = torch.randint(
+            0, mc["vocab_size"], (batch_size, mc["context_length"]), device=device,
+        )
         stats = summary(
             model, input_data=(dummy_input,),
             col_names=("input_size", "output_size", "num_params", "trainable"),
             depth=3, verbose=0,
         )
-        for line in str(stats).splitlines():
-            log.info(line)
+        torchinfo_str = str(stats)
     except ImportError:
         log.debug("torchinfo not installed, skipping layer-wise summary")
 
-    log.info("")
-    log.info(f"Trainable params: {n_trainable:,}")
-    log.info(f"Non-trainable params: {n_non_trainable:,}")
-    log.info(f"Params size (MB): {n_all * 4 / 1e6:.2f}")
-    log.info("")
-    log.info("=" * 60)
+    log.info(fmt_model_summary(
+        mc,
+        n_params=n_params, n_non_emb=n_non_emb, pos_emb_params=pos_emb_params,
+        n_trainable=n_trainable, n_non_trainable=n_non_trainable,
+        params_size_mb=params_size_mb, torchinfo=torchinfo_str,
+    ))
 
-    # JSONL: structured architecture record
     jlog.log("pretraining", "model_architecture",
              vocab_size=mc["vocab_size"],
              context_length=mc["context_length"],
-             n_layers=mc["n_layers"],
-             n_heads=mc["n_heads"],
-             d_model=mc["d_model"],
-             d_ff=mc["d_ff"],
-             dropout=mc.get("dropout", 0.0),
-             bias=mc.get("bias", False),
-             total_params=n_params,
-             total_params_non_embedding=n_non_emb,
-             trainable_params=n_trainable,
-             non_trainable_params=n_non_trainable,
-             params_size_mb=round(n_all * 4 / 1e6, 2))
-
-
-def _render_ascii_loss_curve(
-    loss_history: list[tuple[int, float]], width: int = 50, height: int = 8,
-) -> list[str]:
-    """Render a simple ASCII loss curve for the training log."""
-    if not loss_history:
-        return []
-
-    steps = [s for s, _ in loss_history]
-    losses = [l for _, l in loss_history]
-    min_loss, max_loss = min(losses), max(losses)
-    min_step, max_step = min(steps), max(steps)
-
-    if max_loss == min_loss:
-        max_loss = min_loss + 1
-
-    # Build character grid
-    grid = [[" " for _ in range(width)] for _ in range(height)]
-    step_range = max(max_step - min_step, 1)
-    loss_range = max_loss - min_loss
-
-    for s, l in loss_history:
-        x = int((s - min_step) / step_range * (width - 1))
-        y = int((l - min_loss) / loss_range * (height - 1))
-        y = height - 1 - y  # flip so high loss is at top
-        x = max(0, min(width - 1, x))
-        y = max(0, min(height - 1, y))
-        grid[y][x] = "*"
-
-    lines = ["Loss Curve:", "  Loss", "  ^"]
-    for i, row in enumerate(grid):
-        if i == 0:
-            label = f"{max_loss:>8.2f}"
-        elif i == height - 1:
-            label = f"{min_loss:>8.2f}"
-        else:
-            label = "        "
-        lines.append(f"{label} |{''.join(row)}")
-    lines.append(f"         +{'-' * width}> step")
-    lines.append(f"         {min_step:<{width // 2}}{max_step:>{width - width // 2}}")
-    return lines
+             n_layers=mc["n_layers"], n_heads=mc["n_heads"],
+             d_model=mc["d_model"], d_ff=mc["d_ff"],
+             dropout=mc.get("dropout", 0.0), bias=mc.get("bias", False),
+             total_params=n_params, total_params_non_embedding=n_non_emb,
+             trainable_params=n_trainable, non_trainable_params=n_non_trainable,
+             params_size_mb=round(params_size_mb, 2))
 
 
 def run_train(
@@ -279,12 +204,13 @@ def run_train(
 
     # ── run directory & loggers ───────────────────────────────────────────────
     run_dir = make_run_dir(tc_model.runs_dir)
-    log = setup_logger(
+    setup_logger(
         run_dir,
         console_level=lc_model.console_level,
         file_level=lc_model.file_level,
         component_levels=lc_model.components if lc_model.components else None,
     )
+    log = logging.getLogger("parrotllm.training")
     jlog = JSONLLogger(run_dir)
 
     # Save full config to run directory for reproducibility
@@ -347,13 +273,7 @@ def run_train(
     prev_epoch = 0
     loss_history: list[tuple[int, float]] = []
     
-    log.info("")
-    log.info("=" * 60)
-    log.info("Starting training...")
-    log.info(f"  Steps per epoch (approx): {steps_per_epoch}")
-    log.info(f"  Max steps: {tc['max_steps']}")
-    log.info("=" * 60)
-    log.info("")
+    log.info(fmt_training_start(steps_per_epoch, tc["max_steps"]))
 
     for step in range(start_step, tc["max_steps"]):
         epoch = step // steps_per_epoch if steps_per_epoch > 0 else 0
@@ -462,23 +382,16 @@ def run_train(
              step=tc["max_steps"], epoch=epoch, path=final_ckpt)
 
     # ── ASCII loss curve ───────────────────────────────────────────────────────
-    log.info("")
-    for line in _render_ascii_loss_curve(loss_history):
-        log.info(line)
+    curve = render_ascii_loss_curve(loss_history)
+    if curve:
+        log.info("\n" + curve)
 
-    # ── training complete summary (slide 12 style) ────────────────────────────
+    # ── training complete summary ─────────────────────────────────────────────
     total_seconds = time.time() - train_start
     total_hours = total_seconds / 3600
-    log.info("")
-    log.info("=" * 60)
-    log.info("TRAINING COMPLETE")
-    log.info("=" * 60)
-    log.info(f"  Epochs: {epoch + 1}")
-    log.info(f"  Total steps: {tc['max_steps']}")
-    log.info(f"  Total time: {total_hours:.2f} hours")
-    log.info(f"  Best validation loss: {best_val_loss:.4f}")
-    log.info(f"  Run directory: {run_dir}")
-    log.info("=" * 60)
+    log.info(fmt_training_complete(
+        epoch + 1, tc["max_steps"], total_hours, best_val_loss, run_dir,
+    ))
 
     jlog.log("pretraining", "training_complete",
              epochs=epoch + 1,

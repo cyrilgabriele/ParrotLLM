@@ -32,6 +32,7 @@ from configs import PreprocessConfig
 import hashlib
 import html
 import itertools
+import logging
 import os
 import random as _random
 import re
@@ -47,6 +48,7 @@ os.environ.setdefault("HF_DATASETS_CACHE", "/tmp/parrotllm_hf_cache")
 from datasets import disable_caching, load_from_disk
 from src.utils import build_tokenizer
 
+log = logging.getLogger("parrotllm.preprocess")
 
 FINGERPRINT_LOWERCASE = True
 _BASE_BOILERPLATE_EXACT = (
@@ -555,7 +557,7 @@ def _get_topic_pipeline():
             device = "cuda"
         else:
             device = "cpu"
-        print(f"  [topic] Loading RoBERTa on device={device!r}...")
+        log.info(f"Loading RoBERTa on device={device!r}...")
         _TOPIC_PIPELINE = pipeline(
             "text-classification",
             model=TOPIC_MODEL_NAME,
@@ -783,8 +785,8 @@ def build_test_decontamination_index(
     if wiki_path.exists():
         split_specs.append(("wikitext-103", wiki_path))
     else:
-        print(
-            f"[decontam] WARNING: Missing Wikitext-103 test split at {wiki_path}."
+        log.warning(
+            f"Missing Wikitext-103 test split at {wiki_path}."
             " Run the download script."
         )
 
@@ -792,17 +794,17 @@ def build_test_decontamination_index(
     if owt_eval_path.exists():
         split_specs.append(("nlp26-owt-eval", owt_eval_path))
     else:
-        print(
-            f"[decontam] WARNING: Missing NLP26 OWT eval split at {owt_eval_path}."
+        log.warning(
+            f"Missing NLP26 OWT eval split at {owt_eval_path}."
             " Run the download script."
         )
 
     if not split_specs:
-        print("[decontam] No evaluation splits found; contamination checks disabled.")
+        log.info("No evaluation splits found; contamination checks disabled.")
         return TestDecontaminationIndex(content_hashes=content_hashes)
 
     for name, path in split_specs:
-        print(f"[decontam] Indexing {name} set...")
+        log.info(f"Indexing {name} set...")
         dataset = load_from_disk(str(path))
         before_hashes = len(content_hashes)
 
@@ -831,9 +833,9 @@ def build_test_decontamination_index(
             if fp:
                 content_hashes.add(fp)
 
-        print(f"  -> {len(content_hashes) - before_hashes:,} new hashes")
+        log.info(f"  -> {len(content_hashes) - before_hashes:,} new hashes")
 
-    print(f"[decontam] Total test hashes: {len(content_hashes):,}")
+    log.info(f"Total test hashes: {len(content_hashes):,}")
     return TestDecontaminationIndex(content_hashes=content_hashes)
 
 
@@ -906,14 +908,6 @@ def run_preprocess(args: PreprocessConfig, seed: int) -> None:
     out_dir = data_dir / "processed"
     out_dir.mkdir(parents=True, exist_ok=True)
 
-    '''
-    # if the random seed is set: the output stream must be the same 
-    # i.e. if run twice same 
-    import random
-    print(random.randint(1, 10))
-    print(random.randint(1, 10))
-    '''
-
     # Load dataset
     target_tokens = getattr(args, "target_tokens", None)
     subset_seed = seed
@@ -921,8 +915,8 @@ def run_preprocess(args: PreprocessConfig, seed: int) -> None:
     if target_tokens is not None:
         subset_path = data_dir / f"openwebtext-subset-{target_tokens}-seed{subset_seed}"
         if not subset_path.exists():
-            print(
-                f"[data] Subset not found at {subset_path}. "
+            log.info(
+                f"Subset not found at {subset_path}. "
                 "Downloading now..."
             )
             from src.scripts.download_data import download_openwebtext_subset_by_tokens
@@ -931,16 +925,16 @@ def run_preprocess(args: PreprocessConfig, seed: int) -> None:
                 seed=subset_seed,
                 data_dir=data_dir,
             )
-        print(
-            f"[data] Loading token-budget subset "
+        log.info(
+            f"Loading token-budget subset "
             f"(target={target_tokens:,} tokens, seed={subset_seed})..."
         )
         ds = load_from_disk(str(subset_path))
     elif args.dataset_size == "small":
-        print("[data] Loading 10k subset...")
+        log.info("Loading 10k subset...")
         ds = load_from_disk(str(data_dir / "openwebtext-10k"))
     elif args.dataset_size == "dummy":
-        print("[data] Loading 100 subset...")
+        log.info("Loading 100 subset...")
         ds = load_from_disk(str(data_dir / "openwebtext-100"))
     else:
         local_path = data_dir / "openwebtext"
@@ -949,10 +943,10 @@ def run_preprocess(args: PreprocessConfig, seed: int) -> None:
                 f"Full OpenWebText not found at {local_path}. "
                 "Run: uv run python src/scripts/download_data.py openwebtext-full"
             )
-        print("[data] Loading full OpenWebText from disk...")
+        log.info("Loading full OpenWebText from disk...")
         ds = load_from_disk(str(local_path))
 
-    print(f"[data] Loaded {len(ds):,} documents")
+    log.info(f"Loaded {len(ds):,} documents")
 
     # Load Tokenizer
     from src.utils import DEFAULT_TOKENIZER_NAME
@@ -960,8 +954,8 @@ def run_preprocess(args: PreprocessConfig, seed: int) -> None:
         add_prefix_space=False,
         padding_side="right",
     )
-    print(
-        f"[data] Tokenizer: {DEFAULT_TOKENIZER_NAME}"
+    log.info(
+        f"Tokenizer: {DEFAULT_TOKENIZER_NAME}"
         f" (vocab_size={len(tokenizer):,}, pad_token={tokenizer.pad_token!r})"
     )
 
@@ -976,7 +970,7 @@ def run_preprocess(args: PreprocessConfig, seed: int) -> None:
     # Build decontamination indexes (ngrams + normalized hashes)
     skip_decontam = getattr(args, "skip_decontam", False)
     if skip_decontam:
-        print("[decontam] Skipping decontamination (--skip-decontam flag set)")
+        log.info("Skipping decontamination (--skip-decontam flag set)")
         test_index = TestDecontaminationIndex(content_hashes=set())
     else:
         test_index = build_test_decontamination_index(
@@ -991,18 +985,18 @@ def run_preprocess(args: PreprocessConfig, seed: int) -> None:
         num_workers = int(num_workers)
 
     total_docs = len(ds)
-    print(f"[preprocess] Processing {total_docs:,} documents (num_workers={num_workers})...")
+    log.info(f"Processing {total_docs:,} documents (num_workers={num_workers})...")
     _t = time.time()
 
     # ── Phase 1: Decontamination ──────────────────────────────────────────
     # Runs first on raw text so sanitization cannot alter hashes and let
     # contaminated documents slip through.
     if skip_decontam:
-        print("\n[phase 1] Decontamination... SKIPPED")
+        log.info("Phase 1: Decontamination... SKIPPED")
         after_decontam = len(ds)
     else:
         _t = time.time()
-        print("\n[phase 1] Decontamination...")
+        log.info("Phase 1: Decontamination...")
         ds = ds.map(
             lambda batch: decontaminate_batch(batch["text"], test_index),
             batched=True,
@@ -1013,7 +1007,7 @@ def run_preprocess(args: PreprocessConfig, seed: int) -> None:
         ds = ds.filter(lambda row: row["decontam_status"] == "kept", num_proc=num_workers)
         ds = ds.remove_columns(["decontam_status"])
         after_decontam = len(ds)
-        print(
+        log.info(
             f"  kept {after_decontam:,} / {before_decontam:,}"
             f" (removed {before_decontam - after_decontam:,})"
             f"  [{time.time() - _t:.0f}s]"
@@ -1021,7 +1015,7 @@ def run_preprocess(args: PreprocessConfig, seed: int) -> None:
 
     # ── Phase 2: Sanitization ────────────────────────────────────────────
     _t = time.time()
-    print("\n[phase 2] Sanitization...")
+    log.info("Phase 2: Sanitization...")
     ds = ds.map(
         lambda batch: sanitize_batch(batch["text"]),
         batched=True,
@@ -1032,7 +1026,7 @@ def run_preprocess(args: PreprocessConfig, seed: int) -> None:
     ds = ds.filter(lambda row: row["sanitize_status"] == "kept", num_proc=num_workers)
     ds = ds.remove_columns(["sanitize_status"])
     after_sanitize = len(ds)
-    print(
+    log.info(
         f"  kept {after_sanitize:,} / {before_sanitize:,}"
         f" (removed {before_sanitize - after_sanitize:,})"
         f"  [{time.time() - _t:.0f}s]"
@@ -1040,7 +1034,7 @@ def run_preprocess(args: PreprocessConfig, seed: int) -> None:
 
     # ── Phase 3: Language filter ─────────────────────────────────────────
     _t = time.time()
-    print("\n[phase 3] Language detection...")
+    log.info("Phase 3: Language detection...")
     _lang_model_path = str(lang_model_path)
     ds = ds.map(
         lambda batch: detect_language_batch(batch["text"], _lang_model_path),
@@ -1056,7 +1050,7 @@ def run_preprocess(args: PreprocessConfig, seed: int) -> None:
     )
     ds = ds.remove_columns(["lang", "lang_conf"])
     after_lang = len(ds)
-    print(
+    log.info(
         f"  kept {after_lang:,} / {before_lang:,}"
         f" (removed {before_lang - after_lang:,})"
         f"  [{time.time() - _t:.0f}s]"
@@ -1071,12 +1065,12 @@ def run_preprocess(args: PreprocessConfig, seed: int) -> None:
     subset_seed = seed
 
     if not topic_classes or skip_topic_filter:
-        print("\n[phase 3.5] Topic filter... SKIPPED")
+        log.info("Phase 3.5: Topic filter... SKIPPED")
         after_topic = len(ds)
     else:
         _t = time.time()
-        print(f"\n[phase 3.5] Topic classification (keep: {topic_classes})...")
-        print(f"  Model: {TOPIC_MODEL_NAME}")
+        log.info(f"Phase 3.5: Topic classification (keep: {topic_classes})...")
+        log.info(f"  Model: {TOPIC_MODEL_NAME}")
 
         pipe = _get_topic_pipeline()
         from tqdm import tqdm as _tqdm
@@ -1118,8 +1112,8 @@ def run_preprocess(args: PreprocessConfig, seed: int) -> None:
                         total_after_filter * topic_distribution[cls] / weight_sum
                     )
                     if len(available) < target_count:
-                        print(
-                            f"  [warn] '{cls}': only {len(available):,} docs "
+                        log.warning(
+                            f"'{cls}': only {len(available):,} docs "
                             f"available, target was {target_count:,} — using all."
                         )
                         final_indices.extend(available)
@@ -1135,10 +1129,10 @@ def run_preprocess(args: PreprocessConfig, seed: int) -> None:
         for cls in topic_classes:
             n_cls = sum(1 for lbl in kept_labels if lbl == cls)
             pct = 100.0 * n_cls / max(len(ds), 1)
-            print(f"  {cls}: {n_cls:,} docs ({pct:.1f}%)")
+            log.info(f"  {cls}: {n_cls:,} docs ({pct:.1f}%)")
 
         after_topic = len(ds)
-        print(
+        log.info(
             f"  kept {after_topic:,} / {before_topic:,}"
             f" (removed {before_topic - after_topic:,})"
             f"  [{time.time() - _t:.0f}s]"
@@ -1151,10 +1145,10 @@ def run_preprocess(args: PreprocessConfig, seed: int) -> None:
     skip_quality_filter = getattr(args, "skip_quality_filter", False)
 
     if filter_mode == "none" or skip_code_filter:
-        print("\n[phase 4] Code/artifact removal... SKIPPED")
+        log.info("Phase 4: Code/artifact removal... SKIPPED")
         after_code = len(ds)
     elif filter_mode == "heuristic":
-        print("\n[phase 4] Code/artifact removal (heuristic)...")
+        log.info("Phase 4: Code/artifact removal (heuristic)...")
         ds = ds.map(
             lambda batch: heuristic_code_filter_batch(batch["text"]),
             batched=True,
@@ -1168,7 +1162,7 @@ def run_preprocess(args: PreprocessConfig, seed: int) -> None:
         )
         ds = ds.remove_columns(["code_filter_status"])
         after_code = len(ds)
-        print(
+        log.info(
             f"  kept {after_code:,} / {before_code:,}"
             f" (removed {before_code - after_code:,})"
         )
@@ -1179,7 +1173,7 @@ def run_preprocess(args: PreprocessConfig, seed: int) -> None:
                 f"Code classifier model not found at {code_model_path}. "
                 "Train it with: uv run python src/scripts/train_filter_models.py code-classifier"
             )
-        print("\n[phase 4] Code/artifact removal (classifier)...")
+        log.info("Phase 4: Code/artifact removal (classifier)...")
         _code_model_path = str(code_model_path)
         ds = ds.map(
             lambda batch: classifier_code_filter_batch(batch["text"], _code_model_path),
@@ -1194,17 +1188,17 @@ def run_preprocess(args: PreprocessConfig, seed: int) -> None:
         )
         ds = ds.remove_columns([c for c in ["code_filter_status", "code_score"] if c in ds.column_names])
         after_code = len(ds)
-        print(
+        log.info(
             f"  kept {after_code:,} / {before_code:,}"
             f" (removed {before_code - after_code:,})"
         )
 
     # ── Phase 5: Quality / coherence filter ───────────────────────────────
     if filter_mode == "none" or skip_quality_filter:
-        print("\n[phase 5] Quality/coherence filter... SKIPPED")
+        log.info("Phase 5: Quality/coherence filter... SKIPPED")
         after_quality = len(ds)
     elif filter_mode == "heuristic":
-        print("\n[phase 5] Quality/coherence filter (heuristic)...")
+        log.info("Phase 5: Quality/coherence filter (heuristic)...")
         ds = ds.map(
             lambda batch: heuristic_quality_filter_batch(batch["text"]),
             batched=True,
@@ -1218,7 +1212,7 @@ def run_preprocess(args: PreprocessConfig, seed: int) -> None:
         )
         ds = ds.remove_columns(["quality_filter_status"])
         after_quality = len(ds)
-        print(
+        log.info(
             f"  kept {after_quality:,} / {before_quality:,}"
             f" (removed {before_quality - after_quality:,})"
         )
@@ -1242,7 +1236,7 @@ def run_preprocess(args: PreprocessConfig, seed: int) -> None:
                 "kenlm is required for --filter-mode classifier. "
                 "Install with: pip install 'parrotllm[classifier]'"
             )
-        print("\n[phase 5] Quality/coherence filter (classifier)...")
+        log.info("Phase 5: Quality/coherence filter (classifier)...")
         _kenlm_model = _kenlm.Model(str(kenlm_path))
         _edu_path = str(edu_path)
         ds = ds.map(
@@ -1260,7 +1254,7 @@ def run_preprocess(args: PreprocessConfig, seed: int) -> None:
         )
         ds = ds.remove_columns([c for c in ["quality_filter_status", "perplexity", "edu_score"] if c in ds.column_names])
         after_quality = len(ds)
-        print(
+        log.info(
             f"  kept {after_quality:,} / {before_quality:,}"
             f" (removed {before_quality - after_quality:,})"
         )
@@ -1268,10 +1262,10 @@ def run_preprocess(args: PreprocessConfig, seed: int) -> None:
     # ── Phase 6: Fuzzy deduplication ──────────────────────────────────────
     skip_dedup = getattr(args, "skip_dedup", False)
     if skip_dedup:
-        print("\n[phase 6] Fuzzy deduplication... SKIPPED")
+        log.info("Phase 6: Fuzzy deduplication... SKIPPED")
         after_dedup = len(ds)
     else:
-        print("\n[phase 6] Fuzzy deduplication...")
+        log.info("Phase 6: Fuzzy deduplication...")
         ds = ds.map(
             _minhash_signature_batch,
             input_columns=["text"],
@@ -1285,15 +1279,15 @@ def run_preprocess(args: PreprocessConfig, seed: int) -> None:
         ds = ds.select([i for i in range(len(ds)) if i not in dup_indices])
         ds = ds.remove_columns(["minhash_sig"])
         after_dedup = len(ds)
-        print(f"  kept {after_dedup:,} / {before_dedup:,} (removed {before_dedup - after_dedup:,} near-duplicates)")
+        log.info(f"  kept {after_dedup:,} / {before_dedup:,} (removed {before_dedup - after_dedup:,} near-duplicates)")
 
     # ── Phase 6.1: Ellipsis filter ──────────────────────────────────────────
     skip_ellipsis_filter = getattr(args, "skip_ellipsis_filter", False)
     if skip_ellipsis_filter:
-        print("\n[phase 6.1] Ellipsis filter... SKIPPED")
+        log.info("Phase 6.1: Ellipsis filter... SKIPPED")
         after_ellipsis = len(ds)
     else:
-        print("\n[phase 6.1] Ellipsis filter...")
+        log.info("Phase 6.1: Ellipsis filter...")
         ds = ds.map(
             lambda batch: ellipsis_filter_batch(batch["text"]),
             batched=True,
@@ -1304,14 +1298,14 @@ def run_preprocess(args: PreprocessConfig, seed: int) -> None:
         ds = ds.filter(lambda row: row["ellipsis_filter_status"] == "kept", num_proc=num_workers)
         ds = ds.remove_columns(["ellipsis_filter_status"])
         after_ellipsis = len(ds)
-        print(
+        log.info(
             f"  kept {after_ellipsis:,} / {before_ellipsis:,}"
             f" (removed {before_ellipsis - after_ellipsis:,})"
         )
 
 # ── Phase 7: Tokenization ──────────────────────────────────────────
     _t = time.time()
-    print("\n[phase 7] Tokenization...")
+    log.info("Phase 7: Tokenization...")
     ds = ds.map(
         lambda batch: tokenize_batch(batch["text"], tokenizer),
         batched=True,
@@ -1321,7 +1315,7 @@ def run_preprocess(args: PreprocessConfig, seed: int) -> None:
     before_tok = len(ds)
     ds = ds.filter(lambda row: row["n_tokens"] >= 64, num_proc=1)
     after_tok = len(ds)
-    print(
+    log.info(
         f"  kept {after_tok:,} / {before_tok:,}"
         f" (removed {before_tok - after_tok:,} short docs)"
         f"  [{time.time() - _t:.0f}s]"
@@ -1331,19 +1325,19 @@ def run_preprocess(args: PreprocessConfig, seed: int) -> None:
     _skip_code = filter_mode == "none" or skip_code_filter
     _skip_quality = filter_mode == "none" or skip_quality_filter
     _skip_topic = not topic_classes or skip_topic_filter
-    print(f"\n[preprocess] Filter summary:")
-    print(f"  input:            {total_docs:,}")
-    print(f"  after decontam:   {after_decontam:,}{' (skipped)' if skip_decontam else ''}")
-    print(f"  after sanitize:   {after_sanitize:,}")
-    print(f"  after lang:       {after_lang:,}")
-    print(f"  after topic:      {after_topic:,}{' (skipped)' if _skip_topic else ''}")
-    print(f"  after code filter:{after_code:,}{' (skipped)' if _skip_code else ''}")
-    print(f"  after quality:    {after_quality:,}{' (skipped)' if _skip_quality else ''}")
-    print(f"  after dedup:      {after_dedup:,}{' (skipped)' if skip_dedup else ''}")
-    print(f"  after ellipsis:   {after_ellipsis:,}{' (skipped)' if skip_ellipsis_filter else ''}")
-    print(f"  after tokenize:   {after_tok:,}")
+    log.info(f"Filter summary:")
+    log.info(f"  input:            {total_docs:,}")
+    log.info(f"  after decontam:   {after_decontam:,}{' (skipped)' if skip_decontam else ''}")
+    log.info(f"  after sanitize:   {after_sanitize:,}")
+    log.info(f"  after lang:       {after_lang:,}")
+    log.info(f"  after topic:      {after_topic:,}{' (skipped)' if _skip_topic else ''}")
+    log.info(f"  after code filter:{after_code:,}{' (skipped)' if _skip_code else ''}")
+    log.info(f"  after quality:    {after_quality:,}{' (skipped)' if _skip_quality else ''}")
+    log.info(f"  after dedup:      {after_dedup:,}{' (skipped)' if skip_dedup else ''}")
+    log.info(f"  after ellipsis:   {after_ellipsis:,}{' (skipped)' if skip_ellipsis_filter else ''}")
+    log.info(f"  after tokenize:   {after_tok:,}")
 
-    print("\n[phase 8] Writing binary output...")
+    log.info("Phase 8: Writing binary output...")
     # Flatten all per-document token ID lists into a single contiguous array.
     # use of itertools.chain.from_iterable as it is ~5× faster than a Python-level extend loop
     # over millions of rows because the chaining happens in C.  Providing the
@@ -1353,7 +1347,7 @@ def run_preprocess(args: PreprocessConfig, seed: int) -> None:
         dtype=np.uint16,
         count=int(sum(ds["n_tokens"])),
     )
-    print(f"  Total tokens kept: {len(token_array):,}")
+    log.info(f"  Total tokens kept: {len(token_array):,}")
 
     # Reserve the first 1 % of tokens for validation; the rest become training data.
     # Taking from the front keeps val tokens contiguous on disk; the 1 % figure
@@ -1379,8 +1373,8 @@ def run_preprocess(args: PreprocessConfig, seed: int) -> None:
 
     train_tokens = _pad_to_chunk(train_tokens)
     val_tokens   = _pad_to_chunk(val_tokens)
-    print(f"  train: {len(train_tokens):,} tokens → {len(train_tokens) // chunk_size:,} complete chunks (chunk_size={chunk_size})")
-    print(f"  val:   {len(val_tokens):,} tokens → {len(val_tokens) // chunk_size:,} complete chunks")
+    log.info(f"  train: {len(train_tokens):,} tokens → {len(train_tokens) // chunk_size:,} complete chunks (chunk_size={chunk_size})")
+    log.info(f"  val:   {len(val_tokens):,} tokens → {len(val_tokens) // chunk_size:,} complete chunks")
 
     # Save
     train_path = out_dir / "train.bin"
@@ -1388,11 +1382,11 @@ def run_preprocess(args: PreprocessConfig, seed: int) -> None:
     train_tokens.tofile(str(train_path))
     val_tokens.tofile(str(val_path))
 
-    print(f"\n[done] train: {train_tokens.nbytes / 1e6:.1f} MB -> {train_path}")
-    print(f"[done] val:   {val_tokens.nbytes / 1e6:.1f} MB -> {val_path}")
+    log.info(f"train: {train_tokens.nbytes / 1e6:.1f} MB -> {train_path}")
+    log.info(f"val:   {val_tokens.nbytes / 1e6:.1f} MB -> {val_path}")
 
     # Clean up temporary HF dataset cache written during this run
     _hf_cache = Path(os.environ.get("HF_DATASETS_CACHE", "/tmp/parrotllm_hf_cache"))
     if _hf_cache.exists() and str(_hf_cache).startswith("/tmp"):
         shutil.rmtree(_hf_cache, ignore_errors=True)
-        print(f"[cleanup] Removed temporary HF cache at {_hf_cache}")
+        log.info(f"Removed temporary HF cache at {_hf_cache}")

@@ -6,6 +6,7 @@ import argparse
 from pathlib import Path
 
 from configs import load_project_config
+from src.logging_utils import init_logging
 from src.utils import get_device, set_seed, maybe_load_hf_token
 
 
@@ -27,6 +28,16 @@ def main() -> None:
     args = parser.parse_args()
 
     project_config = load_project_config(args.config)
+
+    logging_cfg = project_config.logging
+    if logging_cfg:
+        init_logging(
+            console_level=logging_cfg.console_level,
+            component_levels=logging_cfg.components if logging_cfg.components else None,
+        )
+    else:
+        init_logging()
+
     config_dict = project_config.model_dump(mode="python")
     HF_TOKEN = maybe_load_hf_token()
 
@@ -35,8 +46,6 @@ def main() -> None:
 
     if args.stage == "preprocess":
         preprocess_cfg = _require_section(project_config.preprocess, "preprocess")
-        # TODO: add the logging into the preprocessing and then wire this below
-        _require_section(project_config.logging, "logging")
         from src.data.preprocess import run_preprocess
 
         run_preprocess(preprocess_cfg, SEED)
@@ -45,7 +54,6 @@ def main() -> None:
     if args.stage == "train":
         training_cfg = _require_section(project_config.training, "training")
         _require_section(project_config.model, "model")
-        _require_section(project_config.logging, "logging")
         device = get_device(training_cfg.device)
         from src.training.trainer import run_train
 

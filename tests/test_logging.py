@@ -8,6 +8,19 @@ import tempfile
 from src.logging_utils import JSONLLogger, make_run_dir, setup_logger
 
 
+def test_init_logging_console_only():
+    """init_logging sets up console handler on root parrotllm logger."""
+    from src.logging_utils import init_logging
+
+    log = init_logging(console_level="WARNING")
+    assert log.name == "parrotllm"
+    console_handlers = [h for h in log.handlers if isinstance(h, logging.StreamHandler)
+                        and not isinstance(h, logging.FileHandler)]
+    assert len(console_handlers) == 1
+    assert console_handlers[0].level == logging.WARNING
+    log.handlers.clear()
+
+
 def test_setup_logger_creates_log_file():
     with tempfile.TemporaryDirectory() as tmp:
         log = setup_logger(tmp, console_level="WARNING", file_level="DEBUG")

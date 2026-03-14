@@ -24,7 +24,7 @@ pipeline, Rae et al., 2021, [arXiv:2112.11446](https://arxiv.org/abs/2112.11446)
 | Goal | `--target-tokens` |
 |---|---|
 | Comparison run (~150M clean tokens) | `300000000` |
-| Full Chinchilla-optimal final run (~700M clean tokens) | `1400000000` |
+| Full Chinchilla-optimal final run (~700M clean tokens) -> we go for ~800M to have some buffer | `1400000000` |
 
 ---
 
@@ -55,12 +55,8 @@ Motivation: establishes the raw web-text baseline. Gopher
 pipeline as its starting point.
 
 ```bash
-uv run python main.py --stage preprocess \
-  --target-tokens 300000000 \
-  --subset-seed 42 \
-  --skip-topic-filter \
-  --filter-mode heuristic \
-  --data-dir data/variant-A
+python main.py --stage preprocess --config configs/preprocess_var_a.yaml
+
 ```
 
 ---
@@ -71,12 +67,8 @@ Motivation: tests whether any topic filtering helps at all, before introducing s
 breadth matches the Gopher/MassiveText approach of keeping diverse but filtered text.
 
 ```bash
-uv run python main.py --stage preprocess \
-  --target-tokens 300000000 \
-  --subset-seed 42 \
-  --topics World Sports Business "Sci/Tech" \
-  --filter-mode heuristic \
-  --data-dir data/variant-B
+python main.py --stage preprocess --config configs/preprocess_var_b.yaml
+
 ```
 
 ---
@@ -88,12 +80,8 @@ reports, scores). Removing it raises the average reasoning and factual content p
 with the phi-1 finding that "textbook quality" data disproportionately improves model quality.
 
 ```bash
-uv run python main.py --stage preprocess \
-  --target-tokens 300000000 \
-  --subset-seed 42 \
-  --topics "World:0.34" "Business:0.33" "Sci/Tech:0.33" \
-  --filter-mode heuristic \
-  --data-dir data/variant-C
+python main.py --stage preprocess --config configs/preprocess_var_c.yaml
+
 ```
 
 ---
@@ -106,12 +94,8 @@ budget than low-density text. This tests whether doubling down on technical/scie
 accelerates convergence.
 
 ```bash
-uv run python main.py --stage preprocess \
-  --target-tokens 300000000 \
-  --subset-seed 42 \
-  --topics "Sci/Tech:0.55" "World:0.25" "Business:0.20" \
-  --filter-mode heuristic \
-  --data-dir data/variant-D
+python main.py --stage preprocess --config configs/preprocess_var_d.yaml
+
 ```
 
 ---

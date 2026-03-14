@@ -31,8 +31,15 @@ def build_tokenizer(
     *,
     add_prefix_space: bool = False,
     padding_side: str = "right",
+    tokenizer_name: str | None = None,
 ) -> GPT2TokenizerFast:
-    """Return a GPT-2 fast tokenizer with a consistent PAD token."""
+    """Return a GPT-2 fast tokenizer with a consistent PAD token.
+    
+    Args:
+        add_prefix_space: Whether to add space prefix for BPE.
+        padding_side: Which side to pad ('left' or 'right').
+        tokenizer_name: Tokenizer model name (default: uses DEFAULT_TOKENIZER_NAME).
+    """
 
     def _load(name: str) -> GPT2TokenizerFast:
         return GPT2TokenizerFast.from_pretrained(
@@ -41,7 +48,8 @@ def build_tokenizer(
             add_prefix_space=add_prefix_space,
         )
 
-    tokenizer = _load(DEFAULT_TOKENIZER_NAME)
+    model_name = tokenizer_name if tokenizer_name is not None else DEFAULT_TOKENIZER_NAME
+    tokenizer = _load(model_name)
 
     tokenizer.padding_side = padding_side
     if tokenizer.pad_token != PAD_TOKEN:

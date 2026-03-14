@@ -11,6 +11,34 @@ import os
 from datetime import datetime, timezone
 
 
+def init_logging(
+    *,
+    console_level: str = "INFO",
+    component_levels: dict[str, str] | None = None,
+) -> logging.Logger:
+    """Set up console-only logging for non-training stages."""
+    logger = logging.getLogger("parrotllm")
+    logger.setLevel(logging.DEBUG)
+    logger.handlers.clear()
+
+    fmt = logging.Formatter(
+        "%(asctime)s - %(levelname)s - %(name)s - %(message)s",
+        datefmt="%Y-%m-%d %H:%M:%S",
+    )
+
+    ch = logging.StreamHandler()
+    ch.setLevel(getattr(logging, console_level.upper(), logging.INFO))
+    ch.setFormatter(fmt)
+    logger.addHandler(ch)
+
+    if component_levels:
+        for component, level in component_levels.items():
+            child = logging.getLogger(f"parrotllm.{component}")
+            child.setLevel(getattr(logging, level.upper(), logging.DEBUG))
+
+    return logger
+
+
 def setup_logger(
     run_dir: str,
     *,
@@ -38,7 +66,7 @@ def setup_logger(
     logger.handlers.clear()
 
     fmt = logging.Formatter(
-        "%(asctime)s - %(levelname)s - %(message)s",
+        "%(asctime)s - %(levelname)s - %(name)s - %(message)s",
         datefmt="%Y-%m-%d %H:%M:%S",
     )
 

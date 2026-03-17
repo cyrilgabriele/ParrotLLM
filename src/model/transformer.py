@@ -66,20 +66,26 @@ class MultiHeadAttention(nn.Module):
         return out
 
 
-# ── GELU MLP ─────────────────────────────────────────────────────────────────
+# ── SwiGLU MLP ───────────────────────────────────────────────────────────────
 
-class GELUMLP(nn.Module):
+class SwiGLUMLP(nn.Module):
+    """SwiGLU feed-forward network (Shazeer, arXiv:2002.05202).
+
+    Uses SiLU-gated mechanism with 3 projections. d_ff should be 8/3 * d_model
+    (rounded) to match the parameter count of a standard 4x GELU FFN.
+    Used by LLaMA, Mistral, PaLM, MobileLLM, Gemma.
+    """
     def __init__(self, d_model: int, d_ff: int, bias: bool = False, dropout: float = 0.0):
         super().__init__()
-        self.c_fc = nn.Linear(d_model, d_ff, bias=bias)
-        self.gelu = nn.GELU(approximate='tanh')
-        self.c_proj = nn.Linear(d_ff, d_model, bias=bias)
+        self.gate_proj = nn.Linear(d_model, d_ff, bias=bias)
+        self.up_proj = nn.Linear(d_model, d_ff, bias=bias)
+        self.down_proj = nn.Linear(d_ff, d_model, bias=bias)
         self.dropout = nn.Dropout(dropout)
 
     def forward(self, x: torch.Tensor) -> torch.Tensor:
-        x = self.c_fc(x)
-        x = self.gelu(x)
-        x = self.c_proj(x)
+        gate = F.silu(self.gate_proj(x))
+        x = gate * self.up_proj(x)
+        x = self.down_proj(x)
         x = self.dropout(x)
         return x
 
@@ -93,7 +99,7 @@ class TransformerBlock(nn.Module):
         self.ln_1 = RMSNorm(d_model)
         self.attn = MultiHeadAttention(d_model, n_heads, bias, dropout)
         self.ln_2 = RMSNorm(d_model)
-        self.mlp = GELUMLP(d_model, d_ff, bias, dropout)
+        self.mlp = SwiGLUMLP(d_model, d_ff, bias, dropout)
 
     def forward(self, x: torch.Tensor) -> torch.Tensor:
         x = x + self.attn(self.ln_1(x))
@@ -134,7 +140,7 @@ class ParrotLLM(nn.Module):
         for name, p in self.named_parameters():
             if name.endswith("weight") and p.dim() >= 2:
                 # Scaled init for residual projections
-                if name.endswith("o_proj.weight") or name.endswith("c_proj.weight"):
+                if name.endswith("o_proj.weight") or name.endswith("down_proj.weight"):
                     nn.init.normal_(p, mean=0.0, std=0.02 / math.sqrt(2 * n_layers))
                 else:
                     nn.init.normal_(p, mean=0.0, std=0.02)

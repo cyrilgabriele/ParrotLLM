@@ -1,0 +1,35 @@
+# Variant D: Sci/Tech-heavy
+# Favors technical/scientific content (high information density).
+# Expected: Faster loss convergence due to information density.
+# Reference: DATASET_EXPERIMENT_PLAN.md (Kaplan et al. 2001.08361)
+
+preprocess:
+  dataset_size: dummy
+  lang: en
+  data_dir: data
+  num_workers: auto
+  skip_dedup: false
+  skip_decontam: false
+  filter_mode: heuristic
+  skip_code_filter: false
+  skip_quality_filter: false
+  skip_ellipsis_filter: false
+  append_eos_token: true
+  token_dtype: uint16
+  min_tokens: 8
+  context_length: 1024
+  target_tokens: 300000000
+  topic_classes:
+    - World
+    - Business
+    - Sci/Tech
+  topic_distribution:
+    Sci/Tech: 0.55
+    World: 0.25
+    Business: 0.20
+  skip_topic_filter: false
+  tokenizer_name: null
+
+logging:
+  console_level: INFO
+  file_level: DEBUG

@@ -64,6 +64,160 @@ class PreprocessConfig(BaseModel):
     )
     skip_topic_filter: bool = Field(..., description="Force-skip topic filtering even if classes provided.")
 
+    # ── Tokenizer ──────────────────────────────────────────────────────────────────
+    tokenizer_name: str | None = Field(
+        default=None,
+        description="Tokenizer model name (e.g. 'openai-community/gpt2'). If None, uses DEFAULT_TOKENIZER_NAME.",
+    )
+
+    # ── Deduplication (Phase 6) ────────────────────────────────────────────────────
+    dedup_num_perm: int = Field(
+        default=16,
+        ge=1,
+        description="MinHash permutations per document.",
+    )
+    dedup_bands: int = Field(
+        default=4,
+        ge=1,
+        description="Number of LSH bands; must satisfy bands × rows == num_perm.",
+    )
+    dedup_rows: int = Field(
+        default=4,
+        ge=1,
+        description="Rows per LSH band.",
+    )
+    dedup_shingle_size: int = Field(
+        default=5,
+        ge=1,
+        description="Word n-gram window for deduplication fingerprinting.",
+    )
+    dedup_threshold: float = Field(
+        default=0.8,
+        ge=0.0,
+        le=1.0,
+        description="Jaccard similarity threshold for near-duplicates.",
+    )
+
+    # ── Language & Topic Detection (Phases 3, 3.5) ──────────────────────────────────
+    language_confidence_threshold: float = Field(
+        default=0.8,
+        ge=0.0,
+        le=1.0,
+        description="Minimum fastText confidence to keep a document for target language.",
+    )
+    topic_model_name: str = Field(
+        default="textattack/distilbert-base-uncased-ag-news",
+        description="Hugging Face model name for AG News topic classification.",
+    )
+    topic_text_truncation: int = Field(
+        default=256,
+        ge=1,
+        description="Characters to truncate per document in topic classification.",
+    )
+    topic_batch_size: int = Field(
+        default=512,
+        ge=1,
+        description="Batch size for topic classifier.",
+    )
+
+    # ── Heuristic Filter Thresholds (Phases 2, 4, 5) ───────────────────────────────
+    html_tag_density_threshold: float = Field(
+        default=0.02,
+        ge=0.0,
+        le=1.0,
+        description="Max fraction of characters that may be HTML/XML tags.",
+    )
+    code_symbol_ratio_threshold: float = Field(
+        default=0.10,
+        ge=0.0,
+        le=1.0,
+        description="Max allowed fraction of code-symbol characters.",
+    )
+    programming_keyword_max: int = Field(
+        default=3,
+        ge=0,
+        description="Max distinct programming keywords before doc is flagged as code.",
+    )
+    min_word_count: int = Field(
+        default=50,
+        ge=1,
+        description="Minimum words per document.",
+    )
+    min_char_count: int = Field(
+        default=200,
+        ge=1,
+        description="Minimum characters per document.",
+    )
+    max_word_length: int = Field(
+        default=40,
+        ge=1,
+        description="Max word length (longer tokens likely URLs or hashes).",
+    )
+    ngram_size: int = Field(
+        default=10,
+        ge=1,
+        description="Sliding-window size for n-gram repetition detection.",
+    )
+    ngram_max_repeats: int = Field(
+        default=3,
+        ge=1,
+        description="Max allowed repetitions of any n-gram.",
+    )
+
+    # ── Ellipsis Filter (Phase 6.1) ────────────────────────────────────────────────
+    ellipsis_ratio_threshold: float = Field(
+        default=0.1,
+        ge=0.0,
+        description="Max ellipsis count per word; exceeding drops the doc.",
+    )
+
+    # ── Classifier Thresholds (Phases 4, 5) ───────────────────────────────────────
+    code_classifier_threshold: float = Field(
+        default=0.5,
+        ge=0.0,
+        le=1.0,
+        description="Minimum fastText confidence to classify doc as code.",
+    )
+    kenlm_perplexity_low: float = Field(
+        default=10.0,
+        ge=0.0,
+        description="KenLM perplexity floor; below this is unnaturally repetitive.",
+    )
+    kenlm_perplexity_high: float = Field(
+        default=100000.0,
+        ge=0.0,
+        description="KenLM perplexity ceiling; above this is incoherent.",
+    )
+    educational_quality_min: int = Field(
+        default=2,
+        ge=0,
+        le=5,
+        description="fastText edu-quality min (0-5 scale).",
+    )
+
+    # ── Processing Parameters ──────────────────────────────────────────────────────
+    batch_size: int = Field(
+        default=2048,
+        ge=1,
+        description="Batch size for dataset.map operations.",
+    )
+    minimum_tokens_per_doc: int = Field(
+        default=64,
+        ge=1,
+        description="Minimum tokens per document after tokenization (Phase 7).",
+    )
+    validation_split_ratio: float = Field(
+        default=0.01,
+        ge=0.0,
+        le=1.0,
+        description="Fraction of tokens reserved for validation (Phase 8).",
+    )
+    num_workers_multiplier: float = Field(
+        default=2.0,
+        ge=0.1,
+        description="When num_workers='auto', multiply cpu_count by this value.",
+    )
+
     @field_validator("data_dir", mode="before")
     @classmethod
     def _coerce_data_dir(cls, value):

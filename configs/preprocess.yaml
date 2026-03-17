@@ -10,7 +10,6 @@ preprocess:
   skip_code_filter: true
   skip_quality_filter: true
   skip_ellipsis_filter: true
-  tokenizer_name: openai-community/gpt2
   append_eos_token: false
   token_dtype: uint16
   min_tokens: 8
@@ -19,6 +18,15 @@ preprocess:
   topic_classes: null
   topic_distribution: null
   skip_topic_filter: true
+  
+  # Optional: override default tokenizer
+  tokenizer_name: null
+  
+  # Optional: fine-tune batch processing (uses defaults if omitted)
+  batch_size: 2048
+  minimum_tokens_per_doc: 64
+  validation_split_ratio: 0.01
+  num_workers_multiplier: 2.0
 
 logging:
   console_level: INFO

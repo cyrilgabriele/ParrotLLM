@@ -1,0 +1,36 @@
+# Variant B: All 4 topics, uniform distribution
+# Tests whether any topic filtering helps at all, keeping diverse content.
+# Reference: DATASET_EXPERIMENT_PLAN.md
+
+preprocess:
+  dataset_size: dummy
+  lang: en
+  data_dir: data
+  num_workers: auto
+  skip_dedup: false
+  skip_decontam: false
+  filter_mode: heuristic
+  skip_code_filter: false
+  skip_quality_filter: false
+  skip_ellipsis_filter: false
+  append_eos_token: true
+  token_dtype: uint16
+  min_tokens: 8
+  context_length: 1024
+  target_tokens: 300000000
+  topic_classes:
+    - World
+    - Sports
+    - Business
+    - Sci/Tech
+  topic_distribution:
+    World: 0.25
+    Sports: 0.25
+    Business: 0.25
+    Sci/Tech: 0.25
+  skip_topic_filter: false
+  tokenizer_name: null
+
+logging:
+  console_level: INFO
+  file_level: DEBUG

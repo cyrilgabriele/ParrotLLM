@@ -1,0 +1,35 @@
+# Variant C: Knowledge-focused (no Sports)
+# Removes Sports (linguistically repetitive) and weights factual content.
+# Expected: Higher reasoning/factual density per token.
+# Reference: DATASET_EXPERIMENT_PLAN.md
+
+preprocess:
+  dataset_size: dummy
+  lang: en
+  data_dir: data
+  num_workers: auto
+  skip_dedup: false
+  skip_decontam: false
+  filter_mode: heuristic
+  skip_code_filter: false
+  skip_quality_filter: false
+  skip_ellipsis_filter: false
+  append_eos_token: true
+  token_dtype: uint16
+  min_tokens: 8
+  context_length: 1024
+  target_tokens: 300000000
+  topic_classes:
+    - World
+    - Business
+    - Sci/Tech
+  topic_distribution:
+    World: 0.34
+    Business: 0.33
+    Sci/Tech: 0.33
+  skip_topic_filter: false
+  tokenizer_name: null
+
+logging:
+  console_level: INFO
+  file_level: DEBUG

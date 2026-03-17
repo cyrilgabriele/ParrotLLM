@@ -953,6 +953,7 @@ def run_preprocess(args: PreprocessConfig, seed: int) -> None:
     tokenizer = build_tokenizer(
         add_prefix_space=False,
         padding_side="right",
+        tokenizer_name=args.tokenizer_name,
     )
     log.info(
         f"Tokenizer: {DEFAULT_TOKENIZER_NAME}"
@@ -980,7 +981,7 @@ def run_preprocess(args: PreprocessConfig, seed: int) -> None:
     # Resolve num_workers
     num_workers = getattr(args, "num_workers", "auto")
     if num_workers == "auto":
-        num_workers = 2 * os.cpu_count()
+        num_workers = int(args.num_workers_multiplier * os.cpu_count())
     else:
         num_workers = int(num_workers)
 
@@ -1000,7 +1001,7 @@ def run_preprocess(args: PreprocessConfig, seed: int) -> None:
         ds = ds.map(
             lambda batch: decontaminate_batch(batch["text"], test_index),
             batched=True,
-            batch_size=2048,
+            batch_size=args.batch_size,
             num_proc=num_workers,
         )
         before_decontam = len(ds)
@@ -1019,7 +1020,7 @@ def run_preprocess(args: PreprocessConfig, seed: int) -> None:
     ds = ds.map(
         lambda batch: sanitize_batch(batch["text"]),
         batched=True,
-        batch_size=2048,
+        batch_size=args.batch_size,
         num_proc=num_workers,
     )
     before_sanitize = len(ds)
@@ -1039,13 +1040,13 @@ def run_preprocess(args: PreprocessConfig, seed: int) -> None:
     ds = ds.map(
         lambda batch: detect_language_batch(batch["text"], _lang_model_path),
         batched=True,
-        batch_size=2048,
+        batch_size=args.batch_size,
         num_proc=num_workers,
     )
     before_lang = len(ds)
     target_lang = args.lang
     ds = ds.filter(
-        lambda row: row["lang"] == target_lang and row["lang_conf"] >= 0.8,
+        lambda row: row["lang"] == target_lang and row["lang_conf"] >= args.language_confidence_threshold,
         num_proc=num_workers,
     )
     ds = ds.remove_columns(["lang", "lang_conf"])
@@ -1075,12 +1076,12 @@ def run_preprocess(args: PreprocessConfig, seed: int) -> None:
         pipe = _get_topic_pipeline()
         from tqdm import tqdm as _tqdm
         all_texts = ds["text"]
-        batch_size_cls = 512
+        batch_size_cls = args.topic_batch_size
         labels: list[str] = []
         scores: list[float] = []
         for i in _tqdm(range(0, len(all_texts), batch_size_cls),
                        desc="  classifying", unit="batch"):
-            batch = [t[:256] for t in all_texts[i : i + batch_size_cls]]
+            batch = [t[:args.topic_text_truncation] for t in all_texts[i : i + batch_size_cls]]
             results = pipe(batch, truncation=True, batch_size=batch_size_cls)
             for r in results:
                 labels.append(TOPIC_LABEL_MAP.get(r["label"], r["label"]))
@@ -1152,7 +1153,7 @@ def run_preprocess(args: PreprocessConfig, seed: int) -> None:
         ds = ds.map(
             lambda batch: heuristic_code_filter_batch(batch["text"]),
             batched=True,
-            batch_size=2048,
+            batch_size=args.batch_size,
             num_proc=num_workers,
         )
         before_code = len(ds)
@@ -1178,7 +1179,7 @@ def run_preprocess(args: PreprocessConfig, seed: int) -> None:
         ds = ds.map(
             lambda batch: classifier_code_filter_batch(batch["text"], _code_model_path),
             batched=True,
-            batch_size=2048,
+            batch_size=args.batch_size,
             num_proc=num_workers,
         )
         before_code = len(ds)
@@ -1202,7 +1203,7 @@ def run_preprocess(args: PreprocessConfig, seed: int) -> None:
         ds = ds.map(
             lambda batch: heuristic_quality_filter_batch(batch["text"]),
             batched=True,
-            batch_size=2048,
+            batch_size=args.batch_size,
             num_proc=num_workers,
         )
         before_quality = len(ds)
@@ -1270,7 +1271,7 @@ def run_preprocess(args: PreprocessConfig, seed: int) -> None:
             _minhash_signature_batch,
             input_columns=["text"],
             batched=True,
-            batch_size=2048,
+            batch_size=args.batch_size,
             num_proc=num_workers,
         )
         # Pass 2: build LSH + find duplicates (single-threaded)
@@ -1291,7 +1292,7 @@ def run_preprocess(args: PreprocessConfig, seed: int) -> None:
         ds = ds.map(
             lambda batch: ellipsis_filter_batch(batch["text"]),
             batched=True,
-            batch_size=2048,
+            batch_size=args.batch_size,
             num_proc=num_workers,
         )
         before_ellipsis = len(ds)
@@ -1309,11 +1310,11 @@ def run_preprocess(args: PreprocessConfig, seed: int) -> None:
     ds = ds.map(
         lambda batch: tokenize_batch(batch["text"], tokenizer),
         batched=True,
-        batch_size=2048,
+        batch_size=args.batch_size,
         num_proc=1,
     )
     before_tok = len(ds)
-    ds = ds.filter(lambda row: row["n_tokens"] >= 64, num_proc=1)
+    ds = ds.filter(lambda row: row["n_tokens"] >= args.minimum_tokens_per_doc, num_proc=1)
     after_tok = len(ds)
     log.info(
         f"  kept {after_tok:,} / {before_tok:,}"
@@ -1352,7 +1353,7 @@ def run_preprocess(args: PreprocessConfig, seed: int) -> None:
     # Reserve the first 1 % of tokens for validation; the rest become training data.
     # Taking from the front keeps val tokens contiguous on disk; the 1 % figure
     # is intentionally small because LM evaluation needs only a few token chunks.
-    n_val = max(1, int(len(token_array) * 0.01))
+    n_val = max(1, int(len(token_array) * args.validation_split_ratio))
     val_tokens = token_array[:n_val]
     train_tokens = token_array[n_val:]
 

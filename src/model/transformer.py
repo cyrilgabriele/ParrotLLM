@@ -182,7 +182,7 @@ class ParrotLLM(nn.Module):
     def forward(
         self, idx: torch.Tensor, targets: torch.Tensor | None = None,
     ) -> tuple[torch.Tensor, torch.Tensor | None]:
-        B, T = idx.shape
+        _, T = idx.shape
 
         x = self.dropout(self.tok_emb(idx))
 

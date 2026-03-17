@@ -1,9 +1,12 @@
 """Gradio chat interface for ParrotLLM."""
 
 import glob
+import logging
 import os
 
 import torch
+
+log = logging.getLogger("parrotllm.chat")
 
 from configs import ProjectConfig
 from src.eval.inference import generate, load_model_from_checkpoint
@@ -33,6 +36,7 @@ def run_chat(project_config: ProjectConfig, *, device: torch.device) -> None:
         state["model"] = model
         state["config"] = ckpt_config
         n_params = model.count_parameters()
+        log.info(f"Loaded checkpoint: {os.path.basename(path)} ({n_params:,} params) on {device}")
         return f"Loaded {os.path.basename(path)} ({n_params:,} params) on {device}"
 
     def chat_fn(message, history):
@@ -82,4 +86,5 @@ def run_chat(project_config: ProjectConfig, *, device: torch.device) -> None:
 
         chatbot = gr.ChatInterface(chat_fn)
 
+    log.info("Launching chat UI...")
     demo.launch()

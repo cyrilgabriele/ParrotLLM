@@ -1,8 +1,11 @@
 """Autoregressive generation and leaderboard inference."""
 
+import logging
 import sys
 
 import torch
+
+log = logging.getLogger("parrotllm.inference")
 
 from configs import ProjectConfig
 from src.model import HuggingFaceGPT2, ParrotLLM
@@ -82,10 +85,10 @@ def run_inference(
 
     if use_mock:
         if hf_token:
-            print("[inference] Using Hugging Face token from .env")
+            log.info("Using Hugging Face token from .env")
         model = HuggingFaceGPT2().to(device)
         mc = {"context_length": getattr(model, "context_length", 1024)}
-        print("[inference] mock_testing enabled: using openai-community/gpt2")
+        log.info("mock_testing enabled: using openai-community/gpt2")
     else:
         assert checkpoint, "--checkpoint required for inference"
         model, ckpt_config = load_model_from_checkpoint(checkpoint, device)
@@ -117,5 +120,5 @@ def run_inference(
         generated = tokenizer.decode(output[0, len(input_ids):].tolist())
         sys.stdout.write(generated)
     else:
-        print(f"[inference] prompt: {input_text}")
-        print(f"[inference] output: {text}")
+        log.info(f"prompt: {input_text}")
+        log.info(f"output: {text}")

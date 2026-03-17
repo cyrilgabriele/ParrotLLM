@@ -1,7 +1,10 @@
 """Evaluate perplexity on Wikitext-103 and OWT validation split."""
 
+import logging
 import math
 from typing import Dict
+
+log = logging.getLogger("parrotllm.eval")
 
 import numpy as np
 import torch
@@ -119,8 +122,8 @@ def run_eval(
     model = ParrotLLM(ckpt_config).to(device)
     model.load_state_dict(ckpt["model"])
     model.eval()
-    print(f"[eval] loaded checkpoint: {checkpoint}")
-    print(f"[eval] parameters: {model.count_parameters():,}")
+    log.info(f"loaded checkpoint: {checkpoint}")
+    log.info(f"parameters: {model.count_parameters():,}")
 
     # Wikitext-103
     try:
@@ -135,9 +138,9 @@ def run_eval(
                 eval_cfg.max_sequences,
                 hf_token,
             )
-            print(f"[eval] Wikitext-103 perplexity: {wt_ppl:.2f}")
+            log.info(f"Wikitext-103 perplexity: {wt_ppl:.2f}")
     except Exception as e:
-        print(f"[eval] Wikitext-103 skipped: {e}")
+        log.warning(f"Wikitext-103 skipped: {e}")
 
     # OWT val
     try:
@@ -150,6 +153,6 @@ def run_eval(
             eval_cfg.batch_size,
             eval_cfg.max_sequences,
         )
-        print(f"[eval] OWT val perplexity: {owt_ppl:.2f}")
+        log.info(f"OWT val perplexity: {owt_ppl:.2f}")
     except Exception as e:
-        print(f"[eval] OWT val skipped: {e}")
+        log.warning(f"OWT val skipped: {e}")

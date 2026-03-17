@@ -7,6 +7,25 @@ import torch.nn as nn
 import torch.nn.functional as F
 
 
+# ── RMSNorm ───────────────────────────────────────────────────────────────────
+
+class RMSNorm(nn.Module):
+    """Root Mean Square Layer Normalization (Zhang & Sennrich, arXiv:1910.07467).
+
+    Removes the mean-centering step from LayerNorm, keeping only RMS re-scaling.
+    Equivalent quality, 11-34% faster for transformers. Used by LLaMA, Mistral,
+    MobileLLM, Gemma.
+    """
+    def __init__(self, dim: int, eps: float = 1e-6):
+        super().__init__()
+        self.eps = eps
+        self.weight = nn.Parameter(torch.ones(dim))
+
+    def forward(self, x: torch.Tensor) -> torch.Tensor:
+        rms = torch.rsqrt(x.pow(2).mean(-1, keepdim=True) + self.eps)
+        return x * rms * self.weight
+
+
 # ── Multi-Head Attention ─────────────────────────────────────────────────────
 
 class MultiHeadAttention(nn.Module):
@@ -71,9 +90,9 @@ class TransformerBlock(nn.Module):
     def __init__(self, d_model: int, n_heads: int, d_ff: int,
                  bias: bool = False, dropout: float = 0.0):
         super().__init__()
-        self.ln_1 = nn.LayerNorm(d_model)
+        self.ln_1 = RMSNorm(d_model)
         self.attn = MultiHeadAttention(d_model, n_heads, bias, dropout)
-        self.ln_2 = nn.LayerNorm(d_model)
+        self.ln_2 = RMSNorm(d_model)
         self.mlp = GELUMLP(d_model, d_ff, bias, dropout)
 
     def forward(self, x: torch.Tensor) -> torch.Tensor:
@@ -101,7 +120,7 @@ class ParrotLLM(nn.Module):
             )
             for _ in range(mc["n_layers"])
         ])
-        self.ln_f = nn.LayerNorm(mc["d_model"])
+        self.ln_f = RMSNorm(mc["d_model"])
         self.lm_head = nn.Linear(mc["d_model"], mc["vocab_size"], bias=False)
 
         # weight tying

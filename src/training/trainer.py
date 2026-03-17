@@ -155,7 +155,7 @@ def _log_model_architecture(log: logging.Logger, jlog: JSONLLogger,
             if p.requires_grad:
                 n_trainable += p.numel()
     n_non_trainable = n_total - n_trainable
-    pos_emb_params = model.pos_emb.weight.numel()
+    pos_emb_params = 0  # RoPE has no learned positional embedding parameters
     n_non_emb = n_total - pos_emb_params
     params_size_mb = n_total * 4 / 1e6
 

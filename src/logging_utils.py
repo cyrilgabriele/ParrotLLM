@@ -159,7 +159,7 @@ def fmt_model_summary(
         f"  Trainable: {fmt_param_count(n_trainable)}",
         f"  Non-trainable: {fmt_param_count(n_non_trainable)}",
         f"  Non-embedding: {fmt_param_count(n_non_emb)}",
-        f"  Position embeddings: {fmt_param_count(pos_emb_params)}",
+        f"  Position embeddings: {fmt_param_count(pos_emb_params)} (RoPE: 0 learned params)",
         f"  Size (MB): {params_size_mb:.2f}",
     ]
     if torchinfo:

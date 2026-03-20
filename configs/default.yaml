@@ -57,6 +57,9 @@ training:
   # schedule
   warmup_steps: 2000
   max_steps: 100000
+  lr_schedule: wsd      # wsd = Warmup-Stable-Decay; cosine = cosine annealing
+  lr_decay_ratio: 0.1   # last 10% of steps used for decay (WSD only)
+  z_loss_coeff: 1.0e-4  # penalise large logits for mixed-precision stability
 
   # checkpointing
   save_every: 5000           # save checkpoint every N steps

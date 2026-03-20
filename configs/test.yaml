@@ -49,6 +49,9 @@ training:
   grad_clip: 1.0
   warmup_steps: 5
   max_steps: 20
+  lr_schedule: wsd
+  lr_decay_ratio: 0.1
+  z_loss_coeff: 1.0e-4
   save_every: 10
   eval_every: 10
   checkpoint_dir: checkpoints

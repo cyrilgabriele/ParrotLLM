@@ -41,13 +41,33 @@ class PretrainingDataset(torch.utils.data.Dataset):
 # ── LR Schedule ──────────────────────────────────────────────────────────────
 
 def get_lr(step: int, warmup_steps: int, max_steps: int,
-           max_lr: float, min_lr: float) -> float:
+           max_lr: float, min_lr: float,
+           schedule: str = "wsd", decay_ratio: float = 0.1) -> float:
+    """Compute learning rate for the current step.
+
+    Two schedules are supported:
+    - "wsd" (Warmup-Stable-Decay, arXiv:2602.06797): linear warmup → constant
+      plateau → linear decay to min_lr. The decay phase occupies `decay_ratio`
+      of max_steps. More robust to changes in max_steps than cosine; linear
+      decay-to-zero systematically outperforms cosine decay for LLMs.
+    - "cosine": linear warmup → cosine annealing to min_lr. Legacy default.
+    """
     if step < warmup_steps:
         return max_lr * (step + 1) / warmup_steps
     if step >= max_steps:
         return min_lr
-    progress = (step - warmup_steps) / (max_steps - warmup_steps)
-    return min_lr + 0.5 * (max_lr - min_lr) * (1 + math.cos(math.pi * progress))
+
+    decay_steps = max(1, int(max_steps * decay_ratio))
+    stable_end = max_steps - decay_steps
+
+    if schedule == "wsd":
+        if step < stable_end:
+            return max_lr  # stable plateau
+        progress = (step - stable_end) / decay_steps
+        return max_lr + progress * (min_lr - max_lr)  # linear decay to min_lr
+    else:  # cosine
+        progress = (step - warmup_steps) / (max_steps - warmup_steps)
+        return min_lr + 0.5 * (max_lr - min_lr) * (1 + math.cos(math.pi * progress))
 
 
 # ── Optimizer ────────────────────────────────────────────────────────────────
@@ -155,7 +175,7 @@ def _log_model_architecture(log: logging.Logger, jlog: JSONLLogger,
             if p.requires_grad:
                 n_trainable += p.numel()
     n_non_trainable = n_total - n_trainable
-    pos_emb_params = model.pos_emb.weight.numel()
+    pos_emb_params = 0  # RoPE has no learned positional embedding parameters
     n_non_emb = n_total - pos_emb_params
     params_size_mb = n_total * 4 / 1e6
 
@@ -281,17 +301,27 @@ def run_train(
     loss_history: list[tuple[int, float]] = []
     
     log.info(fmt_training_start(steps_per_epoch, tc["max_steps"]))
+    log.info(
+        f"LR schedule={tc.get('lr_schedule', 'wsd')} | "
+        f"decay_ratio={tc.get('lr_decay_ratio', 0.1)} | "
+        f"z_loss_coeff={tc.get('z_loss_coeff', 0.0)}"
+    )
 
     for step in range(start_step, tc["max_steps"]):
         epoch = step // steps_per_epoch if steps_per_epoch > 0 else 0
 
-        lr = get_lr(step, tc["warmup_steps"], tc["max_steps"],
-                    tc["learning_rate"], tc["min_lr"])
+        lr = get_lr(
+            step, tc["warmup_steps"], tc["max_steps"],
+            tc["learning_rate"], tc["min_lr"],
+            schedule=tc.get("lr_schedule", "wsd"),
+            decay_ratio=tc.get("lr_decay_ratio", 0.1),
+        )
         for pg in optimizer.param_groups:
             pg["lr"] = lr
 
         optimizer.zero_grad(set_to_none=True)
         accum_loss = 0.0
+        z_loss_coeff = tc.get("z_loss_coeff", 0.0)
 
         for micro in range(grad_accum):
             try:
@@ -302,8 +332,17 @@ def run_train(
 
             x, y = x.to(device), y.to(device)
             with autocast_ctx:
-                _, loss = model(x, targets=y)
-                loss = loss / grad_accum
+                logits, ce_loss = model(x, targets=y)
+                if z_loss_coeff > 0.0:
+                    # Z-loss (arXiv:2202.08906): penalises large pre-softmax logits to
+                    # prevent numerical instability in mixed precision. Operates in
+                    # float32 to avoid precision issues, then cast back.
+                    z_loss = z_loss_coeff * torch.logsumexp(
+                        logits.float(), dim=-1
+                    ).pow(2).mean()
+                    loss = (ce_loss + z_loss) / grad_accum
+                else:
+                    loss = ce_loss / grad_accum
 
             if scaler is not None:
                 scaler.scale(loss).backward()

@@ -11,7 +11,7 @@ model:
   n_layers: 4
   n_heads: 4
   d_ff: 342          # 8/3 * 128, SwiGLU-ready intermediate size
-  context_length: 1024
+  context_length: 1024 # RoPE supports arbitrary lengths
   bias: false
   dropout: 0.0
   rope_theta: 10000.0
@@ -30,6 +30,9 @@ training:
   grad_clip: 1.0
   warmup_steps: 50
   max_steps: 500
+  lr_schedule: wsd      # Warmup-Stable-Decay
+  lr_decay_ratio: 0.1   # last 50 steps for decay
+  z_loss_coeff: 1.0e-4
   save_every: 250
   eval_every: 100
   checkpoint_dir: checkpoints/architecture-test

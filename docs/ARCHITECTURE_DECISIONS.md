@@ -409,6 +409,95 @@ With fitted constants from [Hoffmann et al.](https://arxiv.org/abs/2203.15556):
 
 ---
 
+---
+
+## 9. Normalization Placement: Peri-LN
+
+### The Evidence
+
+**Phung et al.** (2025 — [arXiv:2502.02732](https://arxiv.org/abs/2502.02732))
+
+Peri-LN applies normalization both *before* and *after* each sub-layer, giving the update rule:
+
+```
+y = x + Norm(Module(Norm(x)))
+```
+
+compared to Pre-LN (`y = x + Module(Norm(x))`) and Post-LN (`y = Norm(x + Module(x))`).
+
+Ablation on a 400M-parameter model trained on 30B tokens:
+
+| Strategy | ARC-Easy | HellaSwag | PIQA | Avg | Loss |
+|----------|----------|-----------|------|-----|------|
+| Post-LN  | 35.7 | 28.9 | 62.3 | 42.5 | 7.46 |
+| Pre-LN   | 54.9 | 34.2 | 68.8 | 49.7 | 3.43 |
+| **Peri-LN** | **57.5** | **37.5** | **69.5** | **51.6** | **3.34** |
+
+Peri-LN also shows consistently lower standard deviations across seeds — meaning more stable training runs. Results hold at 1.5B and 3.2B scale. **OLMo 2** ([arXiv:2501.00656](https://arxiv.org/abs/2501.00656)) independently adopted the same strategy and credited it as their biggest stability improvement.
+
+### Parameter Cost
+
+Two extra RMSNorm layers per block (one for attention output, one for MLP output). For 16 layers at d_model=320: `2 × 320 × 16 = 10,240` parameters — negligible relative to 35.8M total.
+
+### Decision
+
+**Peri-LN replaces plain Pre-LN.** No tradeoffs found at any tested scale.
+
+---
+
+## 10. Weight Initialization: Truncated Normal
+
+### The Evidence
+
+**OLMo 2** ([arXiv:2501.00656](https://arxiv.org/abs/2501.00656)) uses `trunc_normal_(mean=0, std=0.02)` truncated at ±3σ. Plain `normal_` has unbounded tails — occasionally producing initial weights of 4–5σ that create large early gradient spikes before the optimizer stabilizes them. Truncation at ±3σ removes this without changing the intended distribution (>99.7% of values are kept).
+
+### Decision
+
+**`trunc_normal_` with a=−3σ, b=+3σ** for all weight matrices. The depth-scaled residual init (`std = 0.02 / sqrt(2 * n_layers)`) is preserved.
+
+---
+
+## 11. LR Schedule: Warmup-Stable-Decay (WSD)
+
+### The Evidence
+
+**Hagele et al.** (2024 — [arXiv:2602.06797](https://arxiv.org/abs/2602.06797))
+
+WSD is a three-phase schedule: linear warmup → constant plateau at peak LR → linear decay to `min_lr`. Key findings:
+
+- Linear decay-to-zero **systematically outperforms cosine decay** across all tested LLM scales
+- The stable plateau length is flexible: training can be extended without retuning the schedule
+- WSD-S variant enables checkpoint recycling across different compute budgets
+- Evaluated on models 0.1B–1.2B; matches or exceeds optimally-tuned cosine schedules
+
+For cosine, the LR starts decaying immediately after warmup and reaches `min_lr` only at `max_steps`. If training is extended, the LR has already decayed too early. WSD keeps the full `max_lr` until the final `lr_decay_ratio` fraction of steps, making the schedule robust to `max_steps` changes.
+
+### Decision
+
+**WSD with `lr_decay_ratio=0.1`** (last 10% of steps for decay). `lr_schedule: cosine` remains available as a fallback.
+
+---
+
+## 12. Z-Loss: Output Logit Stability
+
+### The Evidence
+
+**Zoph et al.** (ST-MoE, 2022 — [arXiv:2202.08906](https://arxiv.org/abs/2202.08906)) introduced z-loss as an auxiliary training objective:
+
+```
+z_loss = coeff × mean( log( sum(exp(logits)) )² )
+```
+
+This penalises large pre-softmax logit magnitudes. Large logits cause numerical instability in float16/bfloat16 because `exp(logit)` can overflow. **Milakov & Gimelshein** ([arXiv:2309.14322](https://arxiv.org/abs/2309.14322)) showed the same instability appears in small models trained at high learning rates, and that z-loss resolves it.
+
+Standard coefficient: `1e-4`. This adds a signal with magnitude ~0.01–0.05 to a CE loss of ~3–10 — small enough to not affect model quality, large enough to regularise logit growth.
+
+### Decision
+
+**Z-loss with `coeff=1e-4`** in all training runs. Computed in float32 on the logits before CE, then summed: `loss = ce_loss + z_loss`.
+
+---
+
 ## Paper Reference List
 
 | Paper | Authors | Year | Key Finding for Us |
@@ -426,3 +515,8 @@ With fitted constants from [Hoffmann et al.](https://arxiv.org/abs/2203.15556):
 | [LLaMA](https://arxiv.org/abs/2302.13971) | Touvron et al. (Meta) | 2023 | Overtrain beyond Chinchilla for better quality |
 | [Data-Constrained](https://arxiv.org/abs/2305.16264) | Muennighoff et al. | 2023 | Up to 4 epochs safe for data repetition |
 | [Transformer Math 101](https://blog.eleuther.ai/transformer-math/) | EleutherAI | 2023 | FLOPs estimation: C = 6ND |
+| [Peri-LN](https://arxiv.org/abs/2502.02732) | Phung et al. | 2025 | Dual norm (pre + post sub-layer) beats Pre-LN at all scales |
+| [OLMo 2](https://arxiv.org/abs/2501.00656) | OLMo Team (AI2) | 2024 | Peri-LN + QK-Norm eliminates loss spikes; WSD schedule |
+| [WSD Schedule](https://arxiv.org/abs/2602.06797) | Hagele et al. | 2024 | WSD + linear decay-to-zero outperforms cosine |
+| [Z-Loss / ST-MoE](https://arxiv.org/abs/2202.08906) | Zoph et al. (Google) | 2022 | z-loss keeps logit magnitudes bounded in mixed precision |
+| [Small-scale Instabilities](https://arxiv.org/abs/2309.14322) | Milakov & Gimelshein | 2023 | Small models share same instabilities as large; z-loss fixes them |

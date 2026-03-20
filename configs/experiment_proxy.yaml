@@ -1,5 +1,6 @@
 # Proxy-Optimized Experiment Config
 # Optimized to give reliable scaling signals for the final 16-layer/35M model.
+# Updated for new architecture: SwiGLU (d_ff=8/3*d_model), RoPE, QK-Norm.
 
 model:
   vocab_size: 50258
@@ -8,11 +9,11 @@ model:
   eos_token_id: 50256
   d_model: 256
   n_layers: 8
-  n_heads: 4           # Refined: Gives head_dim=64, matching final model "physics"
-  d_ff: 682
-  context_length: 256
+  n_heads: 4           # head_dim=64, matching final model "physics"
+  d_ff: 684            # 8/3 * d_model, SwiGLU intermediate size
+  context_length: 1024
   bias: false
-  dropout: 0.05
+  dropout: 0.0
   rope_theta: 10000.0
 
 training:
@@ -21,19 +22,22 @@ training:
   val_bin: data/experiment-a/val.bin
   batch_size: 16
   gradient_accumulation_steps: 1
-  learning_rate: 8.0e-4 # Refined: More stable signal for dataset comparison
+  learning_rate: 8.0e-4 # More stable signal for dataset comparison
   min_lr: 8.0e-5
   weight_decay: 0.1
   beta1: 0.9
   beta2: 0.95
   grad_clip: 1.0
-  warmup_steps: 100
-  max_steps: 10000
-  save_every: 500
-  eval_every: 200
+  warmup_steps: 200     # 1% of max_steps
+  max_steps: 20000      # ~4h target; stops early if dataset is exhausted
+  lr_schedule: wsd      # Warmup-Stable-Decay (arXiv:2602.06797); linear decay-to-zero
+  lr_decay_ratio: 0.1   # last 10% of steps (2000) used for decay
+  z_loss_coeff: 1.0e-4  # penalise large logits for mixed-precision stability
+  save_every: 1000
+  eval_every: 500
   checkpoint_dir: checkpoints
   runs_dir: runs
-  log_every: 10
+  log_every: 25
 
 logging:
   console_level: INFO

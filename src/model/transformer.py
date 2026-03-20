@@ -123,17 +123,27 @@ class SwiGLUMLP(nn.Module):
 # ── Transformer Block ───────────────────────────────────────────────────────
 
 class TransformerBlock(nn.Module):
+    """Transformer block using Peri-LN normalization (arXiv:2502.02732).
+
+    Peri-LN applies RMSNorm both before (pre-norm) and after (post-sublayer norm)
+    each sub-layer: x = x + Norm(Module(Norm(x))). This is the strategy used by
+    OLMo 2 (arXiv:2501.00656) and shown to outperform plain Pre-LN at all tested
+    scales (400M–3.2B): more stable gradient norms, fewer loss spikes, and higher
+    downstream accuracy (+1.9 avg zero-shot at 400M scale).
+    """
     def __init__(self, d_model: int, n_heads: int, d_ff: int,
                  bias: bool = False, dropout: float = 0.0):
         super().__init__()
         self.ln_1 = RMSNorm(d_model)
         self.attn = MultiHeadAttention(d_model, n_heads, bias, dropout)
+        self.ln_1_out = RMSNorm(d_model)
         self.ln_2 = RMSNorm(d_model)
         self.mlp = SwiGLUMLP(d_model, d_ff, bias, dropout)
+        self.ln_2_out = RMSNorm(d_model)
 
     def forward(self, x: torch.Tensor, freqs_cis: torch.Tensor) -> torch.Tensor:
-        x = x + self.attn(self.ln_1(x), freqs_cis)
-        x = x + self.mlp(self.ln_2(x))
+        x = x + self.ln_1_out(self.attn(self.ln_1(x), freqs_cis))
+        x = x + self.ln_2_out(self.mlp(self.ln_2(x)))
         return x
 
 
@@ -173,14 +183,17 @@ class ParrotLLM(nn.Module):
 
     def _init_weights(self) -> None:
         n_layers = self.config["n_layers"]
-        # GPT-2 style initialization
+        # Truncated normal initialization (OLMo 2 style): same std as GPT-2 but
+        # truncated at ±3σ to prevent rare large initial weights that cause early
+        # instability. trunc_normal_ clips values outside [a, b].
         for name, p in self.named_parameters():
             if name.endswith("weight") and p.dim() >= 2:
-                # Scaled init for residual projections
+                # Scaled init for residual projections (GPT-2 style depth scaling)
                 if name.endswith("o_proj.weight") or name.endswith("down_proj.weight"):
-                    nn.init.normal_(p, mean=0.0, std=0.02 / math.sqrt(2 * n_layers))
+                    std = 0.02 / math.sqrt(2 * n_layers)
                 else:
-                    nn.init.normal_(p, mean=0.0, std=0.02)
+                    std = 0.02
+                nn.init.trunc_normal_(p, mean=0.0, std=std, a=-3 * std, b=3 * std)
             elif name.endswith("bias"):
                 nn.init.zeros_(p)
 

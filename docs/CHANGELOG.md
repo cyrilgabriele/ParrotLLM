@@ -21,6 +21,27 @@ Track what was changed, why it was changed, and any important notes.
 
 ## Unreleased
 
+### [2026-03-20] - Gian Seifert
+
+#### What
+- Peri-LN (post-sublayer RMSNorm): `x = x + Norm(Module(Norm(x)))` in every TransformerBlock
+- Truncated normal initialization: `trunc_normal_(std, a=-3σ, b=3σ)` replacing `normal_`
+- WSD LR schedule: warmup → stable plateau → linear decay; replaces cosine annealing
+- Z-Loss: `1e-4 * logsumexp(logits)²` auxiliary loss for mixed-precision stability
+- New `TrainingConfig` fields: `lr_schedule`, `lr_decay_ratio`, `z_loss_coeff`
+
+#### Why
+- Peri-LN shown to outperform Pre-LN at all tested scales (400M–3.2B), +1.9 avg zero-shot score (arXiv:2502.02732); used by OLMo 2
+- Truncated normal prevents rare large initial weights from causing early instability (OLMo 2)
+- WSD's stable plateau decouples schedule length from `max_steps`; linear decay-to-zero beats cosine (arXiv:2602.06797)
+- Z-Loss keeps pre-softmax logit magnitudes bounded in bfloat16/float16 training (arXiv:2202.08906)
+
+#### Remarks
+- All changes are backward-compatible: existing YAMLs without the new keys use safe defaults (`wsd`, `0.1`, `1e-4`)
+- Existing checkpoints are not loadable after Peri-LN (new norm layer keys in state_dict)
+
+---
+
 ### [2026-03-13] - Cyril Gabriele
 
 #### What

@@ -219,6 +219,10 @@ runs/
 # Weights & Biases
 wandb/
 
+# Optuna
+optuna_studies/
+best_params.yaml
+
 # Custom
 .DS_Store
 src/parrotllm.egg-info

@@ -60,13 +60,10 @@ def sample_hyperparams(trial: optuna.Trial, search_space: dict) -> dict:
             raise ValueError(f"Unknown search space type: {t}")
 
     # ── Constraints ───────────────────────────────────────────────────────────
-    # Ensure d_model is divisible by n_heads
+    # Prune invalid configurations early (lecture pattern: discard, don't patch)
     if "d_model" in hp and "n_heads" in hp:
         if hp["d_model"] % hp["n_heads"] != 0:
-            for nh in sorted(search_space["n_heads"]["choices"], reverse=True):
-                if hp["d_model"] % nh == 0:
-                    hp["n_heads"] = nh
-                    break
+            raise optuna.TrialPruned()
 
     # Derive d_ff from d_model (SwiGLU convention: ~2.67x, rounded to nearest 2)
     if "d_model" in hp:
@@ -277,6 +274,7 @@ def main() -> None:
         n_trials=n_trials,
         timeout=timeout,
         gc_after_trial=True,
+        show_progress_bar=True,
     )
 
     print_summary(study)

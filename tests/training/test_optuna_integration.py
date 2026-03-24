@@ -19,4 +19,4 @@ def test_run_train_trial_default_is_none():
 def test_run_train_returns_float():
     """run_train return annotation is float."""
     sig = inspect.signature(run_train)
-    assert sig.return_annotation is float
+    assert sig.return_annotation in (float, "float")

@@ -1,10 +1,16 @@
 """Training loop for ParrotLLM pretraining."""
 
+from __future__ import annotations
+
 import json
 import logging
 import math
 import os
 import time
+from typing import TYPE_CHECKING
+
+if TYPE_CHECKING:
+    import optuna
 
 import numpy as np
 import torch
@@ -199,7 +205,7 @@ def run_train(
     *,
     device: torch.device,
     checkpoint: str | None = None,
-    trial: object | None = None,
+    trial: optuna.Trial | None = None,
 ) -> float:
     """Train ParrotLLM using a fully validated project configuration."""
 

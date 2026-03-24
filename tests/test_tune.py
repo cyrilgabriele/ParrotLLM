@@ -1,6 +1,5 @@
-"""Tests for tune.py — Optuna HP search."""
+"""Tests for Optuna HP search (src/training/tune.py)."""
 
-import yaml
 import pytest
 
 
@@ -8,80 +7,95 @@ def test_load_tune_config():
     """tune.yaml loads and has required sections."""
     from tune import load_tune_config
     cfg = load_tune_config("configs/tune.yaml")
-    assert "study" in cfg
-    assert "base_config" in cfg
-    assert "search_space" in cfg
-    assert cfg["study"]["name"] == "parrotllm-hp-search"
+    assert "tune" in cfg
+    assert "model" in cfg
+    assert "training" in cfg
+    assert cfg["tune"]["name"] == "parrotllm-hp-search"
+
+
+def test_tune_config_validates():
+    """tune.yaml validates through ProjectConfig."""
+    from configs import load_project_config
+    pc = load_project_config("configs/tune.yaml")
+    assert pc.tune is not None
+    assert pc.tune.name == "parrotllm-hp-search"
+    assert pc.model is not None
+    assert pc.training is not None
+    assert len(pc.tune.search_space) > 0
 
 
 def test_sample_hyperparams_returns_valid_config():
     """sample_hyperparams produces a valid ProjectConfig patch (or prunes invalid combos)."""
     import optuna
-    from tune import load_tune_config, sample_hyperparams
+    from src.training.tune import sample_hyperparams
+    from configs import load_project_config
 
-    cfg = load_tune_config("configs/tune.yaml")
-    # Try multiple trials — some may be pruned due to d_model % n_heads constraint
+    pc = load_project_config("configs/tune.yaml")
+    search_space = {
+        name: spec.model_dump() for name, spec in pc.tune.search_space.items()
+    }
+
     study = optuna.create_study(direction="minimize")
     valid_count = 0
     for _ in range(20):
         trial = study.ask()
         try:
-            hp = sample_hyperparams(trial, cfg["search_space"])
+            hp = sample_hyperparams(trial, search_space)
         except optuna.TrialPruned:
-            continue  # invalid combo correctly pruned
+            continue
         valid_count += 1
         assert 1e-4 <= hp["learning_rate"] <= 3e-3
         assert hp["batch_size"] in [8, 16, 32, 64]
         assert hp["d_model"] % hp["n_heads"] == 0
-        assert "d_ff" in hp  # derived
+        assert "d_ff" in hp
     assert valid_count > 0, "All 20 trials were pruned — search space may be too constrained"
 
 
 def test_invalid_d_model_n_heads_prunes():
     """Invalid d_model/n_heads combinations raise TrialPruned."""
     import optuna
-    from tune import sample_hyperparams
+    from src.training.tune import sample_hyperparams
 
-    # Minimal search space that forces an invalid combo
     search_space = {
         "d_model": {"type": "categorical", "choices": [192]},
-        "n_heads": {"type": "categorical", "choices": [8]},  # 192 % 8 == 0, valid
+        "n_heads": {"type": "categorical", "choices": [8]},
     }
     study = optuna.create_study(direction="minimize")
     trial = study.ask()
     hp = sample_hyperparams(trial, search_space)
     assert hp["d_model"] % hp["n_heads"] == 0
 
-    # Now force an invalid combo: 192 % 5 != 0 (but categorical only allows defined choices,
-    # so we test with a value that doesn't divide)
-    search_space_invalid = {
-        "d_model": {"type": "categorical", "choices": [96]},
-        "n_heads": {"type": "categorical", "choices": [8]},  # 96 % 8 == 0, still valid
-    }
-    # All our real choices are valid (192,256,320,384 all divisible by 4 and 8),
-    # so the pruning only triggers if the search space is extended with odd values.
-
 
 def test_build_trial_config():
     """build_trial_config merges sampled HPs into base config."""
     import optuna
-    from tune import load_tune_config, sample_hyperparams, build_trial_config
-    from configs import ProjectConfig
+    from src.training.tune import sample_hyperparams, build_trial_config
+    from configs import ProjectConfig, load_project_config
 
-    cfg = load_tune_config("configs/tune.yaml")
+    pc = load_project_config("configs/tune.yaml")
+    base_config = {
+        "model": pc.model.model_dump(mode="python"),
+        "training": pc.training.model_dump(mode="python"),
+    }
+    if pc.logging:
+        base_config["logging"] = pc.logging.model_dump(mode="python")
+
+    search_space = {
+        name: spec.model_dump() for name, spec in pc.tune.search_space.items()
+    }
+
     study = optuna.create_study(direction="minimize")
-    # Retry until we get a valid (non-pruned) trial
     for _ in range(20):
         trial = study.ask()
         try:
-            hp = sample_hyperparams(trial, cfg["search_space"])
+            hp = sample_hyperparams(trial, search_space)
             break
         except optuna.TrialPruned:
             continue
     else:
         pytest.skip("Could not get a valid trial in 20 attempts")
 
-    project_config = build_trial_config(cfg["base_config"], hp)
+    project_config = build_trial_config(base_config, hp)
 
     assert isinstance(project_config, ProjectConfig)
     assert project_config.training.learning_rate == hp["learning_rate"]

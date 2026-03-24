@@ -10,6 +10,7 @@ from pydantic import BaseModel, ConfigDict, Field, PositiveInt, field_validator
 
 from .preprocessConfig import PreprocessConfig
 from .trainingConfig import ModelConfig, TrainingConfig
+from .tuneConfig import TuneConfig
 from .loggingConfig import LoggingConfig
 
 
@@ -68,6 +69,7 @@ class ProjectConfig(BaseModel):
     preprocess: PreprocessConfig | None = None
     model: ModelConfig | None = None
     training: TrainingConfig | None = None
+    tune: TuneConfig | None = None
     logging: LoggingConfig | None = None
     eval: EvalConfig | None = None
     inference: InferenceConfig | None = None

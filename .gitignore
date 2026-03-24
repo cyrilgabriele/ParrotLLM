@@ -227,3 +227,7 @@ best_params.yaml
 .DS_Store
 src/parrotllm.egg-info
 local_files/
+
+# Generated docs / AI planning artifacts
+docs/plans/
+docs/parrotllm-course.html

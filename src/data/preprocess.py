@@ -722,9 +722,14 @@ def detect_language(text: str, model) -> tuple[str, float]:
     first_line = text.split("\n")[0].strip()
     if not first_line:
         return "unknown", 0.0
-    pred = model.predict(first_line)
-    lang = pred[0][0].replace("__label__", "")
-    conf = float(pred[1][0])
+    # Use the batched path even for single inputs to avoid FastText's
+    # numpy>=2.0 compatibility bug when returning np.array(copy=False).
+    pred_labels, pred_scores = model.predict([first_line])
+    if not pred_labels:
+        return "unknown", 0.0
+    lang = pred_labels[0][0].replace("__label__", "")
+    score_list = pred_scores[0]
+    conf = float(score_list[0]) if score_list else 0.0
     return lang, conf
 
 

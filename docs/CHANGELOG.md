@@ -21,6 +21,22 @@ Track what was changed, why it was changed, and any important notes.
 
 ## Unreleased
 
+### [2026-03-20] - Gian Seifert
+
+#### What
+- Peri-LN (post-sublayer RMSNorm): `x = x + Norm(Module(Norm(x)))` in every TransformerBlock
+- Truncated normal initialization: `trunc_normal_(std, a=-3σ, b=3σ)` replacing `normal_`
+- WSD LR schedule: warmup → stable plateau → linear decay; replaces cosine annealing
+- Z-Loss: `1e-4 * logsumexp(logits)²` auxiliary loss for mixed-precision stability
+- New `TrainingConfig` fields: `lr_schedule`, `lr_decay_ratio`, `z_loss_coeff`
+
+#### Why
+- Most important why is that we want to be state of the art and this was implemented where possible and feasable. The eaxct changes and decisions can be viewed in the architecture decision md 
+
+#### Remarks
+- Existing checkpoints are not loadable after Peri-LN (new norm layer keys in state_dict)
+
+---
 ### [2026-03-24] - Christof Steiner
 
 #### What

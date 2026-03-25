@@ -7,6 +7,50 @@ import torch.nn as nn
 import torch.nn.functional as F
 
 
+# ── RMSNorm ───────────────────────────────────────────────────────────────────
+
+class RMSNorm(nn.Module):
+    """Root Mean Square Layer Normalization (Zhang & Sennrich, arXiv:1910.07467).
+
+    Removes the mean-centering step from LayerNorm, keeping only RMS re-scaling.
+    Equivalent quality, 11-34% faster for transformers. Used by LLaMA, Mistral,
+    MobileLLM, Gemma.
+    """
+    def __init__(self, dim: int, eps: float = 1e-6):
+        super().__init__()
+        self.eps = eps
+        self.weight = nn.Parameter(torch.ones(dim))
+
+    def forward(self, x: torch.Tensor) -> torch.Tensor:
+        rms = torch.rsqrt(x.pow(2).mean(-1, keepdim=True) + self.eps)
+        return x * rms * self.weight
+
+
+# ── RoPE ─────────────────────────────────────────────────────────────────────
+
+def precompute_rope_freqs(dim: int, max_seq_len: int, theta: float = 10000.0) -> torch.Tensor:
+    """Precompute complex RoPE frequencies (Su et al., arXiv:2104.09864).
+
+    Returns a (max_seq_len, dim // 2) complex64 tensor.
+    """
+    freqs = 1.0 / (theta ** (torch.arange(0, dim, 2, dtype=torch.float32) / dim))
+    t = torch.arange(max_seq_len, dtype=torch.float32)
+    freqs = torch.outer(t, freqs)  # (max_seq_len, dim // 2)
+    return torch.polar(torch.ones_like(freqs), freqs)  # complex64
+
+
+def apply_rope(x: torch.Tensor, freqs_cis: torch.Tensor) -> torch.Tensor:
+    """Apply rotary embeddings to x.
+
+    x: (B, n_heads, T, d_head)
+    freqs_cis: (T, d_head // 2) complex
+    """
+    x_complex = torch.view_as_complex(x.float().reshape(*x.shape[:-1], -1, 2))
+    freqs_cis = freqs_cis.unsqueeze(0).unsqueeze(0)  # (1, 1, T, d_head//2)
+    x_rotated = x_complex * freqs_cis
+    return torch.view_as_real(x_rotated).reshape(x.shape).type_as(x)
+
+
 # ── Multi-Head Attention ─────────────────────────────────────────────────────
 
 class MultiHeadAttention(nn.Module):
@@ -21,46 +65,57 @@ class MultiHeadAttention(nn.Module):
         self.k_proj = nn.Linear(d_model, d_model, bias=bias)
         self.v_proj = nn.Linear(d_model, d_model, bias=bias)
         self.o_proj = nn.Linear(d_model, d_model, bias=bias)
-        
+
+        # QK-Norm: bound attention logit magnitude for training stability at depth
+        # (Dehghani et al., arXiv:2302.05442). Applied after RoPE, before attention.
+        self.q_norm = RMSNorm(self.d_head)
+        self.k_norm = RMSNorm(self.d_head)
+
         self.attn_dropout = dropout
         self.resid_dropout = nn.Dropout(dropout)
 
-    def forward(self, x: torch.Tensor) -> torch.Tensor:
+    def forward(self, x: torch.Tensor, freqs_cis: torch.Tensor) -> torch.Tensor:
         B, T, C = x.shape
 
-        # Calculate query, key, values for all heads in batch and move head forward to be the batch dim
         q = self.q_proj(x).view(B, T, self.n_heads, self.d_head).transpose(1, 2)
         k = self.k_proj(x).view(B, T, self.n_heads, self.d_head).transpose(1, 2)
         v = self.v_proj(x).view(B, T, self.n_heads, self.d_head).transpose(1, 2)
+
+        # Apply RoPE then QK-Norm to Q and K
+        q = self.q_norm(apply_rope(q, freqs_cis))
+        k = self.k_norm(apply_rope(k, freqs_cis))
 
         # Causal self-attention; Flash Attention if available
         out = F.scaled_dot_product_attention(
             q, k, v, is_causal=True,
             dropout_p=self.attn_dropout if self.training else 0.0,
         )
-        
-        # Re-assemble all head outputs side by side
+
         out = out.transpose(1, 2).contiguous().view(B, T, C)
-        
-        # Output projection and residual dropout
         out = self.resid_dropout(self.o_proj(out))
         return out
 
 
-# ── GELU MLP ─────────────────────────────────────────────────────────────────
+# ── SwiGLU MLP ───────────────────────────────────────────────────────────────
 
-class GELUMLP(nn.Module):
+class SwiGLUMLP(nn.Module):
+    """SwiGLU feed-forward network (Shazeer, arXiv:2002.05202).
+
+    Uses SiLU-gated mechanism with 3 projections. d_ff should be 8/3 * d_model
+    (rounded) to match the parameter count of a standard 4x GELU FFN.
+    Used by LLaMA, Mistral, PaLM, MobileLLM, Gemma.
+    """
     def __init__(self, d_model: int, d_ff: int, bias: bool = False, dropout: float = 0.0):
         super().__init__()
-        self.c_fc = nn.Linear(d_model, d_ff, bias=bias)
-        self.gelu = nn.GELU(approximate='tanh')
-        self.c_proj = nn.Linear(d_ff, d_model, bias=bias)
+        self.gate_proj = nn.Linear(d_model, d_ff, bias=bias)
+        self.up_proj = nn.Linear(d_model, d_ff, bias=bias)
+        self.down_proj = nn.Linear(d_ff, d_model, bias=bias)
         self.dropout = nn.Dropout(dropout)
 
     def forward(self, x: torch.Tensor) -> torch.Tensor:
-        x = self.c_fc(x)
-        x = self.gelu(x)
-        x = self.c_proj(x)
+        gate = F.silu(self.gate_proj(x))
+        x = gate * self.up_proj(x)
+        x = self.down_proj(x)
         x = self.dropout(x)
         return x
 
@@ -68,17 +123,27 @@ class GELUMLP(nn.Module):
 # ── Transformer Block ───────────────────────────────────────────────────────
 
 class TransformerBlock(nn.Module):
+    """Transformer block using Peri-LN normalization (arXiv:2502.02732).
+
+    Peri-LN applies RMSNorm both before (pre-norm) and after (post-sublayer norm)
+    each sub-layer: x = x + Norm(Module(Norm(x))). This is the strategy used by
+    OLMo 2 (arXiv:2501.00656) and shown to outperform plain Pre-LN at all tested
+    scales (400M–3.2B): more stable gradient norms, fewer loss spikes, and higher
+    downstream accuracy (+1.9 avg zero-shot at 400M scale).
+    """
     def __init__(self, d_model: int, n_heads: int, d_ff: int,
                  bias: bool = False, dropout: float = 0.0):
         super().__init__()
-        self.ln_1 = nn.LayerNorm(d_model)
+        self.ln_1 = RMSNorm(d_model)
         self.attn = MultiHeadAttention(d_model, n_heads, bias, dropout)
-        self.ln_2 = nn.LayerNorm(d_model)
-        self.mlp = GELUMLP(d_model, d_ff, bias, dropout)
+        self.ln_1_out = RMSNorm(d_model)
+        self.ln_2 = RMSNorm(d_model)
+        self.mlp = SwiGLUMLP(d_model, d_ff, bias, dropout)
+        self.ln_2_out = RMSNorm(d_model)
 
-    def forward(self, x: torch.Tensor) -> torch.Tensor:
-        x = x + self.attn(self.ln_1(x))
-        x = x + self.mlp(self.ln_2(x))
+    def forward(self, x: torch.Tensor, freqs_cis: torch.Tensor) -> torch.Tensor:
+        x = x + self.ln_1_out(self.attn(self.ln_1(x), freqs_cis))
+        x = x + self.ln_2_out(self.mlp(self.ln_2(x)))
         return x
 
 
@@ -91,9 +156,8 @@ class ParrotLLM(nn.Module):
         self.config = mc
 
         self.tok_emb = nn.Embedding(mc["vocab_size"], mc["d_model"])
-        self.pos_emb = nn.Embedding(mc["context_length"], mc["d_model"])
         self.dropout = nn.Dropout(mc.get("dropout", 0.0))
-        
+
         self.blocks = nn.ModuleList([
             TransformerBlock(
                 mc["d_model"], mc["n_heads"], mc["d_ff"],
@@ -101,42 +165,48 @@ class ParrotLLM(nn.Module):
             )
             for _ in range(mc["n_layers"])
         ])
-        self.ln_f = nn.LayerNorm(mc["d_model"])
+        self.ln_f = RMSNorm(mc["d_model"])
         self.lm_head = nn.Linear(mc["d_model"], mc["vocab_size"], bias=False)
 
         # weight tying
         self.lm_head.weight = self.tok_emb.weight
 
+        # Precompute RoPE frequencies — not a learned parameter, just a buffer
+        d_head = mc["d_model"] // mc["n_heads"]
+        freqs_cis = precompute_rope_freqs(
+            d_head, mc["context_length"], theta=mc.get("rope_theta", 10000.0)
+        )
+        self.freqs_cis: torch.Tensor
+        self.register_buffer("freqs_cis", freqs_cis, persistent=False)
+
         self._init_weights()
 
     def _init_weights(self) -> None:
         n_layers = self.config["n_layers"]
-        # GPT-2 style initialization
+        # Truncated normal initialization (OLMo 2 style): same std as GPT-2 but
+        # truncated at ±3σ to prevent rare large initial weights that cause early
+        # instability. trunc_normal_ clips values outside [a, b].
         for name, p in self.named_parameters():
             if name.endswith("weight") and p.dim() >= 2:
-                # Scaled init for residual projections
-                if name.endswith("o_proj.weight") or name.endswith("c_proj.weight"):
-                    nn.init.normal_(p, mean=0.0, std=0.02 / math.sqrt(2 * n_layers))
+                # Scaled init for residual projections (GPT-2 style depth scaling)
+                if name.endswith("o_proj.weight") or name.endswith("down_proj.weight"):
+                    std = 0.02 / math.sqrt(2 * n_layers)
                 else:
-                    nn.init.normal_(p, mean=0.0, std=0.02)
+                    std = 0.02
+                nn.init.trunc_normal_(p, mean=0.0, std=std, a=-3 * std, b=3 * std)
             elif name.endswith("bias"):
                 nn.init.zeros_(p)
 
     def forward(
         self, idx: torch.Tensor, targets: torch.Tensor | None = None,
     ) -> tuple[torch.Tensor, torch.Tensor | None]:
-        B, T = idx.shape
-        device = idx.device
-        
-        pos = torch.arange(0, T, dtype=torch.long, device=device)
-        
-        tok_emb = self.tok_emb(idx) # (B, T, d_model)
-        pos_emb = self.pos_emb(pos) # (T, d_model)
-        
-        x = self.dropout(tok_emb + pos_emb)
+        _, T = idx.shape
 
+        x = self.dropout(self.tok_emb(idx))
+
+        freqs_cis = self.freqs_cis[:T]
         for block in self.blocks:
-            x = block(x)
+            x = block(x, freqs_cis)
 
         x = self.ln_f(x)
         logits = self.lm_head(x)

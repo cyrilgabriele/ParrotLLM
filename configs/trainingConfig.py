@@ -46,6 +46,13 @@ class TrainingConfig(BaseModel):
     # schedule
     warmup_steps: int = Field(...)
     max_steps: int = Field(...)
+    # "wsd" = Warmup-Stable-Decay (linear decay-to-zero); "cosine" = cosine annealing
+    lr_schedule: str = Field(...)
+    # Fraction of max_steps used for the decay phase (WSD only)
+    lr_decay_ratio: float = Field(...)
+
+    # z-loss coefficient; 1e-4 is standard, 0 disables z-loss
+    z_loss_coeff: float = Field(...)
 
     # checkpointing
     save_every: int = Field(...)

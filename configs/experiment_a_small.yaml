@@ -28,6 +28,9 @@ training:
   grad_clip: 1.0
   warmup_steps: 50      # Longer warmup for stability
   max_steps: 5000       # Enough steps to see actual progress
+  lr_schedule: wsd      # Warmup-Stable-Decay
+  lr_decay_ratio: 0.1   # last 500 steps for decay
+  z_loss_coeff: 1.0e-4
   save_every: 200
   eval_every: 100
   checkpoint_dir: checkpoints

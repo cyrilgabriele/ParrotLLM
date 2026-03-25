@@ -1,6 +1,6 @@
 """Expose shared configuration models and defaults."""
 
-from .preprocessConfig import DEFAULT_LANG, PreprocessConfig
+from .preprocessing.preprocessConfig import DEFAULT_LANG, PreprocessConfig
 from .project_config import (
     ChatConfig,
     EvalConfig,
@@ -10,8 +10,8 @@ from .project_config import (
     load_project_config,
 )
 from .loggingConfig import LoggingConfig
-from .trainingConfig import ModelConfig, TrainingConfig
-from .tuneConfig import TuneConfig
+from .training.trainingConfig import ModelConfig, TrainingConfig
+from .tuning.tuneConfig import TuneConfig
 
 __all__ = [
     "ChatConfig",

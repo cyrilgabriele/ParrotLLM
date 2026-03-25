@@ -198,6 +198,13 @@ def _init_distributed(device: torch.device) -> tuple[torch.device, int, int, int
 
     if not dist.is_initialized():
         backend = "nccl" if device.type == "cuda" else "gloo"
+        if backend == "nccl":
+            has_nccl = getattr(dist, "is_nccl_available", lambda: True)()
+            if not has_nccl:
+                logging.getLogger("parrotllm.training").warning(
+                    "NCCL backend unavailable; falling back to gloo."
+                )
+                backend = "gloo"
         dist.init_process_group(backend=backend)
 
     rank = dist.get_rank()

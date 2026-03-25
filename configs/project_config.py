@@ -8,9 +8,9 @@ from typing import Dict
 import yaml
 from pydantic import BaseModel, ConfigDict, Field, PositiveInt, field_validator
 
-from .preprocessConfig import PreprocessConfig
-from .trainingConfig import ModelConfig, TrainingConfig
-from .tuneConfig import TuneConfig
+from .preprocessing.preprocessConfig import PreprocessConfig
+from .training.trainingConfig import ModelConfig, TrainingConfig
+from .tuning.tuneConfig import TuneConfig
 from .loggingConfig import LoggingConfig
 
 

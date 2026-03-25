@@ -15,7 +15,7 @@ def main() -> None:
     parser.add_argument(
         "--stage",
         required=True,
-        choices=["preprocess", "train", "eval", "inference", "chat"],
+        choices=["preprocess", "train", "tune", "eval", "inference", "chat"],
     )
     parser.add_argument("--config", type=Path, default=Path("configs/default.yaml"))
     parser.add_argument("--checkpoint", default=None)
@@ -24,6 +24,13 @@ def main() -> None:
     parser.add_argument("--temperature", type=float, default=None)
     parser.add_argument("--leaderboard", action="store_true")
     parser.add_argument("--mock-testing", action="store_true", default=None)
+    # tune-specific
+    parser.add_argument("--n-trials", type=int, default=None,
+                        help="Override number of Optuna trials")
+    parser.add_argument("--timeout-tune", type=int, default=None,
+                        help="Override Optuna timeout (seconds)")
+    parser.add_argument("--export-only", action="store_true",
+                        help="Just export best params from existing study")
 
     args = parser.parse_args()
 
@@ -49,6 +56,20 @@ def main() -> None:
         from src.data.preprocess import run_preprocess
 
         run_preprocess(preprocess_cfg, SEED)
+        return
+
+    if args.stage == "tune":
+        _require_section(project_config.tune, "tune")
+        _require_section(project_config.model, "model")
+        _require_section(project_config.training, "training")
+        from src.training.tune import run_tune
+
+        run_tune(
+            project_config,
+            n_trials_override=args.n_trials,
+            timeout_override=args.timeout_tune,
+            export_only=args.export_only,
+        )
         return
 
     if args.stage == "train":

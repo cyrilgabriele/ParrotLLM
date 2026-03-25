@@ -30,6 +30,9 @@ training:
   grad_clip: 1.0
   warmup_steps: 100
   max_steps: 10000
+  lr_schedule: cosine
+  lr_decay_ratio: 0.1
+  z_loss_coeff: 1.0e-4
   save_every: 50000              # effectively disable checkpointing during tuning
   eval_every: 200
   checkpoint_dir: checkpoints

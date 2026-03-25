@@ -21,6 +21,27 @@ Track what was changed, why it was changed, and any important notes.
 
 ## Unreleased
 
+### [2026-03-25] - Christof Steiner
+
+#### What
+- Fixed 6 failing tests on main caused by config/test drift after architecture upgrade
+- Added missing `lr_schedule`, `lr_decay_ratio`, `z_loss_coeff` fields to `configs/tune.yaml`
+- Updated `test_parameter_count` to match actual architecture (Peri-LN, QK-Norm, SwiGLU 3-proj, RoPE)
+- Fixed `test_deduplicate_keeps_longest` → `test_deduplicate_keeps_first` to match intentional keep-first dedup strategy
+- Fixed `test_matches_sequential` in tokenization tests to account for EOS appending
+- Renamed `TestDecontaminationIndex` → `DecontaminationIndex` to suppress pytest collection warning
+
+#### Why
+- Config schema evolved with the architecture upgrade but `tune.yaml` was not updated
+- Parameter count test was stale from the original LayerNorm/GELU/learned-pos-emb baseline
+- Dedup test expected keep-longest but code intentionally keeps lowest-index to avoid loading text column at scale
+- Batch tokenizer appends EOS per document; sequential test path did not mirror this
+
+#### Remarks
+
+
+---
+
 ### [2026-03-20] - Gian Seifert
 
 #### What

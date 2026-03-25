@@ -77,7 +77,7 @@ class TestDeduplication:
         assert len(to_remove) == 1  # one of the two identical docs removed
         assert 2 not in to_remove  # the unique doc survives
 
-    def test_deduplicate_keeps_longest(self):
+    def test_deduplicate_keeps_first(self):
         base = (
             "the quick brown fox jumps over the lazy dog near the river bank on a sunny day "
             "in the park while the birds are singing and the children are playing with their "
@@ -98,9 +98,9 @@ class TestDeduplication:
         sigs = _minhash_signature_batch(texts)
         ds = Dataset.from_dict({"text": texts, "minhash_sig": sigs["minhash_sig"]})
         to_remove = deduplicate_corpus(ds)
-        # The short doc (index 0) should be removed, the long one (index 1) kept
-        assert 0 in to_remove
-        assert 1 not in to_remove
+        # Keeps lowest-index doc (0); removes the duplicate (1); unique (2) untouched
+        assert 0 not in to_remove
+        assert 1 in to_remove
         assert 2 not in to_remove
 
 
@@ -200,7 +200,7 @@ class TestDetectLanguageBatch:
 
 
 from src.data.preprocess import (
-    TestDecontaminationIndex,
+    DecontaminationIndex,
     normalize_and_fingerprint,
     FINGERPRINT_LOWERCASE,
 )
@@ -209,14 +209,14 @@ from src.data.preprocess import (
 class TestDecontaminateBatch:
     @pytest.fixture
     def empty_index(self):
-        return TestDecontaminationIndex(content_hashes=set())
+        return DecontaminationIndex(content_hashes=set())
 
     @pytest.fixture
     def index_with_hashes(self):
         """Index containing SHA-1 hash from a known 'test set' document."""
         test_doc = "The quick brown fox jumps over the lazy dog near the river bank"
         _, fp = normalize_and_fingerprint(test_doc)
-        return TestDecontaminationIndex(
+        return DecontaminationIndex(
             content_hashes={fp} if fp else set(),
         )
 
@@ -294,8 +294,9 @@ class TestTokenizeBatch:
         texts = [english_text, "Short.", "Another longer sentence with more words."]
         batch_result = tokenize_batch(texts, tokenizer)
 
+        eos_id = tokenizer.eos_token_id if tokenizer.eos_token_id is not None else 0
         for i, text in enumerate(texts):
-            seq_tokens = tokenizer.encode(text)
+            seq_tokens = tokenizer.encode(text, add_special_tokens=False) + [eos_id]
             assert batch_result["input_ids"][i] == seq_tokens
             assert batch_result["n_tokens"][i] == len(seq_tokens)
 

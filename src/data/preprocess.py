@@ -298,7 +298,7 @@ def deduplicate_corpus(ds) -> set[int]:
 
 
 @dataclass
-class TestDecontaminationIndex:
+class DecontaminationIndex:
     """Lookup table of SHA-1 fingerprints built from held-out evaluation/test splits.
 
     Constructed once before preprocessing starts and checked in Phase 1 to
@@ -775,7 +775,7 @@ def detect_language_batch(
 
 def build_test_decontamination_index(
     data_dir: Path, lowercase: bool = True
-) -> TestDecontaminationIndex:
+) -> DecontaminationIndex:
     """Build SHA-1 content hash index from all eval/test splits."""
 
     content_hashes: set[str] = set()
@@ -801,7 +801,7 @@ def build_test_decontamination_index(
 
     if not split_specs:
         log.info("No evaluation splits found; contamination checks disabled.")
-        return TestDecontaminationIndex(content_hashes=content_hashes)
+        return DecontaminationIndex(content_hashes=content_hashes)
 
     for name, path in split_specs:
         log.info(f"Indexing {name} set...")
@@ -836,13 +836,13 @@ def build_test_decontamination_index(
         log.info(f"  -> {len(content_hashes) - before_hashes:,} new hashes")
 
     log.info(f"Total test hashes: {len(content_hashes):,}")
-    return TestDecontaminationIndex(content_hashes=content_hashes)
+    return DecontaminationIndex(content_hashes=content_hashes)
 
 
 
 def decontaminate_batch(
     texts: list[str],
-    test_index: TestDecontaminationIndex,
+    test_index: DecontaminationIndex,
     normalize_lowercase: bool = True,
 ) -> dict[str, list]:
     """Batch decontamination check via SHA-1 content hash matching.
@@ -972,7 +972,7 @@ def run_preprocess(args: PreprocessConfig, seed: int) -> None:
     skip_decontam = getattr(args, "skip_decontam", False)
     if skip_decontam:
         log.info("Skipping decontamination (--skip-decontam flag set)")
-        test_index = TestDecontaminationIndex(content_hashes=set())
+        test_index = DecontaminationIndex(content_hashes=set())
     else:
         test_index = build_test_decontamination_index(
             data_dir, lowercase=FINGERPRINT_LOWERCASE

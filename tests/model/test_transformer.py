@@ -67,17 +67,18 @@ def test_causality(small_config):
 def test_parameter_count(small_config):
     model = ParrotLLM(small_config)
     count = model.count_parameters()
-    # tok_emb: 128 * 64 = 8192
-    # pos_emb: 64 * 64 = 4096
+    # tok_emb: 128 * 64 = 8192 (lm_head is weight-tied, not counted)
     # 2 blocks * (
-    #   ln_1 (64 weight, 64 bias) = 128
-    #   attn (4 heads * (64*64)) = 16384
-    #   ln_2 (64 weight, 64 bias) = 128
-    #   mlp (2 * (64*256)) = 32768
-    # ) = 2 * (128 + 16384 + 128 + 32768) = 2 * 49408 = 98816
-    # ln_f (64 weight, 64 bias) = 128
-    # Total: 8192 + 4096 + 98816 + 128 = 111232
-    assert count == 111232
+    #   ln_1: RMSNorm(64) = 64
+    #   attn: q/k/v/o_proj (4 * 64*64) = 16384 + q_norm(16) + k_norm(16) = 16416
+    #   ln_1_out: RMSNorm(64) = 64  (Peri-LN post-norm)
+    #   ln_2: RMSNorm(64) = 64
+    #   mlp: SwiGLU gate/up/down (3 * 64*256) = 49152
+    #   ln_2_out: RMSNorm(64) = 64  (Peri-LN post-norm)
+    # ) = 2 * (64 + 16416 + 64 + 64 + 49152 + 64) = 2 * 65824 = 131648
+    # ln_f: RMSNorm(64) = 64
+    # Total: 8192 + 131648 + 64 = 139904
+    assert count == 139904
 
 def test_overfit_single_batch(small_config):
     model = ParrotLLM(small_config)

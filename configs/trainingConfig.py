@@ -30,6 +30,8 @@ class TrainingConfig(BaseModel):
     # data
     train_bin: str = Field(...)
     val_bin: str = Field(...)
+    num_workers: int = Field(4, ge=0)
+    pin_memory: bool = Field(True)
 
     # batching
     batch_size: int = Field(...)

@@ -41,6 +41,19 @@ Track what was changed, why it was changed, and any important notes.
 
 
 ---
+### [2026-03-25] - Cyril Gabriele
+
+#### What
+- Added torch.distributed-aware training: single run directory + logging only on rank 0, DDP wrapping, gradient accumulation with `no_sync`, and per-rank DistributedSamplers with `set_epoch`
+- Wired VL06 recommendations into the default config (per-GPU batch 16, grad accumulation 2, `num_workers=4`, `pin_memory=true`) and propagated the loader knobs through the trainer/eval path
+- Guarded evaluation/checkpointing/JSON logging to rank 0, added run-wide metric broadcasts, and ensured BF16/FP16 checkpoints unwrap correctly from both `torch.compile` and DDP wrappers
+
+#### Why
+- Matches the Systems & Efficiency lecture guidance so 8× V100 runs saturate hardware without stomping each other's logs or wasting bandwidth on redundant eval/checkpoint ops
+- DDP + sampler fixes let each GPU see unique data shards while minimizing NCCL traffic during gradient accumulation, which was the target pattern discussed in EX06/train_ddp.py
+
+#### Remarks
+- Launch training with `torchrun --nproc_per_node=8 python main.py --stage train --config ...` to fully leverage the DGX setup
 
 ### [2026-03-20] - Gian Seifert
 

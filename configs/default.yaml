@@ -41,10 +41,12 @@ training:
   # data (output of --stage preprocess)
   train_bin: data/processed/train.bin
   val_bin: data/processed/val.bin
+  num_workers: 4            # VL06 recommendation
+  pin_memory: true
 
   # batching
-  batch_size: 64             # micro-batch size
-  gradient_accumulation_steps: 4  # effective batch = 64 * 4 = 256
+  batch_size: 16             # per-GPU micro-batch (fits comfortably on V100)
+  gradient_accumulation_steps: 2  # effective batch = 16 * 2 * num_gpus
 
   # optimizer — AdamW
   learning_rate: 6.0e-4

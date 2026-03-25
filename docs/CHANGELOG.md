@@ -21,6 +21,27 @@ Track what was changed, why it was changed, and any important notes.
 
 ## Unreleased
 
+### [2026-03-24] - Christof Steiner
+
+#### What
+- Integrated Optuna hyperparameter tuning 
+- Added `tune.py` CLI entry point with `--resume`, `--export-only`, `--n-trials`, `--timeout` flags
+- Added `configs/tune.yaml` with configurable search space (learning rate, weight decay, dropout, d_model, n_layers, n_heads, batch size, etc.)
+- Modified `src/training/trainer.py` to accept an optional `trial` parameter for intermediate reporting and pruning
+- SQLite-backed study persistence for pause/resume across sessions
+- Exports best parameters as `best_params.yaml` for direct use in training configs
+
+#### Why
+- Manual hyperparameter selection is suboptimal; Bayesian optimization (TPE) explores the search space more efficiently than grid or random search
+- Hyperband pruner kills weak trials early, saving compute 
+- Config-driven search space allows reuse across different preprocessing variants without code changes
+- SQLite persistence means tuning can survive crashes and be resumed across sessions
+
+#### Remarks
+- Run with `python tune.py` (defaults to 50 trials) or `python tune.py --n-trials 100`
+- Monitor live with `optuna-dashboard sqlite:///optuna_studies/parrotllm.db`
+- Tune once on one preprocessing variant, apply best HPs to all variant comparison runs
+
 ### [2026-03-13] - Cyril Gabriele
 
 #### What

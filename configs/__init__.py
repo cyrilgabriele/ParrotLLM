@@ -11,6 +11,7 @@ from .project_config import (
 )
 from .loggingConfig import LoggingConfig
 from .trainingConfig import ModelConfig, TrainingConfig
+from .tuneConfig import TuneConfig
 
 __all__ = [
     "ChatConfig",
@@ -23,5 +24,6 @@ __all__ = [
     "PreprocessConfig",
     "ProjectConfig",
     "TrainingConfig",
+    "TuneConfig",
     "load_project_config",
 ]

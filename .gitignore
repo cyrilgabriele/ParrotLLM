@@ -219,7 +219,15 @@ runs/
 # Weights & Biases
 wandb/
 
+# Optuna
+optuna_studies/
+best_params.yaml
+
 # Custom
 .DS_Store
 src/parrotllm.egg-info
 local_files/
+
+# Generated docs / AI planning artifacts
+docs/plans/
+docs/parrotllm-course.html

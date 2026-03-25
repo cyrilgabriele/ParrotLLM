@@ -1,10 +1,16 @@
 """Training loop for ParrotLLM pretraining."""
 
+from __future__ import annotations
+
 import json
 import logging
 import math
 import os
 import time
+from typing import TYPE_CHECKING
+
+if TYPE_CHECKING:
+    import optuna
 
 import numpy as np
 import torch
@@ -199,7 +205,8 @@ def run_train(
     *,
     device: torch.device,
     checkpoint: str | None = None,
-) -> None:
+    trial: optuna.Trial | None = None,
+) -> float:
     """Train ParrotLLM using a fully validated project configuration."""
 
     tc_model = project_config.training
@@ -366,6 +373,13 @@ def run_train(
                      step=step, epoch=epoch,
                      val_loss=val_loss, val_ppl=val_ppl)
 
+            # Optuna intermediate reporting + pruning
+            if trial is not None:
+                trial.report(val_ppl, step)
+                if trial.should_prune():
+                    import optuna
+                    raise optuna.TrialPruned()
+
             if val_loss < best_val_loss:
                 best_val_loss = val_loss
                 log.info("  ** New best validation loss! **")
@@ -409,3 +423,6 @@ def run_train(
 
     jlog.close()
     log.info("done")
+
+    best_val_ppl = math.exp(best_val_loss) if best_val_loss != float("inf") else float("inf")
+    return best_val_ppl

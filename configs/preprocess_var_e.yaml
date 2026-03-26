@@ -1,6 +1,6 @@
-# Variant A: Baseline (no topic filter)
-# Baseline with heuristic filtering but no topic filtering.
-# Reference: DATASET_EXPERIMENT_PLAN.md
+# Variant E: Knowledge-balanced (no Sports, no resampling)
+# Keeps broad factual/technical prose while preserving the natural class mix
+# of the sampled OpenWebText slice.
 
 preprocess:
   dataset_size: dummy
@@ -19,10 +19,12 @@ preprocess:
   minimum_tokens_per_doc: 64
   context_length: 1024
   target_tokens: 300000000
-  topic_classes: null
+  topic_classes:
+    - World
+    - Business
+    - Sci/Tech
   topic_distribution: null
-  skip_topic_filter: true
-  # Optional: use default tokenizer
+  skip_topic_filter: false
   tokenizer_name: null
 
 logging:

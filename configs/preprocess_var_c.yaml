@@ -17,6 +17,7 @@ preprocess:
   append_eos_token: true
   token_dtype: uint16
   min_tokens: 8
+  minimum_tokens_per_doc: 64
   context_length: 1024
   target_tokens: 300000000
   topic_classes:

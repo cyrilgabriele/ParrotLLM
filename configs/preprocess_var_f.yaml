@@ -1,6 +1,6 @@
-# Variant A: Baseline (no topic filter)
-# Baseline with heuristic filtering but no topic filtering.
-# Reference: DATASET_EXPERIMENT_PLAN.md
+# Variant F: Loose-clean baseline
+# Keeps the baseline corpus broad, but disables the heuristic quality filter
+# to measure whether Phase 5 is helping or over-pruning useful web text.
 
 preprocess:
   dataset_size: dummy
@@ -11,7 +11,7 @@ preprocess:
   skip_decontam: false
   filter_mode: heuristic
   skip_code_filter: false
-  skip_quality_filter: false
+  skip_quality_filter: true
   skip_ellipsis_filter: false
   append_eos_token: true
   token_dtype: uint16
@@ -22,7 +22,6 @@ preprocess:
   topic_classes: null
   topic_distribution: null
   skip_topic_filter: true
-  # Optional: use default tokenizer
   tokenizer_name: null
 
 logging:

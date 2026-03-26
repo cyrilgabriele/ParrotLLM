@@ -7,6 +7,7 @@ import logging
 import math
 import os
 import time
+from contextlib import nullcontext
 from typing import TYPE_CHECKING
 
 if TYPE_CHECKING:
@@ -15,10 +16,13 @@ if TYPE_CHECKING:
 import numpy as np
 import torch
 import torch.nn as nn
+import torch.distributed as dist
+from torch.nn.parallel import DistributedDataParallel as DDP
+from torch.utils.data.distributed import DistributedSampler
 
 from configs import ProjectConfig
 from src.logging_utils import (
-    JSONLLogger, fmt_model_summary, fmt_training_complete,
+    JSONLLogger, TorchProfiler, fmt_model_summary, fmt_training_complete,
     fmt_training_start, make_run_dir, render_ascii_loss_curve, setup_logger,
 )
 from src.model import ParrotLLM
@@ -92,6 +96,16 @@ def build_optimizer(model: nn.Module, tc: dict) -> torch.optim.AdamW:
     )
 
 
+def _unwrap_model(model: nn.Module) -> nn.Module:
+    """Return the underlying model (handles DDP + torch.compile wrappers)."""
+    raw_model = model
+    if hasattr(raw_model, "module"):
+        raw_model = raw_model.module
+    if hasattr(raw_model, "_orig_mod"):
+        raw_model = raw_model._orig_mod
+    return raw_model
+
+
 # ── Mixed Precision helpers ──────────────────────────────────────────────────
 
 def get_autocast_context(device: torch.device):
@@ -113,8 +127,8 @@ def save_checkpoint(model: nn.Module, optimizer: torch.optim.Optimizer,
                     checkpoint_dir: str) -> None:
     os.makedirs(checkpoint_dir, exist_ok=True)
     path = os.path.join(checkpoint_dir, f"{epoch:02d}_epoch_{step}_step")
-    # unwrap compiled model if needed
-    raw_model = model._orig_mod if hasattr(model, "_orig_mod") else model
+    # unwrap compiled/DDP model if needed
+    raw_model = _unwrap_model(model)
     state = {
         "model": raw_model.state_dict(),
         "optimizer": optimizer.state_dict(),
@@ -132,7 +146,7 @@ def load_checkpoint(path: str, model: nn.Module,
                     scaler: torch.amp.GradScaler | None = None,
                     device: torch.device = torch.device("cpu")):
     ckpt = torch.load(path, map_location=device, weights_only=False)
-    raw_model = model._orig_mod if hasattr(model, "_orig_mod") else model
+    raw_model = _unwrap_model(model)
     raw_model.load_state_dict(ckpt["model"])
     if optimizer is not None and "optimizer" in ckpt:
         optimizer.load_state_dict(ckpt["optimizer"])
@@ -146,11 +160,18 @@ def load_checkpoint(path: str, model: nn.Module,
 @torch.no_grad()
 def estimate_loss(model: nn.Module, dataset: PretrainingDataset,
                   device: torch.device, autocast_ctx, batch_size: int,
-                  max_batches: int = 20) -> dict:
+                  max_batches: int = 20, *, num_workers: int = 0,
+                  pin_memory: bool = False) -> dict:
     model.eval()
     losses = []
     loader = torch.utils.data.DataLoader(
-        dataset, batch_size=batch_size, shuffle=False,
+        dataset,
+        batch_size=batch_size,
+        shuffle=False,
+        num_workers=num_workers,
+        pin_memory=pin_memory,
+        drop_last=False,
+        persistent_workers=num_workers > 0,
     )
     for i, (x, y) in enumerate(loader):
         if i >= max_batches:
@@ -162,6 +183,47 @@ def estimate_loss(model: nn.Module, dataset: PretrainingDataset,
     model.train()
     avg = sum(losses) / len(losses) if losses else float("nan")
     return {"loss": avg, "perplexity": math.exp(avg) if avg == avg else float("nan")}
+
+
+# ── Distributed helpers ─────────────────────────────────────────────────────
+
+def _init_distributed(device: torch.device) -> tuple[torch.device, int, int, int, bool]:
+    """Initialise torch.distributed if launched via torchrun."""
+    if not dist.is_available():
+        return device, 0, 1, 0, False
+
+    world_size = int(os.environ.get("WORLD_SIZE", "1"))
+    if world_size <= 1:
+        return device, 0, 1, 0, False
+
+    if not dist.is_initialized():
+        backend = "nccl" if device.type == "cuda" else "gloo"
+        if backend == "nccl":
+            has_nccl = getattr(dist, "is_nccl_available", lambda: True)()
+            if not has_nccl:
+                logging.getLogger("parrotllm.training").warning(
+                    "NCCL backend unavailable; falling back to gloo."
+                )
+                backend = "gloo"
+        dist.init_process_group(backend=backend)
+
+    rank = dist.get_rank()
+    local_rank = int(os.environ.get("LOCAL_RANK", rank))
+
+    if device.type == "cuda":
+        device = torch.device(f"cuda:{local_rank}")
+        torch.cuda.set_device(device)
+
+    return device, rank, dist.get_world_size(), local_rank, True
+
+
+def _broadcast_value(value, src: int = 0):
+    """Broadcast a picklable value from src to all other ranks."""
+    if not dist.is_available() or not dist.is_initialized():
+        return value
+    payload = [value]
+    dist.broadcast_object_list(payload, src=src)
+    return payload[0]
 
 
 # ── Training ─────────────────────────────────────────────────────────────────
@@ -236,46 +298,98 @@ def run_train(
     tc = tc_model.model_dump()
     mc = mc_model.model_dump()
 
+    device, rank, world_size, local_rank, distributed = _init_distributed(device)
+    is_master = rank == 0
+    trial_for_rank = trial if (trial is not None and (not distributed or is_master)) else None
+
     # ── run directory & loggers ───────────────────────────────────────────────
-    run_dir = make_run_dir(tc_model.runs_dir)
-    setup_logger(
-        run_dir,
-        console_level=lc_model.console_level,
-        file_level=lc_model.file_level,
-        component_levels=lc_model.components if lc_model.components else None,
-    )
+    run_dir = make_run_dir(tc_model.runs_dir) if is_master else None
+    if distributed:
+        run_dir = _broadcast_value(run_dir, src=0)
+        dist.barrier()
+    if is_master:
+        setup_logger(
+            run_dir,
+            console_level=lc_model.console_level,
+            file_level=lc_model.file_level,
+            component_levels=lc_model.components if lc_model.components else None,
+        )
     log = logging.getLogger("parrotllm.training")
-    jlog = JSONLLogger(run_dir)
+    jlog: JSONLLogger | None = JSONLLogger(run_dir) if is_master else None
+
+    profiler_cfg = None
+    profiler_enabled_rank = False
+    if lc_model and lc_model.profiler:
+        profiler_cfg = lc_model.profiler.model_dump(mode="python")
+        profiler_enabled_rank = (
+            profiler_cfg.get("run_on_all_ranks", False) or is_master
+        )
+    profiler = TorchProfiler(
+        config=profiler_cfg,
+        run_dir=run_dir,
+        logger=log,
+        json_logger=jlog if is_master else None,
+        enabled=profiler_enabled_rank,
+    )
 
     # Save full config to run directory for reproducibility
-    config_path = os.path.join(run_dir, "config.json")
-    json_payload = project_config.model_dump(mode="json")
-    with open(config_path, "w") as f:
-        json.dump(json_payload, f, indent=2)
-    jlog.log("pretraining", "config", **tc)
+    if is_master:
+        config_path = os.path.join(run_dir, "config.json")
+        json_payload = project_config.model_dump(mode="json")
+        with open(config_path, "w") as f:
+            json.dump(json_payload, f, indent=2)
+        jlog.log("pretraining", "config", **tc)
 
-    log.info(f"device={device}")
+    log_prefix = (
+        f"device={device} | rank={rank} | world_size={world_size} | "
+        f"distributed={'yes' if distributed else 'no'}"
+    )
+    if is_master:
+        log.info(log_prefix)
 
     # data
     train_ds = PretrainingDataset(tc["train_bin"], mc["context_length"])
     val_ds = None
-    if os.path.exists(tc["val_bin"]):
+    if os.path.exists(tc["val_bin"]) and (not distributed or is_master):
         val_ds = PretrainingDataset(tc["val_bin"], mc["context_length"])
+
+    pin_memory = bool(tc.get("pin_memory", True)) and device.type == "cuda"
+    num_workers = int(tc.get("num_workers", 0))
+    train_sampler = None
+    if distributed:
+        train_sampler = DistributedSampler(
+            train_ds, num_replicas=world_size, rank=rank, shuffle=True, drop_last=True,
+        )
+
     train_loader = torch.utils.data.DataLoader(
-        train_ds, batch_size=tc["batch_size"], shuffle=True,
-        num_workers=2, pin_memory=(device.type == "cuda"),
+        train_ds,
+        batch_size=tc["batch_size"],
+        sampler=train_sampler,
+        shuffle=train_sampler is None,
+        num_workers=num_workers,
+        pin_memory=pin_memory,
+        drop_last=distributed,
+        persistent_workers=num_workers > 0,
     )
 
     # model
     model = ParrotLLM(model_config_dict).to(device)
 
     # ── Architecture log (slide 12 style) ─────────────────────────────────────
-    _log_model_architecture(log, jlog, model, mc, device, tc["batch_size"])
+    if is_master and jlog is not None:
+        _log_model_architecture(log, jlog, model, mc, device, tc["batch_size"])
 
     # torch.compile
     if device.type == "cuda":
-        log.info("compiling model with torch.compile...")
+        if is_master:
+            log.info("compiling model with torch.compile...")
         model = torch.compile(model)
+
+    if distributed:
+        ddp_kwargs: dict = {"find_unused_parameters": False}
+        if device.type == "cuda":
+            ddp_kwargs.update(device_ids=[local_rank], output_device=local_rank)
+        model = DDP(model, **ddp_kwargs)
 
     # optimizer
     optimizer = build_optimizer(model, tc)
@@ -285,183 +399,248 @@ def run_train(
     start_step = 0
     if checkpoint:
         start_step, _ = load_checkpoint(checkpoint, model, optimizer, scaler, device)
-        log.info(f"resumed from step {start_step}")
+        if is_master:
+            log.info(f"resumed from step {start_step}")
 
     # ── initial evaluation ────────────────────────────────────────────────────
     if val_ds is not None:
         log.info("Starting evaluation...")
-        val_metrics = estimate_loss(model, val_ds, device, autocast_ctx, tc["batch_size"])
-        jlog.log("pretraining", "initial_validation",
-                 val_loss=val_metrics["loss"], val_ppl=val_metrics["perplexity"])
-        log.info(f"  Initial val: loss={val_metrics['loss']:.4f}, ppl={val_metrics['perplexity']:.2f}")
+        val_metrics = estimate_loss(
+            model, val_ds, device, autocast_ctx, tc["batch_size"],
+            num_workers=num_workers, pin_memory=pin_memory,
+        )
+        if jlog is not None:
+            jlog.log(
+                "pretraining", "initial_validation",
+                val_loss=val_metrics["loss"], val_ppl=val_metrics["perplexity"],
+            )
+        log.info(
+            "  Initial val: loss=%.4f, ppl=%.2f",
+            val_metrics['loss'], val_metrics['perplexity'],
+        )
 
     # ── training loop ─────────────────────────────────────────────────────────
     model.train()
     grad_accum = tc["gradient_accumulation_steps"]
-    steps_per_epoch = len(train_loader) // grad_accum if len(train_loader) > 0 else 1
+    total_micro_batches = len(train_loader)
+    steps_per_epoch = max(1, total_micro_batches // max(1, grad_accum))
     data_iter = iter(train_loader)
     train_start = time.time()
     t0 = train_start
     best_val_loss = float("inf")
-    current_epoch = 0
-    prev_epoch = 0
+    initial_epoch = start_step // steps_per_epoch if steps_per_epoch > 0 else 0
+    prev_epoch = initial_epoch
     loss_history: list[tuple[int, float]] = []
-    
-    log.info(fmt_training_start(steps_per_epoch, tc["max_steps"]))
-    log.info(
-        f"LR schedule={tc.get('lr_schedule', 'wsd')} | "
-        f"decay_ratio={tc.get('lr_decay_ratio', 0.1)} | "
-        f"z_loss_coeff={tc.get('z_loss_coeff', 0.0)}"
-    )
+    if train_sampler is not None:
+        train_sampler.set_epoch(initial_epoch)
 
-    for step in range(start_step, tc["max_steps"]):
-        epoch = step // steps_per_epoch if steps_per_epoch > 0 else 0
-
-        lr = get_lr(
-            step, tc["warmup_steps"], tc["max_steps"],
-            tc["learning_rate"], tc["min_lr"],
-            schedule=tc.get("lr_schedule", "wsd"),
-            decay_ratio=tc.get("lr_decay_ratio", 0.1),
+    if is_master:
+        log.info(fmt_training_start(steps_per_epoch, tc["max_steps"]))
+        log.info(
+            f"LR schedule={tc.get('lr_schedule', 'wsd')} | "
+            f"decay_ratio={tc.get('lr_decay_ratio', 0.1)} | "
+            f"z_loss_coeff={tc.get('z_loss_coeff', 0.0)}"
         )
-        for pg in optimizer.param_groups:
-            pg["lr"] = lr
 
-        optimizer.zero_grad(set_to_none=True)
-        accum_loss = 0.0
-        z_loss_coeff = tc.get("z_loss_coeff", 0.0)
+    with profiler:
+        for step in range(start_step, tc["max_steps"]):
+            epoch = step // steps_per_epoch if steps_per_epoch > 0 else 0
+            if train_sampler is not None and epoch > prev_epoch:
+                train_sampler.set_epoch(epoch)
 
-        for micro in range(grad_accum):
-            try:
-                x, y = next(data_iter)
-            except StopIteration:
-                data_iter = iter(train_loader)
-                x, y = next(data_iter)
+            with profiler.record_function("train.step"):
+                lr = get_lr(
+                    step, tc["warmup_steps"], tc["max_steps"],
+                    tc["learning_rate"], tc["min_lr"],
+                    schedule=tc.get("lr_schedule", "wsd"),
+                    decay_ratio=tc.get("lr_decay_ratio", 0.1),
+                )
+                for pg in optimizer.param_groups:
+                    pg["lr"] = lr
 
-            x, y = x.to(device), y.to(device)
-            with autocast_ctx:
-                logits, ce_loss = model(x, targets=y)
-                if z_loss_coeff > 0.0:
-                    # Z-loss (arXiv:2202.08906): penalises large pre-softmax logits to
-                    # prevent numerical instability in mixed precision. Operates in
-                    # float32 to avoid precision issues, then cast back.
-                    z_loss = z_loss_coeff * torch.logsumexp(
-                        logits.float(), dim=-1
-                    ).pow(2).mean()
-                    loss = (ce_loss + z_loss) / grad_accum
+                optimizer.zero_grad(set_to_none=True)
+                accum_loss = 0.0
+                z_loss_coeff = tc.get("z_loss_coeff", 0.0)
+
+                for micro in range(grad_accum):
+                    try:
+                        x, y = next(data_iter)
+                    except StopIteration:
+                        data_iter = iter(train_loader)
+                        x, y = next(data_iter)
+
+                    x, y = x.to(device), y.to(device)
+                    with autocast_ctx:
+                        logits, ce_loss = model(x, targets=y)
+                        if z_loss_coeff > 0.0:
+                            # Z-loss (arXiv:2202.08906): penalises large pre-softmax logits to
+                            # prevent numerical instability in mixed precision. Operates in
+                            # float32 to avoid precision issues, then cast back.
+                            z_loss = z_loss_coeff * torch.logsumexp(
+                                logits.float(), dim=-1
+                            ).pow(2).mean()
+                            loss = (ce_loss + z_loss) / grad_accum
+                        else:
+                            loss = ce_loss / grad_accum
+
+                    sync_grad = (not distributed) or (micro == grad_accum - 1)
+                    ctx = (
+                        model.no_sync
+                        if (distributed and hasattr(model, "no_sync") and not sync_grad)
+                        else nullcontext
+                    )
+                    with ctx():
+                        if scaler is not None:
+                            scaler.scale(loss).backward()
+                        else:
+                            loss.backward()
+                    accum_loss += loss.item()
+
+                # gradient norm (for debug logging)
+                grad_norm = 0.0
+                if tc["grad_clip"] > 0:
+                    if scaler is not None:
+                        scaler.unscale_(optimizer)
+                    grad_norm = nn.utils.clip_grad_norm_(model.parameters(), tc["grad_clip"]).item()
+
+                if scaler is not None:
+                    scaler.step(optimizer)
+                    scaler.update()
                 else:
-                    loss = ce_loss / grad_accum
+                    optimizer.step()
 
-            if scaler is not None:
-                scaler.scale(loss).backward()
-            else:
-                loss.backward()
-            accum_loss += loss.item()
+            ppl = math.exp(accum_loss) if accum_loss == accum_loss else float("nan")
 
-        # gradient norm (for debug logging)
-        grad_norm = 0.0
-        if tc["grad_clip"] > 0:
-            if scaler is not None:
-                scaler.unscale_(optimizer)
-            grad_norm = nn.utils.clip_grad_norm_(model.parameters(), tc["grad_clip"]).item()
+            # console/file log (every log_every steps)
+            if is_master and step % tc["log_every"] == 0:
+                dt = time.time() - t0
+                log.info(
+                    f"step {step:>6d} | epoch {epoch} | "
+                    f"loss {accum_loss:.4f} | lr {lr:.2e} | grad {grad_norm:.4f}"
+                )
+                log.debug(
+                    f"step {step:>6d} | ppl {ppl:.2f} | dt {dt:.1f}s"
+                )
+                t0 = time.time()
 
-        if scaler is not None:
-            scaler.step(optimizer)
-            scaler.update()
-        else:
-            optimizer.step()
+            # JSONL: every step (for plots)
+            if jlog is not None:
+                jlog.log(
+                    "pretraining", "step",
+                    epoch=epoch, step=step,
+                    train_loss=accum_loss, perplexity=ppl, lr=lr,
+                )
 
-        ppl = math.exp(accum_loss) if accum_loss == accum_loss else float("nan")
+            if is_master:
+                loss_history.append((step, accum_loss))
 
-        # console/file log (every log_every steps)
-        if step % tc["log_every"] == 0:
-            dt = time.time() - t0
-            log.info(
-                f"step {step:>6d} | epoch {epoch} | "
-                f"loss {accum_loss:.4f} | lr {lr:.2e} | grad {grad_norm:.4f}"
-            )
-            log.debug(
-                f"step {step:>6d} | ppl {ppl:.2f} | dt {dt:.1f}s"
-            )
-            t0 = time.time()
+            profiler.step(step=step, epoch=epoch)
 
-        # JSONL: every step (for plots)
-        jlog.log("pretraining", "step",
-                 epoch=epoch, step=step,
-                 train_loss=accum_loss, perplexity=ppl, lr=lr)
+            # epoch boundary detection
+            is_epoch_boundary = epoch > prev_epoch
+            is_eval_step = (val_ds is not None and step > 0
+                            and step % tc["eval_every"] == 0)
+            prune_this_step = False
 
-        loss_history.append((step, accum_loss))
+            if val_ds is not None and (is_epoch_boundary or is_eval_step):
+                log.info("Starting evaluation...")
+                log.info("-" * 60)
+                val_metrics = estimate_loss(
+                    model, val_ds, device, autocast_ctx, tc["batch_size"],
+                    num_workers=num_workers, pin_memory=pin_memory,
+                )
+                val_loss = val_metrics["loss"]
+                val_ppl = val_metrics["perplexity"]
 
-        # epoch boundary detection
-        is_epoch_boundary = epoch > prev_epoch
-        is_eval_step = (val_ds is not None and step > 0
-                        and step % tc["eval_every"] == 0)
+                if is_epoch_boundary:
+                    log.info(f"Epoch {prev_epoch + 1} complete:")
+                log.info(f"  Train: loss={accum_loss:.4f}, ppl={ppl:.2f}")
+                log.info(f"  Val:   loss={val_loss:.4f}, ppl={val_ppl:.2f}")
 
-        if val_ds is not None and (is_epoch_boundary or is_eval_step):
-            log.info("Starting evaluation...")
-            log.info("-" * 60)
-            val_metrics = estimate_loss(model, val_ds, device, autocast_ctx, tc["batch_size"])
-            val_loss = val_metrics["loss"]
-            val_ppl = val_metrics["perplexity"]
+                if jlog is not None:
+                    jlog.log(
+                        "pretraining", "eval",
+                        step=step, epoch=epoch,
+                        val_loss=val_loss, val_ppl=val_ppl,
+                    )
 
-            if is_epoch_boundary:
-                log.info(f"Epoch {prev_epoch + 1} complete:")
-            log.info(f"  Train: loss={accum_loss:.4f}, ppl={ppl:.2f}")
-            log.info(f"  Val:   loss={val_loss:.4f}, ppl={val_ppl:.2f}")
+                if trial_for_rank is not None:
+                    trial_for_rank.report(val_ppl, step)
+                    if trial_for_rank.should_prune():
+                        prune_this_step = True
 
-            jlog.log("pretraining", "eval",
-                     step=step, epoch=epoch,
-                     val_loss=val_loss, val_ppl=val_ppl)
+                if val_loss < best_val_loss:
+                    best_val_loss = val_loss
+                    log.info("  ** New best validation loss! **")
+                log.info("-" * 60)
 
-            # Optuna intermediate reporting + pruning
-            if trial is not None:
-                trial.report(val_ppl, step)
-                if trial.should_prune():
+            if distributed and trial is not None:
+                flag = torch.tensor(1 if (is_master and prune_this_step) else 0, device=device)
+                dist.broadcast(flag, src=0)
+                if not is_master and flag.item() == 1:
                     import optuna
                     raise optuna.TrialPruned()
 
-            if val_loss < best_val_loss:
-                best_val_loss = val_loss
-                log.info("  ** New best validation loss! **")
-            log.info("-" * 60)
+            if prune_this_step:
+                import optuna
+                raise optuna.TrialPruned()
 
-        if is_epoch_boundary:
-            prev_epoch = epoch
+            if is_epoch_boundary:
+                prev_epoch = epoch
 
-        # checkpoint
-        if step > 0 and step % tc["save_every"] == 0:
-            save_checkpoint(model, optimizer, model_config_dict, step, epoch, scaler, run_dir)
-            ckpt_path = os.path.join(run_dir, f"{epoch:02d}_epoch_{step}_step")
-            log.info(f"Saved checkpoint: {ckpt_path}")
-            jlog.log("pretraining", "checkpoint",
-                     step=step, epoch=epoch, path=ckpt_path)
+            # checkpoint
+            if is_master and step > 0 and step % tc["save_every"] == 0:
+                save_checkpoint(model, optimizer, model_config_dict, step, epoch, scaler, run_dir)
+                ckpt_path = os.path.join(run_dir, f"{epoch:02d}_epoch_{step}_step")
+                log.info(f"Saved checkpoint: {ckpt_path}")
+                if jlog is not None:
+                    jlog.log(
+                        "pretraining", "checkpoint",
+                        step=step, epoch=epoch, path=ckpt_path,
+                    )
 
     # final save
-    save_checkpoint(model, optimizer, model_config_dict, tc["max_steps"], epoch, scaler, run_dir)
-    final_ckpt = os.path.join(run_dir, f"{epoch:02d}_epoch_{tc['max_steps']}_step")
-    jlog.log("pretraining", "checkpoint",
-             step=tc["max_steps"], epoch=epoch, path=final_ckpt)
+    if is_master:
+        save_checkpoint(model, optimizer, model_config_dict, tc["max_steps"], epoch, scaler, run_dir)
+        final_ckpt = os.path.join(run_dir, f"{epoch:02d}_epoch_{tc['max_steps']}_step")
+        if jlog is not None:
+            jlog.log(
+                "pretraining", "checkpoint",
+                step=tc["max_steps"], epoch=epoch, path=final_ckpt,
+            )
 
     # ── ASCII loss curve ───────────────────────────────────────────────────────
-    curve = render_ascii_loss_curve(loss_history)
-    if curve:
-        log.info("\n" + curve)
+    if is_master:
+        curve = render_ascii_loss_curve(loss_history)
+        if curve:
+            log.info("\n" + curve)
 
     # ── training complete summary ─────────────────────────────────────────────
     total_seconds = time.time() - train_start
     total_hours = total_seconds / 3600
-    log.info(fmt_training_complete(
-        epoch + 1, tc["max_steps"], total_hours, best_val_loss, run_dir,
-    ))
+    if is_master:
+        log.info(fmt_training_complete(
+            epoch + 1, tc["max_steps"], total_hours, best_val_loss, run_dir,
+        ))
 
-    jlog.log("pretraining", "training_complete",
-             epochs=epoch + 1,
-             total_steps=tc["max_steps"],
-             total_time_hours=round(total_hours, 2),
-             best_val_loss=best_val_loss if best_val_loss != float("inf") else None,
-             run_dir=run_dir)
+    if jlog is not None:
+        jlog.log(
+            "pretraining", "training_complete",
+            epochs=epoch + 1,
+            total_steps=tc["max_steps"],
+            total_time_hours=round(total_hours, 2),
+            best_val_loss=best_val_loss if best_val_loss != float("inf") else None,
+            run_dir=run_dir,
+        )
+        jlog.close()
 
-    jlog.close()
-    log.info("done")
+    if is_master:
+        log.info("done")
+
+    if distributed:
+        tensor = torch.tensor(best_val_loss, device=device)
+        dist.broadcast(tensor, src=0)
+        best_val_loss = tensor.item()
 
     best_val_ppl = math.exp(best_val_loss) if best_val_loss != float("inf") else float("inf")
     return best_val_ppl

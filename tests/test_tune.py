@@ -6,7 +6,7 @@ import pytest
 def test_load_tune_config():
     """tune.yaml loads and has required sections."""
     from tune import load_tune_config
-    cfg = load_tune_config("configs/tune.yaml")
+    cfg = load_tune_config("configs/tuning/tune.yaml")
     assert "tune" in cfg
     assert "model" in cfg
     assert "training" in cfg
@@ -16,7 +16,7 @@ def test_load_tune_config():
 def test_tune_config_validates():
     """tune.yaml validates through ProjectConfig."""
     from configs import load_project_config
-    pc = load_project_config("configs/tune.yaml")
+    pc = load_project_config("configs/tuning/tune.yaml")
     assert pc.tune is not None
     assert pc.tune.name == "parrotllm-hp-search"
     assert pc.model is not None
@@ -30,7 +30,7 @@ def test_sample_hyperparams_returns_valid_config():
     from src.training.tune import sample_hyperparams
     from configs import load_project_config
 
-    pc = load_project_config("configs/tune.yaml")
+    pc = load_project_config("configs/tuning/tune.yaml")
     search_space = {
         name: spec.model_dump() for name, spec in pc.tune.search_space.items()
     }
@@ -72,7 +72,7 @@ def test_build_trial_config():
     from src.training.tune import sample_hyperparams, build_trial_config
     from configs import ProjectConfig, load_project_config
 
-    pc = load_project_config("configs/tune.yaml")
+    pc = load_project_config("configs/tuning/tune.yaml")
     base_config = {
         "model": pc.model.model_dump(mode="python"),
         "training": pc.training.model_dump(mode="python"),

@@ -71,9 +71,11 @@ def set_seed(seed: int) -> None:
 
 def get_device(device_str: str = "auto") -> torch.device:
     if device_str != "auto":
-        return torch.device(device_str)
+        device = torch.device(device_str)
+        return device
     if torch.cuda.is_available():
         return torch.device("cuda")
-    if torch.backends.mps.is_available():
+    mps_backend = getattr(torch.backends, "mps", None)
+    if mps_backend and mps_backend.is_available():
         return torch.device("mps")
     return torch.device("cpu")

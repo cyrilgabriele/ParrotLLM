@@ -20,6 +20,7 @@ class ModelConfig(BaseModel):
     bias: bool = Field(...)
     dropout: float = Field(...)
     rope_theta: float = Field(...)
+    gradient_checkpointing: bool = Field(False)
 
 
 class TrainingConfig(BaseModel):
@@ -30,6 +31,8 @@ class TrainingConfig(BaseModel):
     # data
     train_bin: str = Field(...)
     val_bin: str = Field(...)
+    num_workers: int = Field(4, ge=0)
+    pin_memory: bool = Field(True)
 
     # batching
     batch_size: int = Field(...)

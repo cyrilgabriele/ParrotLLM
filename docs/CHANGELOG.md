@@ -21,6 +21,32 @@ Track what was changed, why it was changed, and any important notes.
 
 ## Unreleased
 
+### [2026-03-27] - Cyril Gabriele
+
+#### What
+- Added a `gradient_checkpointing` flag to the model config schema/YAML so activation recompute can be toggled per run
+- Wrapped each Transformer block with `torch.utils.checkpoint` when the flag is on and the model is training, preserving inference behavior
+
+#### Why
+- VL06 Systems & Efficiency recommends enabling gradient checkpointing only when activations no longer fit on V100; this change makes it a one-line config flip while keeping the default fast path untouched
+
+#### Remarks
+- none
+
+### [2026-03-26] - Cyril Gabriele
+
+#### What
+- Added a `TorchProfiler` helper that hooks into the existing logging + JSONL pipeline, exports Chrome/TensorBoard traces, and wraps each train step with `record_function`
+- Extended the logging config schema with a typed `profiler` section (defaulted in `configs/default.yaml`) so profiling schedules/targets can be toggled per run without code edits
+- Updated the trainer to instantiate the profiler per rank, guard distributed usage, and log trace events; added a pytest to ensure traces + JSON records are emitted when torch.profiler is available
+
+#### Why
+- Gives us a turnkey way to capture PyTorch performance traces that align with our training logs, making it easier to debug regressions without manual instrumentation
+- Configuration-driven setup means profiling can be enabled for specific experiments (e.g., CUDA-only) while staying disabled in day-to-day runs so we don't pay overhead unintentionally
+
+#### Remarks
+- Enable via `logging.profiler.enabled: true` in the YAML and pull the resulting traces from `<run_dir>/profiler/trace_*.json` (or the TensorBoard subdir if that option is turned on)
+
 ### [2026-03-25] - Christof Steiner
 
 #### What
@@ -41,6 +67,19 @@ Track what was changed, why it was changed, and any important notes.
 
 
 ---
+### [2026-03-25] - Cyril Gabriele
+
+#### What
+- Added torch.distributed-aware training: single run directory + logging only on rank 0, DDP wrapping, gradient accumulation with `no_sync`, and per-rank DistributedSamplers with `set_epoch`
+- Wired VL06 recommendations into the default config (per-GPU batch 16, grad accumulation 2, `num_workers=4`, `pin_memory=true`) and propagated the loader knobs through the trainer/eval path
+- Guarded evaluation/checkpointing/JSON logging to rank 0, added run-wide metric broadcasts, and ensured BF16/FP16 checkpoints unwrap correctly from both `torch.compile` and DDP wrappers
+
+#### Why
+- Matches the Systems & Efficiency lecture guidance so 8× V100 runs saturate hardware without stomping each other's logs or wasting bandwidth on redundant eval/checkpoint ops
+- DDP + sampler fixes let each GPU see unique data shards while minimizing NCCL traffic during gradient accumulation, which was the target pattern discussed in EX06/train_ddp.py
+
+#### Remarks
+- Launch test for training with `uv run torchrun --standalone --nproc_per_node=1 main.py --stage train --config configs/gpu_test/ddp_smoke.yaml` to fully leverage the DGX setup
 
 ### [2026-03-20] - Gian Seifert
 

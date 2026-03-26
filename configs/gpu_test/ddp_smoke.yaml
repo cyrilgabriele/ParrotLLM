@@ -48,3 +48,6 @@ logging:
   components:
     training: DEBUG
     model_initialization: INFO
+  profiler:
+    enabled: true
+    

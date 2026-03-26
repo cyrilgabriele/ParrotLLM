@@ -79,7 +79,7 @@ Track what was changed, why it was changed, and any important notes.
 - DDP + sampler fixes let each GPU see unique data shards while minimizing NCCL traffic during gradient accumulation, which was the target pattern discussed in EX06/train_ddp.py
 
 #### Remarks
-- Launch training with `torchrun --nproc_per_node=8 python main.py --stage train --config ...` to fully leverage the DGX setup
+- Launch test for training with `uv run torchrun --standalone --nproc_per_node=1 main.py --stage train --config configs/gpu_test/ddp_smoke.yaml` to fully leverage the DGX setup
 
 ### [2026-03-20] - Gian Seifert
 

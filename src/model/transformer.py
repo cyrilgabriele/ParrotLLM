@@ -5,6 +5,7 @@ import math
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
+from torch.utils.checkpoint import checkpoint
 
 
 # ── RMSNorm ───────────────────────────────────────────────────────────────────
@@ -154,6 +155,7 @@ class ParrotLLM(nn.Module):
         super().__init__()
         mc = config["model"]
         self.config = mc
+        self.gradient_checkpointing = bool(mc.get("gradient_checkpointing", False))
 
         self.tok_emb = nn.Embedding(mc["vocab_size"], mc["d_model"])
         self.dropout = nn.Dropout(mc.get("dropout", 0.0))
@@ -206,7 +208,13 @@ class ParrotLLM(nn.Module):
 
         freqs_cis = self.freqs_cis[:T]
         for block in self.blocks:
-            x = block(x, freqs_cis)
+            if self.gradient_checkpointing and self.training:
+                def custom_forward(tensor):
+                    return block(tensor, freqs_cis)
+
+                x = checkpoint(custom_forward, x, use_reentrant=False)
+            else:
+                x = block(x, freqs_cis)
 
         x = self.ln_f(x)
         logits = self.lm_head(x)

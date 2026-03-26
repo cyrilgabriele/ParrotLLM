@@ -22,7 +22,7 @@ from torch.utils.data.distributed import DistributedSampler
 
 from configs import ProjectConfig
 from src.logging_utils import (
-    JSONLLogger, fmt_model_summary, fmt_training_complete,
+    JSONLLogger, TorchProfiler, fmt_model_summary, fmt_training_complete,
     fmt_training_start, make_run_dir, render_ascii_loss_curve, setup_logger,
 )
 from src.model import ParrotLLM
@@ -317,6 +317,21 @@ def run_train(
     log = logging.getLogger("parrotllm.training")
     jlog: JSONLLogger | None = JSONLLogger(run_dir) if is_master else None
 
+    profiler_cfg = None
+    profiler_enabled_rank = False
+    if lc_model and lc_model.profiler:
+        profiler_cfg = lc_model.profiler.model_dump(mode="python")
+        profiler_enabled_rank = (
+            profiler_cfg.get("run_on_all_ranks", False) or is_master
+        )
+    profiler = TorchProfiler(
+        config=profiler_cfg,
+        run_dir=run_dir,
+        logger=log,
+        json_logger=jlog if is_master else None,
+        enabled=profiler_enabled_rank,
+    )
+
     # Save full config to run directory for reproducibility
     if is_master:
         config_path = os.path.join(run_dir, "config.json")
@@ -427,158 +442,162 @@ def run_train(
             f"z_loss_coeff={tc.get('z_loss_coeff', 0.0)}"
         )
 
-    for step in range(start_step, tc["max_steps"]):
-        epoch = step // steps_per_epoch if steps_per_epoch > 0 else 0
-        if train_sampler is not None and epoch > prev_epoch:
-            train_sampler.set_epoch(epoch)
+    with profiler:
+        for step in range(start_step, tc["max_steps"]):
+            epoch = step // steps_per_epoch if steps_per_epoch > 0 else 0
+            if train_sampler is not None and epoch > prev_epoch:
+                train_sampler.set_epoch(epoch)
 
-        lr = get_lr(
-            step, tc["warmup_steps"], tc["max_steps"],
-            tc["learning_rate"], tc["min_lr"],
-            schedule=tc.get("lr_schedule", "wsd"),
-            decay_ratio=tc.get("lr_decay_ratio", 0.1),
-        )
-        for pg in optimizer.param_groups:
-            pg["lr"] = lr
+            with profiler.record_function("train.step"):
+                lr = get_lr(
+                    step, tc["warmup_steps"], tc["max_steps"],
+                    tc["learning_rate"], tc["min_lr"],
+                    schedule=tc.get("lr_schedule", "wsd"),
+                    decay_ratio=tc.get("lr_decay_ratio", 0.1),
+                )
+                for pg in optimizer.param_groups:
+                    pg["lr"] = lr
 
-        optimizer.zero_grad(set_to_none=True)
-        accum_loss = 0.0
-        z_loss_coeff = tc.get("z_loss_coeff", 0.0)
+                optimizer.zero_grad(set_to_none=True)
+                accum_loss = 0.0
+                z_loss_coeff = tc.get("z_loss_coeff", 0.0)
 
-        for micro in range(grad_accum):
-            try:
-                x, y = next(data_iter)
-            except StopIteration:
-                data_iter = iter(train_loader)
-                x, y = next(data_iter)
+                for micro in range(grad_accum):
+                    try:
+                        x, y = next(data_iter)
+                    except StopIteration:
+                        data_iter = iter(train_loader)
+                        x, y = next(data_iter)
 
-            x, y = x.to(device), y.to(device)
-            with autocast_ctx:
-                logits, ce_loss = model(x, targets=y)
-                if z_loss_coeff > 0.0:
-                    # Z-loss (arXiv:2202.08906): penalises large pre-softmax logits to
-                    # prevent numerical instability in mixed precision. Operates in
-                    # float32 to avoid precision issues, then cast back.
-                    z_loss = z_loss_coeff * torch.logsumexp(
-                        logits.float(), dim=-1
-                    ).pow(2).mean()
-                    loss = (ce_loss + z_loss) / grad_accum
-                else:
-                    loss = ce_loss / grad_accum
+                    x, y = x.to(device), y.to(device)
+                    with autocast_ctx:
+                        logits, ce_loss = model(x, targets=y)
+                        if z_loss_coeff > 0.0:
+                            # Z-loss (arXiv:2202.08906): penalises large pre-softmax logits to
+                            # prevent numerical instability in mixed precision. Operates in
+                            # float32 to avoid precision issues, then cast back.
+                            z_loss = z_loss_coeff * torch.logsumexp(
+                                logits.float(), dim=-1
+                            ).pow(2).mean()
+                            loss = (ce_loss + z_loss) / grad_accum
+                        else:
+                            loss = ce_loss / grad_accum
 
-            sync_grad = (not distributed) or (micro == grad_accum - 1)
-            ctx = (
-                model.no_sync
-                if (distributed and hasattr(model, "no_sync") and not sync_grad)
-                else nullcontext
-            )
-            with ctx():
+                    sync_grad = (not distributed) or (micro == grad_accum - 1)
+                    ctx = (
+                        model.no_sync
+                        if (distributed and hasattr(model, "no_sync") and not sync_grad)
+                        else nullcontext
+                    )
+                    with ctx():
+                        if scaler is not None:
+                            scaler.scale(loss).backward()
+                        else:
+                            loss.backward()
+                    accum_loss += loss.item()
+
+                # gradient norm (for debug logging)
+                grad_norm = 0.0
+                if tc["grad_clip"] > 0:
+                    if scaler is not None:
+                        scaler.unscale_(optimizer)
+                    grad_norm = nn.utils.clip_grad_norm_(model.parameters(), tc["grad_clip"]).item()
+
                 if scaler is not None:
-                    scaler.scale(loss).backward()
+                    scaler.step(optimizer)
+                    scaler.update()
                 else:
-                    loss.backward()
-            accum_loss += loss.item()
+                    optimizer.step()
 
-        # gradient norm (for debug logging)
-        grad_norm = 0.0
-        if tc["grad_clip"] > 0:
-            if scaler is not None:
-                scaler.unscale_(optimizer)
-            grad_norm = nn.utils.clip_grad_norm_(model.parameters(), tc["grad_clip"]).item()
+            ppl = math.exp(accum_loss) if accum_loss == accum_loss else float("nan")
 
-        if scaler is not None:
-            scaler.step(optimizer)
-            scaler.update()
-        else:
-            optimizer.step()
+            # console/file log (every log_every steps)
+            if is_master and step % tc["log_every"] == 0:
+                dt = time.time() - t0
+                log.info(
+                    f"step {step:>6d} | epoch {epoch} | "
+                    f"loss {accum_loss:.4f} | lr {lr:.2e} | grad {grad_norm:.4f}"
+                )
+                log.debug(
+                    f"step {step:>6d} | ppl {ppl:.2f} | dt {dt:.1f}s"
+                )
+                t0 = time.time()
 
-        ppl = math.exp(accum_loss) if accum_loss == accum_loss else float("nan")
-
-        # console/file log (every log_every steps)
-        if is_master and step % tc["log_every"] == 0:
-            dt = time.time() - t0
-            log.info(
-                f"step {step:>6d} | epoch {epoch} | "
-                f"loss {accum_loss:.4f} | lr {lr:.2e} | grad {grad_norm:.4f}"
-            )
-            log.debug(
-                f"step {step:>6d} | ppl {ppl:.2f} | dt {dt:.1f}s"
-            )
-            t0 = time.time()
-
-        # JSONL: every step (for plots)
-        if jlog is not None:
-            jlog.log(
-                "pretraining", "step",
-                epoch=epoch, step=step,
-                train_loss=accum_loss, perplexity=ppl, lr=lr,
-            )
-
-        if is_master:
-            loss_history.append((step, accum_loss))
-
-        # epoch boundary detection
-        is_epoch_boundary = epoch > prev_epoch
-        is_eval_step = (val_ds is not None and step > 0
-                        and step % tc["eval_every"] == 0)
-        prune_this_step = False
-
-        if val_ds is not None and (is_epoch_boundary or is_eval_step):
-            log.info("Starting evaluation...")
-            log.info("-" * 60)
-            val_metrics = estimate_loss(
-                model, val_ds, device, autocast_ctx, tc["batch_size"],
-                num_workers=num_workers, pin_memory=pin_memory,
-            )
-            val_loss = val_metrics["loss"]
-            val_ppl = val_metrics["perplexity"]
-
-            if is_epoch_boundary:
-                log.info(f"Epoch {prev_epoch + 1} complete:")
-            log.info(f"  Train: loss={accum_loss:.4f}, ppl={ppl:.2f}")
-            log.info(f"  Val:   loss={val_loss:.4f}, ppl={val_ppl:.2f}")
-
+            # JSONL: every step (for plots)
             if jlog is not None:
                 jlog.log(
-                    "pretraining", "eval",
-                    step=step, epoch=epoch,
-                    val_loss=val_loss, val_ppl=val_ppl,
+                    "pretraining", "step",
+                    epoch=epoch, step=step,
+                    train_loss=accum_loss, perplexity=ppl, lr=lr,
                 )
 
-            if trial_for_rank is not None:
-                trial_for_rank.report(val_ppl, step)
-                if trial_for_rank.should_prune():
-                    prune_this_step = True
+            if is_master:
+                loss_history.append((step, accum_loss))
 
-            if val_loss < best_val_loss:
-                best_val_loss = val_loss
-                log.info("  ** New best validation loss! **")
-            log.info("-" * 60)
+            profiler.step(step=step, epoch=epoch)
 
-        if distributed and trial is not None:
-            flag = torch.tensor(1 if (is_master and prune_this_step) else 0, device=device)
-            dist.broadcast(flag, src=0)
-            if not is_master and flag.item() == 1:
+            # epoch boundary detection
+            is_epoch_boundary = epoch > prev_epoch
+            is_eval_step = (val_ds is not None and step > 0
+                            and step % tc["eval_every"] == 0)
+            prune_this_step = False
+
+            if val_ds is not None and (is_epoch_boundary or is_eval_step):
+                log.info("Starting evaluation...")
+                log.info("-" * 60)
+                val_metrics = estimate_loss(
+                    model, val_ds, device, autocast_ctx, tc["batch_size"],
+                    num_workers=num_workers, pin_memory=pin_memory,
+                )
+                val_loss = val_metrics["loss"]
+                val_ppl = val_metrics["perplexity"]
+
+                if is_epoch_boundary:
+                    log.info(f"Epoch {prev_epoch + 1} complete:")
+                log.info(f"  Train: loss={accum_loss:.4f}, ppl={ppl:.2f}")
+                log.info(f"  Val:   loss={val_loss:.4f}, ppl={val_ppl:.2f}")
+
+                if jlog is not None:
+                    jlog.log(
+                        "pretraining", "eval",
+                        step=step, epoch=epoch,
+                        val_loss=val_loss, val_ppl=val_ppl,
+                    )
+
+                if trial_for_rank is not None:
+                    trial_for_rank.report(val_ppl, step)
+                    if trial_for_rank.should_prune():
+                        prune_this_step = True
+
+                if val_loss < best_val_loss:
+                    best_val_loss = val_loss
+                    log.info("  ** New best validation loss! **")
+                log.info("-" * 60)
+
+            if distributed and trial is not None:
+                flag = torch.tensor(1 if (is_master and prune_this_step) else 0, device=device)
+                dist.broadcast(flag, src=0)
+                if not is_master and flag.item() == 1:
+                    import optuna
+                    raise optuna.TrialPruned()
+
+            if prune_this_step:
                 import optuna
                 raise optuna.TrialPruned()
 
-        if prune_this_step:
-            import optuna
-            raise optuna.TrialPruned()
+            if is_epoch_boundary:
+                prev_epoch = epoch
 
-        if is_epoch_boundary:
-            prev_epoch = epoch
-
-        # checkpoint
-        if is_master and step > 0 and step % tc["save_every"] == 0:
-            save_checkpoint(model, optimizer, model_config_dict, step, epoch, scaler, run_dir)
-            ckpt_path = os.path.join(run_dir, f"{epoch:02d}_epoch_{step}_step")
-            log.info(f"Saved checkpoint: {ckpt_path}")
-            if jlog is not None:
-                jlog.log(
-                    "pretraining", "checkpoint",
-                    step=step, epoch=epoch, path=ckpt_path,
-                )
+            # checkpoint
+            if is_master and step > 0 and step % tc["save_every"] == 0:
+                save_checkpoint(model, optimizer, model_config_dict, step, epoch, scaler, run_dir)
+                ckpt_path = os.path.join(run_dir, f"{epoch:02d}_epoch_{step}_step")
+                log.info(f"Saved checkpoint: {ckpt_path}")
+                if jlog is not None:
+                    jlog.log(
+                        "pretraining", "checkpoint",
+                        step=step, epoch=epoch, path=ckpt_path,
+                    )
 
     # final save
     if is_master:

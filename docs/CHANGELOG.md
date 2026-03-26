@@ -21,6 +21,32 @@ Track what was changed, why it was changed, and any important notes.
 
 ## Unreleased
 
+### [2026-03-27] - Cyril Gabriele
+
+#### What
+- Added a `gradient_checkpointing` flag to the model config schema/YAML so activation recompute can be toggled per run
+- Wrapped each Transformer block with `torch.utils.checkpoint` when the flag is on and the model is training, preserving inference behavior
+
+#### Why
+- VL06 Systems & Efficiency recommends enabling gradient checkpointing only when activations no longer fit on V100; this change makes it a one-line config flip while keeping the default fast path untouched
+
+#### Remarks
+- none
+
+### [2026-03-26] - Cyril Gabriele
+
+#### What
+- Added a `TorchProfiler` helper that hooks into the existing logging + JSONL pipeline, exports Chrome/TensorBoard traces, and wraps each train step with `record_function`
+- Extended the logging config schema with a typed `profiler` section (defaulted in `configs/default.yaml`) so profiling schedules/targets can be toggled per run without code edits
+- Updated the trainer to instantiate the profiler per rank, guard distributed usage, and log trace events; added a pytest to ensure traces + JSON records are emitted when torch.profiler is available
+
+#### Why
+- Gives us a turnkey way to capture PyTorch performance traces that align with our training logs, making it easier to debug regressions without manual instrumentation
+- Configuration-driven setup means profiling can be enabled for specific experiments (e.g., CUDA-only) while staying disabled in day-to-day runs so we don't pay overhead unintentionally
+
+#### Remarks
+- Enable via `logging.profiler.enabled: true` in the YAML and pull the resulting traces from `<run_dir>/profiler/trace_*.json` (or the TensorBoard subdir if that option is turned on)
+
 ### [2026-03-25] - Christof Steiner
 
 #### What

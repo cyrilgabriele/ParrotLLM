@@ -5,7 +5,14 @@ import logging
 import os
 import tempfile
 
-from src.logging_utils import JSONLLogger, make_run_dir, setup_logger
+import pytest
+
+try:  # torch is optional for non-training CI configs
+    import torch
+except Exception:  # pragma: no cover
+    torch = None
+
+from src.logging_utils import JSONLLogger, TorchProfiler, make_run_dir, setup_logger
 
 
 def test_init_logging_console_only():
@@ -101,3 +108,56 @@ def test_make_run_dir_without_tag():
         run_dir = make_run_dir(tmp)
         assert os.path.isdir(run_dir)
         assert "_test" not in os.path.basename(run_dir)
+
+
+@pytest.mark.skipif(
+    torch is None or not hasattr(torch, "profiler"),
+    reason="PyTorch profiler not available",
+)
+def test_torch_profiler_writes_traces(tmp_path):
+    run_dir = tmp_path / "run"
+    run_dir.mkdir()
+    cfg = {
+        "enabled": True,
+        "wait": 0,
+        "warmup": 0,
+        "active": 1,
+        "repeat": 1,
+        "skip_first": 0,
+        "activities": ["cpu"],
+        "record_shapes": False,
+        "profile_memory": False,
+        "log_summary": False,
+        "trace_subdir": "profiler",
+    }
+    jlog = JSONLLogger(str(run_dir))
+    log = logging.getLogger("parrotllm.test_profiler")
+    log.handlers.clear()
+    log.addHandler(logging.NullHandler())
+
+    profiler = TorchProfiler(
+        config=cfg,
+        run_dir=str(run_dir),
+        logger=log,
+        json_logger=jlog,
+        enabled=True,
+    )
+    if not profiler.enabled:
+        pytest.skip("Profiler disabled (likely due to unsupported backend)")
+
+    with profiler:
+        with profiler.record_function("unit.test"):
+            x = torch.randn(64, 64)
+            _ = (x @ x).sum().item()
+        profiler.step(step=0, epoch=0)
+
+    jlog.close()
+
+    trace_dir = run_dir / cfg["trace_subdir"]
+    traces = list(trace_dir.glob("trace_*.json"))
+    assert traces, "Expected profiler to produce at least one trace file"
+
+    metrics_path = run_dir / "metrics.jsonl"
+    with open(metrics_path) as fh:
+        records = [json.loads(line) for line in fh]
+    assert any(r.get("type") == "trace" for r in records)

@@ -34,6 +34,7 @@ model:
   bias: false                # no bias in linear layers
   dropout: 0.0               # dropout rate (0 for pretraining)
   rope_theta: 10000.0        # RoPE base frequency
+  gradient_checkpointing: false  # enable only when activations do not fit
 
 training:
   device: auto
@@ -80,6 +81,15 @@ logging:
     data_preprocessing: DEBUG
     model_initialization: INFO
     training: INFO
+  profiler:
+    enabled: false
+    wait: 1
+    warmup: 1
+    active: 4
+    repeat: 1
+    activities:
+      - cpu
+      - cuda
 
 eval:
   device: auto

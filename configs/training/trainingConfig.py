@@ -20,6 +20,7 @@ class ModelConfig(BaseModel):
     bias: bool = Field(...)
     dropout: float = Field(...)
     rope_theta: float = Field(...)
+    gradient_checkpointing: bool = Field(False)
 
 
 class TrainingConfig(BaseModel):

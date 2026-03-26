@@ -68,30 +68,10 @@ def set_seed(seed: int) -> None:
     if hasattr(torch.backends, "mps") and torch.backends.mps.is_available():
         torch.mps.manual_seed(seed)
 
-"""
-def _validate_explicit_device(device: torch.device) -> None:
-    '''Ensure the requested explicit device is actually usable.'''
-
-    if device.type == "cuda":
-        if not torch.cuda.is_available():
-            raise RuntimeError(
-                "Requested CUDA device but PyTorch was built without CUDA support "
-                "or no GPU is visible. Install a CUDA-enabled build or choose "
-                "'auto'/'cpu'."
-            )
-    elif device.type == "mps":
-        mps_backend = getattr(torch.backends, "mps", None)
-        if not (mps_backend and mps_backend.is_available()):
-            raise RuntimeError(
-                "Requested MPS device but this PyTorch build does not expose MPS. "
-                "Use 'auto' or a supported device."
-            )
-"""
 
 def get_device(device_str: str = "auto") -> torch.device:
     if device_str != "auto":
         device = torch.device(device_str)
-        # _validate_explicit_device(device)
         return device
     if torch.cuda.is_available():
         return torch.device("cuda")

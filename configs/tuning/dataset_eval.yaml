@@ -1,0 +1,51 @@
+# Dataset Quality Evaluation Configuration
+# Uses best HPs from Optuna study (Trial #8, ppl=67.97)
+# Runs identical training on each dataset to compare data quality
+# Run with: python main.py --stage train --config configs/tuning/dataset_eval.yaml
+
+model:
+  vocab_size: 50258
+  pad_token_id: 50257
+  bos_token_id: 50256
+  eos_token_id: 50256
+  d_model: 320
+  n_layers: 16
+  n_heads: 8
+  d_ff: 854
+  context_length: 256
+  bias: false
+  dropout: 0.0151                   # from Optuna trial #8
+  rope_theta: 10000.0
+
+training:
+  device: auto
+  train_bin: PLACEHOLDER
+  val_bin: PLACEHOLDER
+  num_workers: 4
+  batch_size: 64                    # from Optuna trial #8
+  gradient_accumulation_steps: 4    # from Optuna trial #8
+  learning_rate: 4.261e-4           # from Optuna trial #8
+  min_lr: 4.261e-5
+  weight_decay: 0.0190              # from Optuna trial #8
+  beta1: 0.9
+  beta2: 0.9332                     # from Optuna trial #8
+  grad_clip: 1.905                  # from Optuna trial #8
+  warmup_steps: 150                 # from Optuna trial #8
+  compile: true
+  max_steps: 3000
+  lr_schedule: wsd                  # from Optuna trial #8
+  lr_decay_ratio: 0.2296            # from Optuna trial #8
+  z_loss_coeff: 6.540e-4            # from Optuna trial #8
+  save_every: 50000
+  eval_every: 750
+  checkpoint_dir: checkpoints
+  runs_dir: runs/dataset_eval
+  log_every: 200
+
+logging:
+  console_level: INFO
+  file_level: INFO
+  components:
+    data_preprocessing: WARNING
+    model_initialization: INFO
+    training: INFO

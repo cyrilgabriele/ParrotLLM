@@ -1,26 +1,29 @@
 # Optuna Hyperparameter Tuning Configuration
-# Run with: python main.py --stage tune --config configs/tune.yaml
+# Run with: python main.py --stage tune --config configs/tuning/tune.yaml
+# Fixed architecture (16L, d=320, 8H) — tune optimizer, schedule, batching, regularization
+# Local RTX 5090 laptop — no cloud needed for 35M proxy
 
-# ── Proxy model (search space overrides these) ────────────────────────────────
+# ── Proxy model — fixed architecture matching final model ────────────────────
 model:
   vocab_size: 50258
   pad_token_id: 50257
   bos_token_id: 50256
   eos_token_id: 50256
-  d_model: 256
-  n_layers: 8
-  n_heads: 4
-  d_ff: 682
-  context_length: 256
+  d_model: 320                    # fixed: MobileLLM-optimal for 35.8M
+  n_layers: 16                    # fixed: deep & narrow per paper
+  n_heads: 8                      # fixed: 40 dim per head
+  d_ff: 854                       # fixed: 8/3 × d_model
+  context_length: 256             # shorter ctx for speed (full model uses 1024)
   bias: false
-  dropout: 0.05
+  dropout: 0.0
   rope_theta: 10000.0
 
 training:
   device: auto
   train_bin: data/experiment-a/train.bin
   val_bin: data/experiment-a/val.bin
-  batch_size: 16
+  num_workers: 4
+  batch_size: 64
   gradient_accumulation_steps: 1
   learning_rate: 8.0e-4
   min_lr: 8.0e-5
@@ -29,41 +32,42 @@ training:
   beta2: 0.95
   grad_clip: 1.0
   warmup_steps: 100
-  max_steps: 10000
-  lr_schedule: cosine
+  compile: true                    # via WSL2 Ubuntu + Triton
+  max_steps: 3000                 # proper proxy length for reliable HP signal
+  lr_schedule: wsd
   lr_decay_ratio: 0.1
   z_loss_coeff: 1.0e-4
-  save_every: 50000              # effectively disable checkpointing during tuning
-  eval_every: 200
+  save_every: 50000               # disable checkpointing during tuning
+  eval_every: 750                  # eval 4 times per trial (750, 1500, 2250, end)
   checkpoint_dir: checkpoints
   runs_dir: runs/tuning
-  log_every: 50
+  log_every: 200
 
 logging:
-  console_level: WARNING         # quiet during tuning
-  file_level: DEBUG
+  console_level: INFO
+  file_level: INFO
   components:
-    data_preprocessing: DEBUG
+    data_preprocessing: WARNING
     model_initialization: INFO
-    training: WARNING
+    training: INFO
 
 # ── Optuna study settings ─────────────────────────────────────────────────────
 tune:
-  name: parrotllm-hp-search
-  storage: optuna_studies/parrotllm.db
-  n_trials: 50
+  name: parrotllm-definitive-local
+  storage: optuna_studies/parrotllm-definitive.db
+  n_trials: 80                    # 11 dims × ~7x coverage = thorough
   timeout: null
   sampler: tpe
   pruner: hyperband
   pruner_kwargs:
-    min_resource: 200
-    max_resource: 10000
+    min_resource: 500
+    max_resource: 3000
     reduction_factor: 3
 
-  # Search space definition
-  # Types: log_uniform, uniform, int, categorical
+  # ── Full search space (architecture fixed, everything else tuned) ──────────
+  # 11 dimensions: all HPs that papers show matter for small LLM training
   search_space:
-    # Optimizer
+    # Optimizer — core HPs (Chinchilla, LLaMA, MobileLLM all tune these)
     learning_rate:
       type: log_uniform
       low: 1.0e-4
@@ -72,13 +76,9 @@ tune:
       type: log_uniform
       low: 0.01
       high: 0.3
-    beta1:
+    beta2:                          # Chinchilla uses 0.95, LLaMA 0.95, GPT-3 0.999
       type: uniform
-      low: 0.85
-      high: 0.95
-    beta2:
-      type: uniform
-      low: 0.95
+      low: 0.93
       high: 0.999
     warmup_steps:
       type: int
@@ -90,10 +90,20 @@ tune:
       low: 0.5
       high: 2.0
 
-    # Batching
+    # LR schedule — WSD (MiniCPM, arXiv:2404.06395) vs cosine (GPT-3 standard)
+    lr_schedule:
+      type: categorical
+      choices: [wsd, cosine]
+    lr_decay_ratio:                 # fraction of training spent in decay phase
+      type: uniform
+      low: 0.05
+      high: 0.3
+
+    # Batching — must fit on V100 16GB for final 8x V100 DDP training
+    # effective_batch = batch_size × grad_accum × 8 GPUs
     batch_size:
       type: categorical
-      choices: [8, 16, 32, 64]
+      choices: [32, 64]
     gradient_accumulation_steps:
       type: categorical
       choices: [1, 2, 4]
@@ -103,15 +113,7 @@ tune:
       type: uniform
       low: 0.0
       high: 0.15
-
-    # Architecture
-    d_model:
-      type: categorical
-      choices: [192, 256, 320, 384]
-    n_layers:
-      type: int
-      low: 4
-      high: 12
-    n_heads:
-      type: categorical
-      choices: [4, 8]
+    z_loss_coeff:                   # PaLM (arXiv:2204.02311): stabilizes logits in mixed precision
+      type: log_uniform
+      low: 1.0e-5
+      high: 1.0e-3

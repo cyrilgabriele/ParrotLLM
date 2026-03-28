@@ -1,0 +1,9 @@
+[
+  {
+    "dataset": "ExperimentA",
+    "val_perplexity": 69.0,
+    "train_bin": "data/exp_a/train.bin",
+    "train_size_mb": 559.0,
+    "duration_seconds": 2614.0
+  }
+]

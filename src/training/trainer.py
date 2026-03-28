@@ -379,11 +379,15 @@ def run_train(
     if is_master and jlog is not None:
         _log_model_architecture(log, jlog, model, mc, device, tc["batch_size"])
 
-    # torch.compile
-    if device.type == "cuda":
+    # torch.compile (skip if compile=false in config — useful for short HP tuning trials)
+    use_compile = tc.get("compile", True)
+    if device.type == "cuda" and use_compile:
         if is_master:
             log.info("compiling model with torch.compile...")
         model = torch.compile(model)
+    elif device.type == "cuda" and not use_compile:
+        if is_master:
+            log.info("torch.compile disabled via config")
 
     if distributed:
         ddp_kwargs: dict = {"find_unused_parameters": False}

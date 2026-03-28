@@ -65,3 +65,6 @@ class TrainingConfig(BaseModel):
     # logging
     runs_dir: str = Field(...)
     log_every: int = Field(...)
+
+    # torch.compile toggle (disable for short HP tuning trials)
+    compile: bool = Field(True)

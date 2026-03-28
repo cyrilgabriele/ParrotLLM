@@ -1,0 +1,44 @@
+[
+  {
+    "dataset": "ExperimentC",
+    "val_perplexity": 57.2666,
+    "train_bin": "data/exp_c/train.bin",
+    "train_size_mb": 381.4,
+    "duration_seconds": 2515.7
+  },
+  {
+    "dataset": "ExperimentD",
+    "val_perplexity": 68.009,
+    "train_bin": "data/exp_d/train.bin",
+    "train_size_mb": 487.8,
+    "duration_seconds": 5645.6
+  },
+  {
+    "dataset": "ExperimentB",
+    "val_perplexity": 68.4467,
+    "train_bin": "data/exp_b/train.bin",
+    "train_size_mb": 585.8,
+    "duration_seconds": 2499.2
+  },
+  {
+    "dataset": "ExperimentE",
+    "val_perplexity": 68.7023,
+    "train_bin": "data/exp_e/train.bin",
+    "train_size_mb": 490.8,
+    "duration_seconds": 2492.3
+  },
+  {
+    "dataset": "ExperimentA",
+    "val_perplexity": 69.0,
+    "train_bin": "data/exp_a/train.bin",
+    "train_size_mb": 559.0,
+    "duration_seconds": 2614.0
+  },
+  {
+    "dataset": "ExperimentF",
+    "val_perplexity": 70.2924,
+    "train_bin": "data/exp_f/train.bin",
+    "train_size_mb": 612.7,
+    "duration_seconds": 2805.8
+  }
+]

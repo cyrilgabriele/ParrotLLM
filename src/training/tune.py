@@ -73,6 +73,7 @@ def build_trial_config(base_config: dict, hp: dict) -> ProjectConfig:
     training_keys = {
         "learning_rate", "min_lr", "weight_decay", "beta1", "beta2",
         "grad_clip", "warmup_steps", "batch_size", "gradient_accumulation_steps",
+        "lr_schedule", "lr_decay_ratio", "z_loss_coeff",
     }
 
     for k, v in hp.items():
@@ -100,10 +101,13 @@ def _make_objective(tune_cfg: TuneConfig, base_config: dict):
         device = get_device(project_config.training.device)
         model_config_dict = project_config.model_dump(mode="python")
 
+        mc = project_config.model
         log.info(f"Trial {trial.number}: lr={hp.get('learning_rate', '?'):.2e}, "
-                 f"d_model={hp.get('d_model', '?')}, n_layers={hp.get('n_layers', '?')}")
+                 f"d_model={mc.d_model}, n_layers={mc.n_layers}, "
+                 f"bs={hp.get('batch_size', '?')}, dropout={hp.get('dropout', '?')}")
 
         from src.training.trainer import run_train
+        import torch
 
         try:
             best_ppl = run_train(
@@ -114,6 +118,13 @@ def _make_objective(tune_cfg: TuneConfig, base_config: dict):
             )
         except optuna.TrialPruned:
             log.info(f"Trial {trial.number} pruned.")
+            raise
+        except (RuntimeError, torch.OutOfMemoryError) as e:
+            if "out of memory" in str(e).lower():
+                log.warning(f"Trial {trial.number} OOM — skipping. "
+                            f"(bs={hp.get('batch_size')}, accum={hp.get('gradient_accumulation_steps')})")
+                torch.cuda.empty_cache()
+                raise optuna.TrialPruned()
             raise
 
         log.info(f"Trial {trial.number} finished: ppl={best_ppl:.2f}")
@@ -175,6 +186,7 @@ def export_best_params(study: optuna.Study, output_path: str = "best_params.yaml
     training_keys = {
         "learning_rate", "min_lr", "weight_decay", "beta1", "beta2",
         "grad_clip", "warmup_steps", "batch_size", "gradient_accumulation_steps",
+        "lr_schedule", "lr_decay_ratio", "z_loss_coeff",
     }
 
     result = {"model": {}, "training": {}}
@@ -217,9 +229,10 @@ def print_summary(study: optuna.Study) -> None:
         top5 = sorted(completed, key=lambda t: t.value)[:5]
         for t in top5:
             lr = t.params.get("learning_rate", 0)
-            dm = t.params.get("d_model", "?")
-            nl = t.params.get("n_layers", "?")
-            print(f"  #{t.number:>3d}: ppl={t.value:>8.2f} | lr={lr:.2e} | d_model={dm} | n_layers={nl}")
+            bs = t.params.get("batch_size", "?")
+            dp = t.params.get("dropout", "?")
+            wd = t.params.get("weight_decay", "?")
+            print(f"  #{t.number:>3d}: ppl={t.value:>8.2f} | lr={lr:.2e} | bs={bs} | wd={wd} | dropout={dp}")
 
     print("=" * 70)
 

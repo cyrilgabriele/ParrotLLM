@@ -21,6 +21,24 @@ Track what was changed, why it was changed, and any important notes.
 
 ## Unreleased
 
+### [2026-03-28] - Christof Steiner
+
+#### What
+- Ran Optuna HP tuning: 20 trials (TPE + Hyperband) over 11 dimensions on RTX 5090 (WSL2 + torch.compile)
+- Best result: ppl=67.97 — WSD schedule, LR=4.26e-4, low dropout/weight decay
+- Added dataset evaluation script (`eval_datasets.py`) to rank preprocessing variants A-F with fixed best HPs
+- Cumulative results file so team members can run experiments in parallel
+- Mac MPS support for dataset evaluation
+
+#### Why
+- Systematic HP search outperforms manual tuning; method is consistent with published best practices (TPE, Hyperband pruning, proxy model approach)
+- Dataset evaluation needed to select the best preprocessing variant before final 800M token training
+
+#### Remarks
+- Run dataset eval with `uv run python eval_datasets.py ExperimentA ExperimentB`
+- Results accumulate in `results/dataset_eval/dataset_ranking.json`
+- Full tuning report in `results/hp_tuning/REPORT.md`
+
 ### [2026-03-27] - Cyril Gabriele
 
 #### What

@@ -49,12 +49,6 @@ def run_single_dataset(name: str, train_bin: str, val_bin: str, compile: bool) -
     # torch.compile only works on CUDA (Linux) — disable for MPS/CPU
     cfg["training"]["compile"] = compile and torch.cuda.is_available()
 
-    # MPS has limited VRAM — reduce batch size to avoid OOM
-    device = get_device(cfg["training"].get("device", "auto"))
-    if device.type == "mps":
-        cfg["training"]["batch_size"] = 32
-        cfg["training"]["gradient_accumulation_steps"] = 2
-
     project_config = ProjectConfig.model_validate(cfg)
     device = get_device(project_config.training.device)
     model_config_dict = project_config.model_dump(mode="python")

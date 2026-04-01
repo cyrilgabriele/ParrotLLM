@@ -5,7 +5,7 @@ import pytest
 
 # Make scripts/ importable
 sys.path.insert(0, str(Path(__file__).parent.parent / "scripts"))
-from plot_training import parse_log
+from plot_training import parse_log, _resolve_run
 
 SAMPLE_LOG = """
 2026-03-20 14:55:19 - INFO - parrotllm.training - Logging initialised -> runs/run_test/train.log
@@ -111,3 +111,8 @@ def test_build_figure_comparison(log_file):
     fig = build_figure([data1, data2])
     assert fig is not None
     assert len(fig.get_axes()) == 5  # 4 subplots + 1 twinx
+
+
+def test_resolve_run_missing_log(tmp_path):
+    with pytest.raises(FileNotFoundError, match="No train.log found"):
+        _resolve_run(tmp_path)

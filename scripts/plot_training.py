@@ -18,6 +18,8 @@ import argparse
 from pathlib import Path
 
 import matplotlib
+
+matplotlib.use("Agg")  # must be set before pyplot is imported
 import matplotlib.pyplot as plt
 
 
@@ -286,7 +288,6 @@ def main():
     else:
         out_path = args.run_dirs[0] / "training_plots.pdf"
 
-    matplotlib.use("Agg")
     fig = build_figure(runs)
     fig.savefig(out_path, format="pdf", bbox_inches="tight", dpi=150)
     plt.close(fig)

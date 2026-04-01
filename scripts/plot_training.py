@@ -17,6 +17,9 @@ import json
 import argparse
 from pathlib import Path
 
+import matplotlib
+import matplotlib.pyplot as plt
+
 
 # ---------------------------------------------------------------------------
 # Log parsing
@@ -133,10 +136,6 @@ def parse_log(log_path: Path, label: str | None = None) -> dict:
 # ---------------------------------------------------------------------------
 # Plotting
 # ---------------------------------------------------------------------------
-
-import matplotlib
-import matplotlib.pyplot as plt
-import numpy as np
 
 # Qualitative color palette (up to 8 runs)
 _PALETTE = [

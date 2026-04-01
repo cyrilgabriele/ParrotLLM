@@ -32,7 +32,7 @@ _RE_BEST = re.compile(r"\*\* New best validation loss! \*\*")
 _RE_EVAL_START = re.compile(r"Starting evaluation\.\.\.")
 
 
-def parse_log(log_path: Path, label: str = None) -> dict:
+def parse_log(log_path: Path, label: str | None = None) -> dict:
     """Parse a train.log file into a dict of time-series lists."""
     text = log_path.read_text()
     lines = text.splitlines()

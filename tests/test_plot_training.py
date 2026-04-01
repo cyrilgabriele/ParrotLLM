@@ -4,7 +4,7 @@ from pathlib import Path
 import pytest
 
 # Make scripts/ importable
-sys.path.insert(0, str(Path(__file__).parent.parent / "scripts"))
+sys.path.insert(0, str(Path(__file__).parent.parent / "src" / "scripts"))
 from plot_training import parse_log, _resolve_run
 
 SAMPLE_LOG = """

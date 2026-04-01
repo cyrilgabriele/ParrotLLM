@@ -239,3 +239,59 @@ def build_figure(runs: list[dict]) -> plt.Figure:
 
     fig.tight_layout(pad=1.5)
     return fig
+
+
+# ---------------------------------------------------------------------------
+# CLI
+# ---------------------------------------------------------------------------
+
+def _resolve_run(run_dir: Path) -> Path:
+    """Return the train.log path inside a run directory."""
+    log = run_dir / "train.log"
+    if not log.exists():
+        raise FileNotFoundError(f"No train.log found in {run_dir}")
+    return log
+
+
+def main():
+    parser = argparse.ArgumentParser(
+        description="Plot ParrotLLM training logs as a PDF."
+    )
+    parser.add_argument(
+        "run_dirs",
+        nargs="+",
+        type=Path,
+        metavar="RUN_DIR",
+        help="One or more run directories containing train.log",
+    )
+    parser.add_argument(
+        "--output",
+        type=Path,
+        default=None,
+        help="Output PDF path (default: <first_run_dir>/training_plots.pdf or comparison_plots.pdf)",
+    )
+    args = parser.parse_args()
+
+    runs = []
+    for run_dir in args.run_dirs:
+        log_path = _resolve_run(run_dir)
+        runs.append(parse_log(log_path))
+
+    is_comparison = len(runs) > 1
+
+    if args.output:
+        out_path = args.output
+    elif is_comparison:
+        out_path = args.run_dirs[0] / "comparison_plots.pdf"
+    else:
+        out_path = args.run_dirs[0] / "training_plots.pdf"
+
+    matplotlib.use("Agg")
+    fig = build_figure(runs)
+    fig.savefig(out_path, format="pdf", bbox_inches="tight", dpi=150)
+    plt.close(fig)
+    print(f"Saved: {out_path}")
+
+
+if __name__ == "__main__":
+    main()

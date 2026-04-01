@@ -72,3 +72,15 @@ def test_parse_best_val_step(log_file):
 def test_parse_label_fallback(log_file):
     data = parse_log(log_file, label="my_run")
     assert data["label"] == "my_run"
+
+
+def test_parse_label_from_config(log_file):
+    import json
+    config = {
+        "training": {"learning_rate": 0.001},
+        "model": {"n_layers": 4, "d_model": 128}
+    }
+    config_path = log_file.parent / "config.json"
+    config_path.write_text(json.dumps(config))
+    data = parse_log(log_file)
+    assert data["label"] == "lr=0.001, layers=4, d=128"

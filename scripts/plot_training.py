@@ -32,6 +32,20 @@ _RE_BEST = re.compile(r"\*\* New best validation loss! \*\*")
 _RE_EVAL_START = re.compile(r"Starting evaluation\.\.\.")
 
 
+def _label_from_config(run_dir: Path) -> str | None:
+    config_path = run_dir / "config.json"
+    if not config_path.exists():
+        return None
+    try:
+        cfg = json.loads(config_path.read_text())
+        lr = cfg.get("training", {}).get("learning_rate", "?")
+        layers = cfg.get("model", {}).get("n_layers", "?")
+        d_model = cfg.get("model", {}).get("d_model", "?")
+        return f"lr={lr}, layers={layers}, d={d_model}"
+    except Exception:
+        return None
+
+
 def parse_log(log_path: Path, label: str | None = None) -> dict:
     """Parse a train.log file into a dict of time-series lists."""
     text = log_path.read_text()
@@ -98,7 +112,7 @@ def parse_log(log_path: Path, label: str | None = None) -> dict:
                 continue
 
     if label is None:
-        label = log_path.parent.name
+        label = _label_from_config(log_path.parent) or log_path.parent.name
 
     return {
         "steps": steps,

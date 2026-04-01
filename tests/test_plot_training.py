@@ -89,3 +89,25 @@ def test_parse_label_from_config(log_file):
     config_path.write_text(json.dumps(config))
     data = parse_log(log_file)
     assert data["label"] == "lr=0.001, layers=4, d=128"
+
+
+def test_build_figure_single_run(log_file):
+    import matplotlib
+    matplotlib.use("Agg")  # non-interactive backend for tests
+    from plot_training import build_figure
+    data = parse_log(log_file)
+    fig = build_figure([data])
+    assert fig is not None
+    axes = fig.get_axes()
+    assert len(axes) == 5  # 4 subplots + 1 twinx for LR/grad subplot
+
+
+def test_build_figure_comparison(log_file):
+    import matplotlib
+    matplotlib.use("Agg")
+    from plot_training import build_figure
+    data1 = parse_log(log_file, label="run_A")
+    data2 = parse_log(log_file, label="run_B")
+    fig = build_figure([data1, data2])
+    assert fig is not None
+    assert len(fig.get_axes()) == 5  # 4 subplots + 1 twinx

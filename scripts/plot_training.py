@@ -128,3 +128,115 @@ def parse_log(log_path: Path, label: str | None = None) -> dict:
         "best_val_step": best_val_step,
         "label": label,
     }
+
+
+# ---------------------------------------------------------------------------
+# Plotting
+# ---------------------------------------------------------------------------
+
+import matplotlib
+import matplotlib.pyplot as plt
+import numpy as np
+
+# Qualitative color palette (up to 8 runs)
+_PALETTE = [
+    "#e05c5c", "#5c7ae0", "#5cba7a", "#e0a35c",
+    "#a35ce0", "#5ce0d4", "#c9e05c", "#e05cb8",
+]
+
+
+def _apply_style(ax):
+    """Apply NeurIPS/Nature minimal style to an axes."""
+    ax.spines["top"].set_visible(False)
+    ax.spines["right"].set_visible(False)
+    ax.grid(axis="y", color="#e0e0e0", linewidth=0.8, alpha=0.6, zorder=0)
+    ax.set_axisbelow(True)
+
+
+def build_figure(runs: list[dict]) -> plt.Figure:
+    """
+    Build a 4-subplot figure from one or more parsed run dicts.
+
+    Subplots (top to bottom):
+      0: Train & Val Loss
+      1: Val Perplexity (log scale)
+      2: LR & Gradient Norm (dual y-axis)
+      3: Train–Val Gap
+    """
+    fig, axes = plt.subplots(4, 1, figsize=(6, 11), sharex=False)
+    is_comparison = len(runs) > 1
+
+    for i, data in enumerate(runs):
+        color = _PALETTE[i % len(_PALETTE)]
+        label = data["label"] if is_comparison else None
+        steps = data["steps"]
+        eval_steps = data["eval_steps"]
+
+        # --- Subplot 0: Train & Val Loss ---
+        ax0 = axes[0]
+        ax0.plot(steps, data["train_loss"], color=color, linewidth=1.5,
+                 label=f"{label} train" if is_comparison else "train")
+        if data["val_loss"]:
+            ax0.plot(eval_steps, data["val_loss"], color=color, linewidth=1.5,
+                     linestyle="--",
+                     label=f"{label} val" if is_comparison else "val")
+        if data["best_val_step"] is not None and not is_comparison:
+            ax0.axvline(data["best_val_step"], color="#999", linewidth=0.8,
+                        linestyle=":", label=f"best val (step {data['best_val_step']})")
+        _apply_style(ax0)
+        ax0.set_ylabel("Loss")
+        ax0.set_title("Train & Validation Loss")
+        ax0.legend(fontsize=7, frameon=False)
+
+        # --- Subplot 1: Val Perplexity (log scale) ---
+        ax1 = axes[1]
+        if data["val_ppl"]:
+            ax1.plot(eval_steps, data["val_ppl"], color=color, linewidth=1.5,
+                     label=label)
+        _apply_style(ax1)
+        ax1.set_yscale("log")
+        ax1.set_ylabel("Val Perplexity (log)")
+        ax1.set_title("Validation Perplexity")
+        if is_comparison:
+            ax1.legend(fontsize=7, frameon=False)
+
+        # --- Subplot 2: LR & Gradient Norm (dual y-axis) ---
+        ax2 = axes[2]
+        if i == 0:
+            ax2_r = ax2.twinx()
+            ax2._twin = ax2_r
+        else:
+            ax2_r = ax2._twin
+        ax2.plot(steps, data["lr"], color=color, linewidth=1.5,
+                 label=f"{label} LR" if is_comparison else "LR")
+        ax2_r.plot(steps, data["grad_norm"], color=color, linewidth=1.5,
+                   linestyle="--", alpha=0.7,
+                   label=f"{label} grad norm" if is_comparison else "grad norm")
+        _apply_style(ax2)
+        ax2.spines["top"].set_visible(False)
+        ax2_r.spines["top"].set_visible(False)
+        ax2_r.spines["right"].set_color("#aaa")
+        ax2.set_ylabel("Learning Rate", color="#333")
+        ax2_r.set_ylabel("Gradient Norm", color="#888")
+        ax2.set_title("Learning Rate & Gradient Norm")
+        # Combine legends on last iteration
+        if i == len(runs) - 1:
+            lines1, labels1 = ax2.get_legend_handles_labels()
+            lines2, labels2 = ax2_r.get_legend_handles_labels()
+            ax2.legend(lines1 + lines2, labels1 + labels2, fontsize=7, frameon=False)
+
+        # --- Subplot 3: Train–Val Gap ---
+        ax3 = axes[3]
+        if data["val_loss"] and data["eval_train_loss"]:
+            gap = [v - t for v, t in zip(data["val_loss"], data["eval_train_loss"])]
+            ax3.plot(eval_steps, gap, color=color, linewidth=1.5, label=label)
+        _apply_style(ax3)
+        ax3.axhline(0, color="#bbb", linewidth=0.8, linestyle="--")
+        ax3.set_ylabel("Val − Train Loss")
+        ax3.set_xlabel("Step")
+        ax3.set_title("Train–Val Gap")
+        if is_comparison:
+            ax3.legend(fontsize=7, frameon=False)
+
+    fig.tight_layout(pad=1.5)
+    return fig

@@ -138,13 +138,17 @@ class TransformerBlock(nn.Module):
         self.ln_1 = RMSNorm(d_model)
         self.attn = MultiHeadAttention(d_model, n_heads, bias, dropout)
         self.ln_1_out = RMSNorm(d_model)
-        self.ln_2 = RMSNorm(d_model)
+        # self.ln_2 = RMSNorm(d_model)
         self.mlp = SwiGLUMLP(d_model, d_ff, bias, dropout)
         self.ln_2_out = RMSNorm(d_model)
 
     def forward(self, x: torch.Tensor, freqs_cis: torch.Tensor) -> torch.Tensor:
         x = x + self.ln_1_out(self.attn(self.ln_1(x), freqs_cis))
-        x = x + self.ln_2_out(self.mlp(self.ln_2(x)))
+        mlp_in = self.ln_2(x) if hasattr(self, "ln_2") else x
+        mlp_out = self.mlp(mlp_in)
+        if hasattr(self, "ln_2_out"):
+            mlp_out = self.ln_2_out(mlp_out)
+        x = x + mlp_out
         return x
 
 
@@ -167,7 +171,7 @@ class ParrotLLM(nn.Module):
             )
             for _ in range(mc["n_layers"])
         ])
-        self.ln_f = RMSNorm(mc["d_model"])
+        # self.ln_f = RMSNorm(mc["d_model"])
         self.lm_head = nn.Linear(mc["d_model"], mc["vocab_size"], bias=False)
 
         # weight tying
@@ -216,7 +220,8 @@ class ParrotLLM(nn.Module):
             else:
                 x = block(x, freqs_cis)
 
-        x = self.ln_f(x)
+        if hasattr(self, "ln_f"):
+            x = self.ln_f(x)
         logits = self.lm_head(x)
 
         loss = None

@@ -25,4 +25,4 @@ chat:
   top_k: 50
   top_p: 0.9
   system_prompt: "You are ParrotLLM, a helpful assistant."
-  checkpoint_dir: checkpoints
+  checkpoint_dir: runs

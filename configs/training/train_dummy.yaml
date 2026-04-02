@@ -36,6 +36,8 @@ training:
   save_every: 10
   eval_every: 10
   checkpoint_dir: checkpoints
+  keep_last_checkpoints: 10
+  keep_best_checkpoints: 10
   runs_dir: runs
   log_every: 5
 

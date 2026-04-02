@@ -33,6 +33,16 @@ class TuneConfig(BaseModel):
     sampler: Literal["tpe", "random"] = Field(default="tpe", description="Sampling algorithm.")
     pruner: Literal["hyperband", "median"] = Field(default="hyperband", description="Pruning algorithm.")
     pruner_kwargs: dict = Field(default_factory=dict, description="Keyword arguments for the pruner.")
+    param_budget_min: int | None = Field(
+        default=None,
+        ge=1,
+        description="Optional minimum model parameter budget for architecture search.",
+    )
+    param_budget_max: int | None = Field(
+        default=None,
+        ge=1,
+        description="Optional maximum model parameter budget for architecture search.",
+    )
 
     # Search space
     search_space: dict[str, SearchParamConfig] = Field(

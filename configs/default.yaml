@@ -67,7 +67,11 @@ training:
   # checkpointing
   save_every: 5000           # save checkpoint every N steps
   eval_every: 500            # evaluate every N steps
-  checkpoint_dir: checkpoints
+  checkpoint_dir: checkpoints    # subdir inside each runs/run_*/ directory
+  keep_last_checkpoints: 10
+  keep_best_checkpoints: 10
+  early_stopping_patience: 8   # stop after N evals without val-loss improvement
+  early_stopping_min_delta: 0.001  # minimum val-loss drop to reset patience
 
   # logging
   runs_dir: runs             # base directory for run outputs
@@ -117,4 +121,4 @@ chat:
   top_k: 50
   top_p: 0.9
   system_prompt: "You are ParrotLLM, a helpful assistant."
-  checkpoint_dir: checkpoints
+  checkpoint_dir: runs

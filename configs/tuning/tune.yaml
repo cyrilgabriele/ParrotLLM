@@ -40,6 +40,8 @@ training:
   save_every: 50000               # disable checkpointing during tuning
   eval_every: 750                  # eval 4 times per trial (750, 1500, 2250, end)
   checkpoint_dir: checkpoints
+  keep_last_checkpoints: 10
+  keep_best_checkpoints: 10
   runs_dir: runs/tuning
   log_every: 200
 

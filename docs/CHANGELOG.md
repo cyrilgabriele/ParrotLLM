@@ -21,6 +21,23 @@ Track what was changed, why it was changed, and any important notes.
 
 ## Unreleased
 
+### [2026-04-04] - Cyril Gabriele
+
+#### What
+- Reduced `configs/tuning/model_achitecture/8_75mio_model_tuning.yaml` to an architecture-only Optuna search over `d_model`, `n_layers`, `n_heads`, and `d_ff`
+- Updated `configs/tuning/model_achitecture/8_75mio_model_tuning_smoke.yaml` to mirror the same architecture-only search space for the smoke run
+- Coarsened the `d_ff` sweep in both 8.75M configs from `272..384 step 16` to `288..384 step 32` so the valid preset count stays manageable for a first-pass architecture study
+- Re-enabled the second RMSNorm in the Transformer block MLP path (`ln_2`) and the final model RMSNorm (`ln_f`) in `src/model/transformer.py`, restoring the double-norm / Peri-LN-style architecture again
+
+#### Why
+- This 8.75M experiment is meant to isolate architecture effects first, so optimizer, schedule, and regularization intervals were removed to avoid spending the trial budget on non-architecture tuning
+- `d_model step=8` and `n_layers step=1` already move parameter count substantially at this scale, while the old `d_ff step=16` grid over-expanded the architecture preset space and made the search less efficient
+- Restoring the double-norm path brings the implementation back in line with the intended Peri-LN-style architecture for the next round of architecture experiments
+
+#### Remarks
+- The edited 8.75M search space now parses as architecture-only and yields a much smaller valid preset grid for the 8.5M to 8.75M budget window
+- No runtime verification was executed from this shell because the local environment currently lacks `optuna` and `torch`
+
 ### [2026-04-02] - Cyril Gabriele
 
 #### What

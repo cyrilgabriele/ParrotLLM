@@ -1,7 +1,7 @@
 # Optuna Hyperparameter Tuning Configuration
 # Run with: python main.py --stage tune --config configs/tuning/model_achitecture/8_75mio_model_tuning.yaml
 # Architecture search inside the ~8.5M–8.75M parameter window
-# Local RTX 5090 laptop — tune architecture + optimizer on a compact proxy
+# Local RTX 5090 laptop — architecture-only search on a compact proxy
 
 # ── Proxy model — anchor point inside the target parameter window ────────────
 model:
@@ -57,7 +57,7 @@ logging:
 tune:
   name: parrotllm-8_75mio-architecture
   storage: optuna_studies/parrotllm-8_75mio-architecture.db
-  n_trials: 80                    # 13 dims × ~6x coverage = still manageable locally
+  n_trials: 80                    # coarse pass over the architecture preset grid without exploding runtime
   timeout: null
   sampler: tpe
   pruner: hyperband
@@ -68,10 +68,10 @@ tune:
     max_resource: 3000
     reduction_factor: 3
 
-  # ── Full search space ───────────────────────────────────────────────────────
-  # 13 dimensions total:
-  #   4 architecture dimensions sampled as valid presets inside the param budget
-  #   9 optimizer / schedule / regularization dimensions
+  # ── Architecture-only search space ──────────────────────────────────────────
+  # These ranges are expanded into valid presets that stay inside the
+  # 8.5M–8.75M parameter window. The grid stays intentionally coarse so the
+  # result is useful as a first architecture signal for the later 17.5M study.
   search_space:
     # Architecture — Optuna expands these ranges into only valid presets that fall
     # inside the 8.5M–8.75M parameter window for the current transformer sketch.
@@ -79,59 +79,17 @@ tune:
       type: int
       low: 104
       high: 144
-      step: 8
+      step: 8                     # already coarse: +8 width shifts embeddings by ~0.40M params
     n_layers:
       type: int
       low: 6
       high: 27
-      step: 1
+      step: 1                     # keep single-layer resolution; one layer moves ~0.13M–0.23M params
     n_heads:
       type: categorical
       choices: [2, 4, 6, 8, 12, 16]
     d_ff:
       type: int
-      low: 272
+      low: 288
       high: 384
-      step: 16
-
-    # Optimizer — core HPs (Chinchilla, LLaMA, MobileLLM all tune these)
-    learning_rate:
-      type: log_uniform
-      low: 1.0e-4
-      high: 3.0e-3
-    weight_decay:
-      type: log_uniform
-      low: 0.01
-      high: 0.3
-    beta2:                          # Chinchilla uses 0.95, LLaMA 0.95, GPT-3 0.999
-      type: uniform
-      low: 0.93
-      high: 0.999
-    warmup_steps:
-      type: int
-      low: 50
-      high: 500
-      step: 50
-    grad_clip:
-      type: uniform
-      low: 0.5
-      high: 2.0
-
-    # LR schedule — WSD (MiniCPM, arXiv:2404.06395) vs cosine (GPT-3 standard)
-    lr_schedule:
-      type: categorical
-      choices: [wsd, cosine]
-    lr_decay_ratio:                 # fraction of training spent in decay phase
-      type: uniform
-      low: 0.05
-      high: 0.3
-
-    # Regularization
-    dropout:
-      type: uniform
-      low: 0.0
-      high: 0.15
-    z_loss_coeff:                   # PaLM (arXiv:2204.02311): stabilizes logits in mixed precision
-      type: log_uniform
-      low: 1.0e-5
-      high: 1.0e-3
+      step: 32                    # coarse FFN sweep around the usual SwiGLU ratio; keeps preset count manageable

@@ -138,7 +138,7 @@ class TransformerBlock(nn.Module):
         self.ln_1 = RMSNorm(d_model)
         self.attn = MultiHeadAttention(d_model, n_heads, bias, dropout)
         self.ln_1_out = RMSNorm(d_model)
-        # self.ln_2 = RMSNorm(d_model)
+        self.ln_2 = RMSNorm(d_model)
         self.mlp = SwiGLUMLP(d_model, d_ff, bias, dropout)
         self.ln_2_out = RMSNorm(d_model)
 
@@ -171,7 +171,7 @@ class ParrotLLM(nn.Module):
             )
             for _ in range(mc["n_layers"])
         ])
-        # self.ln_f = RMSNorm(mc["d_model"])
+        self.ln_f = RMSNorm(mc["d_model"])
         self.lm_head = nn.Linear(mc["d_model"], mc["vocab_size"], bias=False)
 
         # weight tying

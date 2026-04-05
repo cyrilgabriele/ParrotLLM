@@ -51,7 +51,7 @@ def read_metrics(run_dir: Path) -> TrainingMetrics:
             m.steps.append(entry["step"])
             m.train_losses.append(entry["train_loss"])
             m.lrs.append(entry["lr"])
-            m.grad_norms.append(entry["grad_norm"])
+            m.grad_norms.append(entry.get("grad_norm", float("nan")))
             if "tokens_per_sec" in entry:
                 m.tokens_per_sec.append(entry["tokens_per_sec"])
         elif t in ("eval", "initial_validation"):

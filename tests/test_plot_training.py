@@ -194,8 +194,7 @@ def test_build_figure_single_run(log_file):
     data = parse_log(log_file)
     fig = build_figure([data])
     assert fig is not None
-    axes = fig.get_axes()
-    assert len(axes) == 5  # 4 subplots + 1 twinx for LR/grad subplot
+    assert len(fig.get_axes()) == 6   # 6 independent subplots, no twinx
 
 
 def test_build_figure_comparison(log_file):
@@ -206,7 +205,7 @@ def test_build_figure_comparison(log_file):
     data2 = parse_log(log_file, label="run_B")
     fig = build_figure([data1, data2])
     assert fig is not None
-    assert len(fig.get_axes()) == 5  # 4 subplots + 1 twinx
+    assert len(fig.get_axes()) == 6
 
 
 def test_resolve_run_missing_log(tmp_path):

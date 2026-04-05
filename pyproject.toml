@@ -20,6 +20,10 @@ dependencies = [
     "torchinfo>=1.8.0",
     "optuna>=4.0.0",
     "python-dotenv>=1.2.2",
+    "psutil>=6.0.0",
+    "pynvml>=11.0.0",
+    "ipywidgets>=8.0",
+    "rich>=13.0",
 ]
 
 [project.optional-dependencies]

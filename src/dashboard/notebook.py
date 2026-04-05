@@ -28,7 +28,7 @@ from IPython.display import display, Image, clear_output
 from src.dashboard.metrics_reader import read_metrics, TrainingMetrics, is_metrics_stale
 from src.dashboard.system_monitor import get_system_stats
 from src.dashboard.problem_detector import detect_problems, Severity
-from src.dashboard.run_manager import list_runs, get_latest_run_dir
+from src.dashboard.run_manager import list_runs, get_latest_run_dir, launch_training, kill_training
 from src.dashboard.plots import build_training_figure
 
 _SEVERITY_EMOJI = {Severity.ERROR: "🔴", Severity.WARNING: "🟡", Severity.INFO: "🔵"}
@@ -127,6 +127,24 @@ class _Monitor:
         self._alerts_w = widgets.HTML()
         self._plot_w = widgets.Output()
 
+        # Phase 2: run management
+        self._config_path = Path("configs/default.yaml")
+        self._proc = None
+        self._proc_lock = threading.Lock()
+
+        self._start_btn = widgets.Button(description="▶ Start", button_style="success",
+                                         layout=widgets.Layout(width="100px"))
+        self._resume_btn = widgets.Button(description="⏩ Resume", button_style="info",
+                                          layout=widgets.Layout(width="100px"))
+        self._stop_btn2 = widgets.Button(description="⏹ Stop", button_style="danger",
+                                         layout=widgets.Layout(width="100px"),
+                                         disabled=True)
+        self._action_out = widgets.HTML()
+
+        self._start_btn.on_click(self._on_start)
+        self._resume_btn.on_click(self._on_resume)
+        self._stop_btn2.on_click(self._on_stop)
+
         self._stop_btn.on_click(lambda _: self._stop())
         self._dropdown.observe(
             lambda change: self._refresh_data() if change["name"] == "value" else None
@@ -176,10 +194,45 @@ class _Monitor:
         self._stop_btn.description = "■ Stopped"
         self._stop_btn.disabled = True
 
+    def _on_start(self, _):
+        with self._proc_lock:
+            self._proc = launch_training(config_path=self._config_path)
+        self._action_out.value = f"<b>Started.</b> PID: {self._proc.pid}"
+        self._start_btn.disabled = True
+        self._resume_btn.disabled = True
+        self._stop_btn2.disabled = False
+
+    def _on_resume(self, _):
+        run_dir = self._get_run_dir()
+        if run_dir is None:
+            self._action_out.value = "<span style='color:red'>No run selected.</span>"
+            return
+        with self._proc_lock:
+            self._proc = launch_training(config_path=self._config_path,
+                                         resume_run_dir=run_dir)
+        self._action_out.value = f"<b>Resumed</b> {run_dir.name}. PID: {self._proc.pid}"
+        self._start_btn.disabled = True
+        self._resume_btn.disabled = True
+        self._stop_btn2.disabled = False
+
+    def _on_stop(self, _):
+        with self._proc_lock:
+            if self._proc is not None:
+                kill_training(self._proc)
+                self._proc = None
+        self._action_out.value = "<b>Training stopped.</b>"
+        self._start_btn.disabled = False
+        self._resume_btn.disabled = False
+        self._stop_btn2.disabled = True
+
     def widget(self) -> widgets.VBox:
-        header = widgets.HBox([self._dropdown, self._stop_btn])
+        refresh_header = widgets.HBox([self._dropdown, self._stop_btn])
+        mgmt_row = widgets.HBox([
+            self._start_btn, self._resume_btn, self._stop_btn2, self._action_out
+        ])
         return widgets.VBox([
-            header,
+            refresh_header,
+            mgmt_row,
             self._metrics_w,
             self._gpu_w,
             self._alerts_w,

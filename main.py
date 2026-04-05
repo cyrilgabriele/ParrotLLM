@@ -19,6 +19,18 @@ def main() -> None:
     )
     parser.add_argument("--config", type=Path, default=Path("configs/default.yaml"))
     parser.add_argument("--checkpoint", default=None)
+    parser.add_argument(
+        "--resume",
+        nargs="?",
+        const="",
+        default=None,
+        metavar="RUN_DIR",
+        help=(
+            "Resume training from the latest checkpoint. "
+            "Without a path, auto-discovers the most recent run in the configured runs_dir. "
+            "Optionally provide an explicit run directory, e.g. --resume runs/run_20260405_143000."
+        ),
+    )
     parser.add_argument("--prompt", default=None)
     parser.add_argument("--max-tokens", type=int, default=None)
     parser.add_argument("--temperature", type=float, default=None)
@@ -75,10 +87,23 @@ def main() -> None:
     if args.stage == "train":
         training_cfg = _require_section(project_config.training, "training")
         _require_section(project_config.model, "model")
+
+        checkpoint = args.checkpoint
+        if args.resume is not None:
+            if checkpoint is not None:
+                parser.error("--resume and --checkpoint are mutually exclusive.")
+            from src.training.trainer import find_latest_checkpoint
+            run_dir = args.resume if args.resume else None
+            checkpoint = find_latest_checkpoint(
+                training_cfg.runs_dir,
+                run_dir=run_dir,
+                checkpoint_subdir=training_cfg.checkpoint_dir,
+            )
+
         device = get_device(training_cfg.device)
         from src.training.trainer import run_train
 
-        run_train(project_config, config_dict, device=device, checkpoint=args.checkpoint)
+        run_train(project_config, config_dict, device=device, checkpoint=checkpoint)
         return
 
     if args.stage == "eval":

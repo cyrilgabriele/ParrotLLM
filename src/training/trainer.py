@@ -1077,10 +1077,6 @@ def run_train(
     # model
     model = ParrotLLM(model_config_dict).to(device)
 
-    # ── Architecture log (slide 12 style) ─────────────────────────────────────
-    if is_master and jlog is not None:
-        _log_model_architecture(log, jlog, model, mc, device, tc["batch_size"])
-
     # torch.compile (skip if compile=false in config — useful for short HP tuning trials)
     use_compile = tc.get("compile", True)
     if device.type == "cuda" and use_compile:
@@ -1148,17 +1144,25 @@ def run_train(
                     tc["max_steps"],
                 )
 
-    # Release any unreferenced tensors so the allocator has headroom before the
-    # first estimate_loss call (especially important after checkpoint loading,
-    # where CPU→device copies of model and optimiser states may still occupy
-    # cached memory).
-    if checkpoint:
-        import gc
-        gc.collect()
-        _empty_device_cache(device)
+    # ── Architecture log (slide 12 style) ─────────────────────────────────────
+    # Deliberately placed AFTER load_checkpoint so that on MPS (Apple Silicon)
+    # the torchinfo forward pass runs with optimizer states already live on
+    # device. This guarantees the ~12 GB logits block that torchinfo allocates
+    # is freed to the MPS pool as one contiguous block after torchinfo finishes,
+    # and is therefore available for the training forward pass's cross-entropy
+    # allocation. Running torchinfo before optimizer loading would let the
+    # optimizer state tensors fragment that block, causing OOM on resume.
+    if is_master and jlog is not None:
+        _log_model_architecture(log, jlog, model, mc, device, tc["batch_size"])
 
     # ── initial evaluation ────────────────────────────────────────────────────
-    if val_ds is not None:
+    # Skipped when resuming: the optimizer state (AdamW m+v buffers, ~2× model
+    # size in float32) is already on the device after load_checkpoint, reducing
+    # available memory for the evaluation's activation tensors. The baseline val
+    # loss is already known from the previous run; the first periodic eval at
+    # eval_every steps will update best_val_loss and trigger checkpointing as
+    # normal.
+    if val_ds is not None and not checkpoint:
         log.info("Starting evaluation...")
         val_metrics = estimate_loss(
             model, val_ds, device, autocast_ctx, tc["batch_size"],

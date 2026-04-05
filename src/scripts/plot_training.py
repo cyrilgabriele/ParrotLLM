@@ -14,6 +14,7 @@ Usage:
 
 import re
 import json
+import math
 import argparse
 from pathlib import Path
 
@@ -125,6 +126,74 @@ def parse_log(log_path: Path, label: str | None = None) -> dict:
         "lr": lr,
         "grad_norm": grad_norm,
         "train_ppl": train_ppl,
+        "tokens_per_sec": [math.nan] * len(steps),   # not tracked in train.log
+        "eval_steps": eval_steps,
+        "val_loss": val_loss,
+        "val_ppl": val_ppl,
+        "eval_train_loss": eval_train_loss,
+        "eval_train_ppl": eval_train_ppl,
+        "best_val_step": best_val_step,
+        "label": label,
+    }
+
+
+def parse_metrics(run_dir: Path, label: str | None = None) -> dict:
+    """Parse a metrics.jsonl file into the same dict format as parse_log."""
+    metrics_path = run_dir / "metrics.jsonl"
+    text = metrics_path.read_text()
+
+    steps: list[int] = []
+    train_loss: list[float] = []
+    lr: list[float] = []
+    grad_norm: list[float] = []
+    train_ppl: list[float] = []
+    tokens_per_sec: list[float] = []
+    eval_steps: list[int] = []
+    val_loss: list[float] = []
+    val_ppl: list[float] = []
+    eval_train_loss: list = []
+    eval_train_ppl: list = []
+    best_val_step: int | None = None
+
+    for line in text.splitlines():
+        line = line.strip()
+        if not line:
+            continue
+        try:
+            entry = json.loads(line)
+        except json.JSONDecodeError:
+            continue
+
+        etype = entry.get("type")
+
+        if etype == "step":
+            steps.append(entry["step"])
+            train_loss.append(entry["train_loss"])
+            lr.append(entry["lr"])
+            train_ppl.append(entry["perplexity"])
+            grad_norm.append(float(entry["grad_norm"]) if entry.get("grad_norm") is not None else math.nan)
+            tokens_per_sec.append(float(entry["tokens_per_sec"]) if entry.get("tokens_per_sec") is not None else math.nan)
+
+        elif etype == "eval":
+            eval_steps.append(entry["step"])
+            val_loss.append(entry["val_loss"])
+            val_ppl.append(entry["val_ppl"])
+            eval_train_loss.append(entry.get("eval_train_loss"))
+            eval_train_ppl.append(entry.get("eval_train_ppl"))
+
+        elif etype == "best_checkpoint":
+            best_val_step = entry["step"]
+
+    if label is None:
+        label = _label_from_config(run_dir) or run_dir.name
+
+    return {
+        "steps": steps,
+        "train_loss": train_loss,
+        "lr": lr,
+        "grad_norm": grad_norm,
+        "train_ppl": train_ppl,
+        "tokens_per_sec": tokens_per_sec,
         "eval_steps": eval_steps,
         "val_loss": val_loss,
         "val_ppl": val_ppl,
@@ -139,7 +208,11 @@ def parse_log(log_path: Path, label: str | None = None) -> dict:
 # Plotting
 # ---------------------------------------------------------------------------
 
-# Qualitative color palette (up to 8 runs)
+# Single-run colours: blue = train, orange = validation
+TRAIN_COLOR = "#2563EB"
+VAL_COLOR   = "#EA580C"
+
+# Multi-run comparison palette (up to 8 runs; solid=train, dashed=val)
 _PALETTE = [
     "#e05c5c", "#5c7ae0", "#5cba7a", "#e0a35c",
     "#a35ce0", "#5ce0d4", "#c9e05c", "#e05cb8",
@@ -147,97 +220,133 @@ _PALETTE = [
 
 
 def _apply_style(ax):
-    """Apply NeurIPS/Nature minimal style to an axes."""
+    """Apply minimal style to an axes."""
     ax.spines["top"].set_visible(False)
     ax.spines["right"].set_visible(False)
     ax.grid(axis="y", color="#e0e0e0", linewidth=0.8, alpha=0.6, zorder=0)
     ax.set_axisbelow(True)
 
 
+def _ema(values: list[float], alpha: float = 0.98) -> list[float]:
+    """Exponential moving average. s[0]=values[0]; s[i]=alpha*s[i-1]+(1-alpha)*values[i]."""
+    if not values:
+        return []
+    smoothed = [values[0]]
+    for v in values[1:]:
+        smoothed.append(alpha * smoothed[-1] + (1 - alpha) * v)
+    return smoothed
+
+
 def build_figure(runs: list[dict]) -> plt.Figure:
     """
-    Build a 4-subplot figure from one or more parsed run dicts.
+    Build a 3×2 subplot figure from one or more parsed run dicts.
 
-    Subplots (top to bottom):
-      0: Train & Val Loss
-      1: Val Perplexity (log scale)
-      2: LR & Gradient Norm (dual y-axis)
-      3: Train–Val Gap
+    Layout:
+      [0,0] Train & Val Loss (raw dimmed + EMA overlay)   [0,1] Train & Val Perplexity (log, raw dimmed + EMA)
+      [1,0] Learning Rate                                  [1,1] Gradient Norm
+      [2,0] Training Throughput (tokens/sec)               [2,1] Train–Val Gap
     """
-    fig, axes = plt.subplots(4, 1, figsize=(6, 11), sharex=False)
+    fig, axes = plt.subplots(3, 2, figsize=(10, 11), sharex=False)
     is_comparison = len(runs) > 1
 
     for i, data in enumerate(runs):
-        color = _PALETTE[i % len(_PALETTE)]
+        run_col = _PALETTE[i % len(_PALETTE)] if is_comparison else None
+        tc = run_col if is_comparison else TRAIN_COLOR
+        vc = run_col if is_comparison else VAL_COLOR
         label = data["label"] if is_comparison else None
         steps = data["steps"]
         eval_steps = data["eval_steps"]
 
-        # --- Subplot 0: Train & Val Loss ---
-        ax0 = axes[0]
-        ax0.plot(steps, data["train_loss"], color=color, linewidth=1.5,
-                 label=f"{label} train" if is_comparison else "train")
+        # ── [0,0] Train & Val Loss ────────────────────────────────────────
+        ax = axes[0, 0]
+        if steps and data["train_loss"]:
+            ax.plot(steps, data["train_loss"], color=tc, linewidth=0.8, alpha=0.25)
+            ax.plot(steps, _ema(data["train_loss"]), color=tc, linewidth=1.5,
+                    label=(f"{label} train" if is_comparison else "train"))
         if data["val_loss"]:
-            ax0.plot(eval_steps, data["val_loss"], color=color, linewidth=1.5,
-                     linestyle="--",
-                     label=f"{label} val" if is_comparison else "val")
+            ax.plot(eval_steps, data["val_loss"], color=vc, linewidth=1.5,
+                    linestyle="--",
+                    label=(f"{label} val" if is_comparison else "val"))
         if data["best_val_step"] is not None and not is_comparison:
-            ax0.axvline(data["best_val_step"], color="#999", linewidth=0.8,
-                        linestyle=":", label=f"best val (step {data['best_val_step']})")
-        _apply_style(ax0)
-        ax0.set_ylabel("Loss")
-        ax0.set_title("Train & Validation Loss")
-        ax0.legend(fontsize=7, frameon=False)
+            ax.axvline(data["best_val_step"], color="#999", linewidth=0.8,
+                       linestyle=":",
+                       label=f"best val (step {data['best_val_step']})")
+        _apply_style(ax)
+        ax.set_ylabel("Loss")
+        ax.set_title("Train & Validation Loss")
+        ax.legend(fontsize=7, frameon=False)
 
-        # --- Subplot 1: Val Perplexity (log scale) ---
-        ax1 = axes[1]
+        # ── [0,1] Train & Val Perplexity (log scale) ─────────────────────
+        ax = axes[0, 1]
+        if steps and data["train_ppl"]:
+            ax.plot(steps, data["train_ppl"], color=tc, linewidth=0.8, alpha=0.25)
+            ax.plot(steps, _ema(data["train_ppl"]), color=tc, linewidth=1.5,
+                    label=(f"{label} train" if is_comparison else "train"))
         if data["val_ppl"]:
-            ax1.plot(eval_steps, data["val_ppl"], color=color, linewidth=1.5,
-                     label=label)
-        _apply_style(ax1)
-        ax1.set_yscale("log")
-        ax1.set_ylabel("Val Perplexity (log)")
-        ax1.set_title("Validation Perplexity")
+            ax.plot(eval_steps, data["val_ppl"], color=vc, linewidth=1.5,
+                    linestyle="--",
+                    label=(f"{label} val" if is_comparison else "val"))
+        _apply_style(ax)
+        ax.set_yscale("log")
+        ax.set_ylabel("Perplexity (log)")
+        ax.set_title("Train & Validation Perplexity")
+        ax.legend(fontsize=7, frameon=False)
+
+        # ── [1,0] Learning Rate ───────────────────────────────────────────
+        ax = axes[1, 0]
+        ax.plot(steps, data["lr"], color=tc, linewidth=1.5, label=label)
+        _apply_style(ax)
+        ax.set_ylabel("Learning Rate")
+        ax.set_title("Learning Rate Schedule")
         if is_comparison:
-            ax1.legend(fontsize=7, frameon=False)
+            ax.legend(fontsize=7, frameon=False)
 
-        # --- Subplot 2: LR & Gradient Norm (dual y-axis) ---
-        ax2 = axes[2]
-        if i == 0:
-            ax2_r = ax2.twinx()
-            ax2._twin = ax2_r
-        else:
-            ax2_r = ax2._twin
-        ax2.plot(steps, data["lr"], color=color, linewidth=1.5,
-                 label=f"{label} LR" if is_comparison else "LR")
-        ax2_r.plot(steps, data["grad_norm"], color=color, linewidth=1.5,
-                   linestyle="--", alpha=0.7,
-                   label=f"{label} grad norm" if is_comparison else "grad norm")
-        _apply_style(ax2)
-        ax2.spines["top"].set_visible(False)
-        ax2_r.spines["top"].set_visible(False)
-        ax2_r.spines["right"].set_color("#aaa")
-        ax2.set_ylabel("Learning Rate", color="#333")
-        ax2_r.set_ylabel("Gradient Norm", color="#888")
-        ax2.set_title("Learning Rate & Gradient Norm")
-        # Combine legends on last iteration
-        if i == len(runs) - 1:
-            lines1, labels1 = ax2.get_legend_handles_labels()
-            lines2, labels2 = ax2_r.get_legend_handles_labels()
-            ax2.legend(lines1 + lines2, labels1 + labels2, fontsize=7, frameon=False)
+        # ── [1,1] Gradient Norm ───────────────────────────────────────────
+        ax = axes[1, 1]
+        valid_gn = [
+            (s, g) for s, g in zip(steps, data["grad_norm"])
+            if not math.isnan(g)
+        ]
+        if valid_gn:
+            s_v, g_v = zip(*valid_gn)
+            ax.plot(s_v, g_v, color=tc, linewidth=1.5, alpha=0.85, label=label)
+        _apply_style(ax)
+        ax.set_ylabel("Gradient Norm")
+        ax.set_title("Gradient Norm")
+        if is_comparison:
+            ax.legend(fontsize=7, frameon=False)
 
-        # --- Subplot 3: Train–Val Gap ---
-        ax3 = axes[3]
-        if data["val_loss"] and data["eval_train_loss"]:
+        # ── [2,0] Training Throughput (tokens / second) ───────────────────
+        ax = axes[2, 0]
+        tps = data.get("tokens_per_sec", [])
+        valid_tps = [
+            (s, t) for s, t in zip(steps, tps)
+            if not math.isnan(t) and t > 0
+        ]
+        if valid_tps:
+            s_v, t_v = zip(*valid_tps)
+            ax.plot(s_v, t_v, color=tc, linewidth=1.5, label=label)
+        _apply_style(ax)
+        ax.set_ylabel("Tokens / second")
+        ax.set_xlabel("Step")
+        ax.set_title("Training Throughput")
+        if is_comparison:
+            ax.legend(fontsize=7, frameon=False)
+
+        # ── [2,1] Train–Val Gap ───────────────────────────────────────────
+        ax = axes[2, 1]
+        if data["val_loss"] and data["eval_train_loss"] and all(
+            x is not None for x in data["eval_train_loss"]
+        ):
             gap = [v - t for v, t in zip(data["val_loss"], data["eval_train_loss"])]
-            ax3.plot(eval_steps, gap, color=color, linewidth=1.5, label=label)
-        _apply_style(ax3)
-        ax3.axhline(0, color="#bbb", linewidth=0.8, linestyle="--")
-        ax3.set_ylabel("Val − Train Loss")
-        ax3.set_xlabel("Step")
-        ax3.set_title("Train–Val Gap")
+            ax.plot(eval_steps, gap, color=vc, linewidth=1.5, label=label)
+        _apply_style(ax)
+        ax.axhline(0, color="#bbb", linewidth=0.8, linestyle="--")
+        ax.set_ylabel("Val − Train Loss")
+        ax.set_xlabel("Step")
+        ax.set_title("Train–Val Gap")
         if is_comparison:
-            ax3.legend(fontsize=7, frameon=False)
+            ax.legend(fontsize=7, frameon=False)
 
     fig.tight_layout(pad=1.5)
     return fig
@@ -255,6 +364,29 @@ def _resolve_run(run_dir: Path) -> Path:
     return log
 
 
+def plot_run_dir(run_dir: Path, output: Path | None = None) -> Path:
+    """Generate training plots for a run directory and save as PDF.
+
+    Reads ``metrics.jsonl`` when present; falls back to ``train.log`` for
+    older runs that pre-date structured JSONL logging.
+
+    Returns the path of the saved PDF.
+    """
+    metrics_path = run_dir / "metrics.jsonl"
+    if metrics_path.exists():
+        data = parse_metrics(run_dir)
+    else:
+        data = parse_log(_resolve_run(run_dir))
+
+    if output is None:
+        output = run_dir / "training_plots.pdf"
+
+    fig = build_figure([data])
+    fig.savefig(output, format="pdf", bbox_inches="tight", dpi=150)
+    plt.close(fig)
+    return output
+
+
 def main():
     parser = argparse.ArgumentParser(
         description="Plot ParrotLLM training logs as a PDF."
@@ -264,7 +396,7 @@ def main():
         nargs="+",
         type=Path,
         metavar="RUN_DIR",
-        help="One or more run directories containing train.log",
+        help="One or more run directories containing metrics.jsonl or train.log",
     )
     parser.add_argument(
         "--output",
@@ -274,20 +406,20 @@ def main():
     )
     args = parser.parse_args()
 
+    if len(args.run_dirs) == 1 and args.output is None:
+        out = plot_run_dir(args.run_dirs[0])
+        print(f"Saved: {out}")
+        return
+
     runs = []
     for run_dir in args.run_dirs:
-        log_path = _resolve_run(run_dir)
-        runs.append(parse_log(log_path))
+        metrics_path = run_dir / "metrics.jsonl"
+        if metrics_path.exists():
+            runs.append(parse_metrics(run_dir))
+        else:
+            runs.append(parse_log(_resolve_run(run_dir)))
 
-    is_comparison = len(runs) > 1
-
-    if args.output:
-        out_path = args.output
-    elif is_comparison:
-        out_path = args.run_dirs[0] / "comparison_plots.pdf"
-    else:
-        out_path = args.run_dirs[0] / "training_plots.pdf"
-
+    out_path = args.output or (args.run_dirs[0] / "comparison_plots.pdf")
     fig = build_figure(runs)
     fig.savefig(out_path, format="pdf", bbox_inches="tight", dpi=150)
     plt.close(fig)

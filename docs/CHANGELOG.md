@@ -21,6 +21,102 @@ Track what was changed, why it was changed, and any important notes.
 
 ## Unreleased
 
+### [2026-04-04] - Cyril Gabriele
+
+#### What
+- Reduced `configs/tuning/model_achitecture/8_75mio_model_tuning.yaml` to an architecture-only Optuna search over `d_model`, `n_layers`, `n_heads`, and `d_ff`
+- Updated `configs/tuning/model_achitecture/8_75mio_model_tuning_smoke.yaml` to mirror the same architecture-only search space for the smoke run
+- Coarsened the `d_ff` sweep in both 8.75M configs from `272..384 step 16` to `288..384 step 32` so the valid preset count stays manageable for a first-pass architecture study
+- Re-enabled the second RMSNorm in the Transformer block MLP path (`ln_2`) and the final model RMSNorm (`ln_f`) in `src/model/transformer.py`, restoring the double-norm / Peri-LN-style architecture again
+
+#### Why
+- This 8.75M experiment is meant to isolate architecture effects first, so optimizer, schedule, and regularization intervals were removed to avoid spending the trial budget on non-architecture tuning
+- `d_model step=8` and `n_layers step=1` already move parameter count substantially at this scale, while the old `d_ff step=16` grid over-expanded the architecture preset space and made the search less efficient
+- Restoring the double-norm path brings the implementation back in line with the intended Peri-LN-style architecture for the next round of architecture experiments
+
+#### Remarks
+- The edited 8.75M search space now parses as architecture-only and yields a much smaller valid preset grid for the 8.5M to 8.75M budget window
+- No runtime verification was executed from this shell because the local environment currently lacks `optuna` and `torch`
+
+### [2026-04-02] - Cyril Gabriele
+
+#### What
+- Reworked the trainer loop in `src/training/trainer.py` so LR scheduling and `completed_steps` advance only after a real optimizer update; skipped `GradScaler` updates on the fp16 CUDA path now leave the scheduler and step counter unchanged
+- Replaced the old `len(train_loader) // grad_accum` epoch inference with iterator-driven epoch bookkeeping; epoch boundaries now follow actual dataloader exhaustion, and the last partial accumulation window in an epoch is handled explicitly instead of spilling micro-batches across epochs
+- Added exact dataloader resume metadata (`next_epoch`, `next_micro_batch`, `data_seed`) to checkpoints and taught resume to restore that position precisely for newly written checkpoints; legacy checkpoints now emit an explicit approximation warning instead of silently pretending resume is exact
+- Moved scheduler-related validation into `configs/training/trainingConfig.py` so invalid `lr_schedule`, `lr_decay_ratio`, `warmup_steps`, `max_steps`, and `min_lr > learning_rate` combinations fail during config parsing
+- Expanded `tests/training/test_lr_scheduler.py` to cover skipped scaler updates, trainer-state checkpoint round-trips, schema validation, and exact mid-epoch resume; updated `tests/test_tune.py` to match the current fixed-architecture tuning config and architecture-preset behavior
+
+#### Why
+- The previous loop could let the scheduler drift ahead of the actual number of weight updates, which breaks LR correctness, step accounting, and resume fidelity on overflow-skipped fp16 steps
+- Epoch bookkeeping based on integer division was not robust when the dataloader length was not divisible by gradient accumulation, which could trigger eval/checkpoint/sampler transitions before the old iterator had really finished
+- Mid-epoch resume should be intentional: either exact or explicitly approximate. Persisting the next dataloader position makes resumed runs reproducible instead of repeating or reordering batches silently
+- Scheduler config errors are cheaper and clearer to catch when the YAML is loaded, not later when training starts
+- The tune tests had drifted away from the current Optuna config shape, so they needed to be realigned to keep the focused validation signal trustworthy
+
+#### Remarks
+- Verified with `uv run pytest tests/training/test_lr_scheduler.py tests/training/test_checkpoint_retention.py tests/test_tune.py -q`
+- Verified syntax with `PYTHONPYCACHEPREFIX=/tmp/pycache python3 -m py_compile src/training/trainer.py configs/training/trainingConfig.py tests/training/test_lr_scheduler.py tests/test_tune.py`
+
+### [2026-04-02] - Cyril Gabriele
+
+#### What
+- Updated `configs/tuning/model_achitecture/8_75mio_model_tuning.yaml` so `save_every` stays at `50000`, which disables periodic `last` checkpoints during the 3000-step Optuna trial
+- Clarified the `save_every` comment to state that only periodic `last` checkpoints are disabled; best-checkpoint and final-checkpoint saves still remain active
+- Changed `tune.pruner_kwargs.min_resource` from `500` to `750` so Hyperband aligns with the actual evaluation cadence (`eval_every: 750`)
+
+#### Why
+- Periodic `last` checkpoints are usually not worth the disk and I/O cost during hyperparameter tuning because Optuna mainly needs trial metrics, not frequent resumable snapshots for every candidate run
+- This training loop already preserves the artifacts that matter for tuning: best validation checkpoints during evaluation and a final checkpoint at the end of the run
+- Matching Hyperband's `min_resource` to the first real reporting step avoids a misleading configuration where the pruner nominally expects signal before the trainer can report it
+
+#### Remarks
+- If a study is unusually long, unstable, or expensive to restart, lowering `save_every` can still be reasonable, but it should be a deliberate tradeoff against checkpoint churn across many trials
+
+### [2026-04-02] - Cyril Gabriele
+
+#### What
+- Replaced the trainer's manual learning-rate mutation with a real PyTorch `LRScheduler` implementation in `src/training/trainer.py`
+- Added `ParrotLRScheduler`, which keeps the existing `wsd` and `cosine` options but now runs through the PyTorch scheduler API instead of handwritten `param_group["lr"]` updates
+- Fixed the schedule endpoint semantics so the final real training step reaches `min_lr` for both WSD and cosine
+- Added scheduler construction/loading/saving so checkpoints now persist scheduler state alongside model, optimizer, and scaler state
+- Normalized checkpoint step semantics so saved `step` means "next optimizer step to run", and updated periodic save/eval/logging paths to key off completed optimizer steps
+- Added a fallback path for legacy checkpoints without scheduler state; the trainer reconstructs the LR position from the saved step and emits a warning
+- Added focused scheduler tests covering WSD warmup/decay shape, cosine endpoint behavior, scheduler checkpoint round-trips, and legacy checkpoint resume reconstruction
+
+#### Why
+- PyTorch's scheduler API is the correct abstraction for LR schedules because it gives us standard state management, cleaner resume behavior, and avoids manual per-step LR bookkeeping in the training loop
+- The previous implementation had two concrete issues: the last actual training step never reached `min_lr`, and checkpoint/resume semantics around `step` could replay one scheduler position
+- Keeping custom WSD logic inside a real scheduler preserves the desired schedule while making the implementation more robust and easier to reason about
+
+#### Remarks
+- Verified with `uv run pytest tests/training/test_lr_scheduler.py tests/training/test_checkpoint_retention.py tests/training/test_optuna_integration.py`
+- Verified syntax with `python3 -m py_compile src/training/trainer.py tests/training/test_lr_scheduler.py`
+- A full `uv run pytest` still shows unrelated pre-existing failures in `tests/model/test_transformer.py` and `tests/test_tune.py`; those were not part of this scheduler change
+
+### [2026-04-02] - Cyril Gabriele
+
+#### What
+- Moved training checkpoint storage to a run-local layout: `training.checkpoint_dir` is now resolved as a subdirectory inside each `runs/.../run_*` directory instead of being treated like a repo-global folder
+- Added configurable checkpoint retention to the training schema and YAMLs via `keep_last_checkpoints` and `keep_best_checkpoints`, both defaulting to `10`
+- Implemented separate retention policies in the trainer so only the latest `N` rolling checkpoints (`last_*.pt`) and the best `N` validation checkpoints (`best_*.pt`) are kept
+- Standardized training configs to use a run-local `checkpoint_dir: checkpoints` and updated the default chat config plus checkpoint picker to discover checkpoints recursively under `runs/`
+- Added trainer tests covering run-local checkpoint resolution and retention pruning, and updated the GPU training cookbook to point at `<run_dir>/checkpoints/`
+- Fixed the current transformer forward path so optional local norm removals do not break training/tuning runs
+
+#### Why
+- The project already treated the run directory as the durable experiment artifact, so saving checkpoints outside of it created config/documentation drift and made run export/resume harder to reason about
+- Explicit last/best retention keeps recovery points and strong validation snapshots without letting long runs accumulate unbounded checkpoint files
+- Recursive checkpoint discovery keeps the chat/inference workflow usable after moving checkpoints under each run directory
+
+#### Remarks
+- Verified with `uv run pytest tests/training/test_checkpoint_retention.py tests/training/test_optuna_integration.py`
+- Verified end-to-end with a short train smoke run using `keep_last_checkpoints=2` and `keep_best_checkpoints=2`; the resulting run kept exactly:
+  `best_loss_10p3459_epoch_0000_step_0000004.pt`
+  `best_loss_9p7910_epoch_0000_step_0000006.pt`
+  `last_epoch_0000_step_0000006.pt`
+  `last_epoch_0000_step_0000008.pt`
+
 ### [2026-03-28] - Christof Steiner
 
 #### What

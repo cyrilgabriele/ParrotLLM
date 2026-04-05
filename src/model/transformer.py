@@ -144,7 +144,11 @@ class TransformerBlock(nn.Module):
 
     def forward(self, x: torch.Tensor, freqs_cis: torch.Tensor) -> torch.Tensor:
         x = x + self.ln_1_out(self.attn(self.ln_1(x), freqs_cis))
-        x = x + self.ln_2_out(self.mlp(self.ln_2(x)))
+        mlp_in = self.ln_2(x) if hasattr(self, "ln_2") else x
+        mlp_out = self.mlp(mlp_in)
+        if hasattr(self, "ln_2_out"):
+            mlp_out = self.ln_2_out(mlp_out)
+        x = x + mlp_out
         return x
 
 
@@ -216,7 +220,8 @@ class ParrotLLM(nn.Module):
             else:
                 x = block(x, freqs_cis)
 
-        x = self.ln_f(x)
+        if hasattr(self, "ln_f"):
+            x = self.ln_f(x)
         logits = self.lm_head(x)
 
         loss = None

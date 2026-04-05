@@ -27,7 +27,14 @@ def run_chat(project_config: ProjectConfig, *, device: torch.device) -> None:
         ckpt_dir = chat_cfg.checkpoint_dir
         if not os.path.isdir(ckpt_dir):
             return []
-        return sorted(glob.glob(os.path.join(ckpt_dir, "*.pt")))
+        direct = glob.glob(os.path.join(ckpt_dir, "*.pt"))
+        recursive = glob.glob(os.path.join(ckpt_dir, "**", "*.pt"), recursive=True)
+        candidates = sorted(
+            set(direct + recursive),
+            key=lambda path: os.path.getmtime(path),
+            reverse=True,
+        )
+        return candidates
 
     def load_ckpt(path):
         if not path:

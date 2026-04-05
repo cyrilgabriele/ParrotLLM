@@ -1,0 +1,89 @@
+# Optuna smoke-test tuning configuration
+# Run with: python main.py --stage tune --config configs/tuning/model_achitecture/8_75mio_model_tuning_smoke.yaml
+# Purpose: fast sanity check that the ExperimentA dataset, tuning loop, and
+# architecture-only preset search all work before launching the longer study.
+
+model:
+  vocab_size: 50258
+  pad_token_id: 50257
+  bos_token_id: 50256
+  eos_token_id: 50256
+  d_model: 120
+  n_layers: 15
+  n_heads: 4
+  d_ff: 320
+  context_length: 128
+  bias: false
+  dropout: 0.0
+  rope_theta: 10000.0
+
+training:
+  device: auto
+  train_bin: data/experiment-a/train.bin
+  val_bin: data/experiment-a/val.bin
+  num_workers: 0
+  batch_size: 16
+  gradient_accumulation_steps: 1
+  learning_rate: 8.0e-4
+  min_lr: 8.0e-5
+  weight_decay: 0.1
+  beta1: 0.9
+  beta2: 0.95
+  grad_clip: 1.0
+  warmup_steps: 10
+  compile: false
+  max_steps: 80
+  lr_schedule: wsd
+  lr_decay_ratio: 0.2
+  z_loss_coeff: 1.0e-4
+  save_every: 50000
+  eval_every: 20
+  checkpoint_dir: checkpoints
+  keep_last_checkpoints: 10
+  keep_best_checkpoints: 10
+  runs_dir: runs/tuning_smoke
+  log_every: 10
+  early_stopping_patience: 2
+  early_stopping_min_delta: 0.0
+
+logging:
+  console_level: INFO
+  file_level: INFO
+  components:
+    data_preprocessing: WARNING
+    model_initialization: INFO
+    training: INFO
+
+tune:
+  name: parrotllm-8_75mio-architecture-smoke
+  storage: optuna_studies/parrotllm-8_75mio-architecture-smoke.db
+  n_trials: 2
+  timeout: null
+  sampler: tpe
+  pruner: hyperband
+  param_budget_min: 8500000
+  param_budget_max: 8750000
+  pruner_kwargs:
+    min_resource: 20
+    max_resource: 80
+    reduction_factor: 2
+
+  search_space:
+    d_model:
+      type: int
+      low: 104
+      high: 144
+      step: 8
+    n_layers:
+      type: int
+      low: 6
+      high: 27
+      step: 1
+    n_heads:
+      type: categorical
+      choices: [2, 4, 6, 8, 12, 16]
+    d_ff:
+      type: int
+      low: 288
+      high: 384
+      step: 32

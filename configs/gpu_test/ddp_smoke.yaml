@@ -38,7 +38,9 @@ training:
   z_loss_coeff: 1.0e-4
   save_every: 100
   eval_every: 100
-  checkpoint_dir: checkpoints/gpu_test
+  checkpoint_dir: checkpoints
+  keep_last_checkpoints: 10
+  keep_best_checkpoints: 10
   runs_dir: runs
   log_every: 1
 

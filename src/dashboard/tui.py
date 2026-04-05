@@ -64,7 +64,7 @@ def _progress_panel(run_dir: Path) -> Panel:
 
     stale, age = is_metrics_stale(run_dir)
     if stale:
-        lines.append(Text(f"⚠ Metrics not updated for {age}s — training may have stalled.",
+        lines.append(Text(f"⚠ Metrics not updated for {age}s — training may have stalled or crashed.",
                           style="yellow"))
 
     return Panel(Group(*lines), title="Progress")

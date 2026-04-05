@@ -42,7 +42,7 @@ def _selected(runs_dir: Path, run_name: str) -> tuple[TrainingMetrics, Optional[
 
 def _fmt_progress(metrics: TrainingMetrics, run_dir: Optional[Path]) -> str:
     if not metrics.steps:
-        return "No training data yet. Start training with --stage train."
+        return "No runs found in runs/. Start training first."
     current = metrics.steps[-1]
     max_steps = metrics.config.get("max_steps")
     loss = metrics.train_losses[-1]
@@ -58,7 +58,7 @@ def _fmt_progress(metrics: TrainingMetrics, run_dir: Optional[Path]) -> str:
     if run_dir is not None:
         stale, age = is_metrics_stale(run_dir)
         if stale:
-            parts.append(f"\n⚠ Metrics not updated for {age}s — training may have stalled.")
+            parts.append(f"\n⚠ Metrics not updated for {age}s — training may have stalled or crashed.")
     return " ".join(parts)
 
 
@@ -145,13 +145,13 @@ def build_app(runs_dir: Path, config_path: Path) -> gr.Blocks:
             "\n".join(log_lines) if log_lines else "(no log yet)",
         )
 
-    def generate_pdf(run_name):
+    def generate_pdf_file(run_name):
         from src.scripts.plot_training import plot_run_dir
         _, run_dir = _selected(runs_dir, run_name)
         if run_dir is None:
-            return "No run selected."
+            return None
         out = plot_run_dir(run_dir)
-        return f"Saved: {out}"
+        return str(out)
 
     def refresh_arch(run_name):
         metrics, _ = _selected(runs_dir, run_name)
@@ -167,12 +167,13 @@ def build_app(runs_dir: Path, config_path: Path) -> gr.Blocks:
     def action_resume(run_name):
         global _active_proc
         if not run_name:
-            return "Select a run to resume.", gr.update(), gr.update()
+            return "Select a run to resume.", gr.update(), gr.update(), gr.update()
         with _proc_lock:
             _active_proc = launch_training(config_path=config_path,
                                            resume_run_dir=runs_dir / run_name)
         return (f"Resumed {run_name}. PID: {_active_proc.pid}",
-                gr.update(interactive=False), gr.update(interactive=True))
+                gr.update(interactive=False), gr.update(interactive=False),
+                gr.update(interactive=True))
 
     def action_stop(_):
         global _active_proc
@@ -180,7 +181,7 @@ def build_app(runs_dir: Path, config_path: Path) -> gr.Blocks:
             if _active_proc is not None:
                 kill_training(_active_proc)
                 _active_proc = None
-        return "Stopped.", gr.update(interactive=True), gr.update(interactive=False)
+        return "Stopped.", gr.update(interactive=True), gr.update(interactive=True), gr.update(interactive=False)
 
     def refresh_status():
         alive = _is_alive()
@@ -225,7 +226,7 @@ def build_app(runs_dir: Path, config_path: Path) -> gr.Blocks:
 
                 with gr.Row():
                     pdf_btn = gr.Button("⬇ Generate PDF", scale=1)
-                    pdf_out = gr.Textbox(label="", scale=3, interactive=False)
+                    pdf_file = gr.File(label="Download", scale=2, interactive=False)
 
                 with gr.Accordion("Training log (last 20 lines)", open=False):
                     log_box = gr.Textbox(lines=10, show_label=False, interactive=False)
@@ -240,7 +241,7 @@ def build_app(runs_dir: Path, config_path: Path) -> gr.Blocks:
                     fn=lambda v: gr.Timer(value=v),
                     inputs=[refresh_slider], outputs=[timer],
                 )
-                pdf_btn.click(fn=generate_pdf, inputs=[run_selector], outputs=[pdf_out])
+                pdf_btn.click(fn=generate_pdf_file, inputs=[run_selector], outputs=[pdf_file])
 
             # ── TAB 2: Architecture ───────────────────────────────────
             with gr.Tab("Architecture"):
@@ -280,9 +281,9 @@ def build_app(runs_dir: Path, config_path: Path) -> gr.Blocks:
                 start_btn.click(fn=action_start, inputs=[start_btn],
                                 outputs=[start_out, start_btn, stop_btn])
                 resume_btn.click(fn=action_resume, inputs=[resume_selector],
-                                 outputs=[resume_out, resume_btn, stop_btn])
+                                 outputs=[resume_out, resume_btn, start_btn, stop_btn])
                 stop_btn.click(fn=action_stop, inputs=[stop_btn],
-                               outputs=[stop_out, start_btn, stop_btn])
+                               outputs=[stop_out, start_btn, resume_btn, stop_btn])
 
                 gr.Markdown("### All Runs")
                 runs_table = gr.Dataframe(

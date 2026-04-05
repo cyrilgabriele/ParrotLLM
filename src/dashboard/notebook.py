@@ -60,7 +60,7 @@ def _metrics_html(metrics: TrainingMetrics, run_dir: Optional[Path]) -> str:
     if run_dir is not None:
         stale, age = is_metrics_stale(run_dir)
         if stale:
-            html += f"<br><span style='color:orange'>⚠ Metrics not updated for {age}s</span>"
+            html += f"<br><span style='color:orange'>⚠ Metrics not updated for {age}s — training may have stalled or crashed.</span>"
     return html
 
 
@@ -162,7 +162,7 @@ class _Monitor:
     def _refresh_data(self):
         run_dir = self._get_run_dir()
         if run_dir is None:
-            self._metrics_w.value = "<i>No runs found. Start training first.</i>"
+            self._metrics_w.value = "<i>No runs found in runs/. Start training first.</i>"
             return
         metrics = read_metrics(run_dir)
         stats = get_system_stats()

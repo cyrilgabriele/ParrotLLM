@@ -6,7 +6,7 @@ import pytest
 
 # Make scripts/ importable
 sys.path.insert(0, str(Path(__file__).parent.parent / "src" / "scripts"))
-from plot_training import parse_log, parse_metrics, _resolve_run
+from plot_training import parse_log, parse_metrics, plot_run_dir, _resolve_run
 
 SAMPLE_LOG = """
 2026-03-20 14:55:19 - INFO - parrotllm.training - Logging initialised -> runs/run_test/train.log
@@ -206,6 +206,34 @@ def test_build_figure_comparison(log_file):
     fig = build_figure([data1, data2])
     assert fig is not None
     assert len(fig.get_axes()) == 6
+
+
+def test_plot_run_dir_reads_metrics_jsonl(metrics_dir):
+    """plot_run_dir() reads metrics.jsonl and saves a PDF at the default path."""
+    import matplotlib
+    matplotlib.use("Agg")
+    out = plot_run_dir(metrics_dir)
+    assert out == metrics_dir / "training_plots.pdf"
+    assert out.exists()
+
+
+def test_plot_run_dir_custom_output(metrics_dir, tmp_path):
+    """plot_run_dir() respects a custom output path."""
+    import matplotlib
+    matplotlib.use("Agg")
+    out_path = tmp_path / "custom.pdf"
+    out = plot_run_dir(metrics_dir, output=out_path)
+    assert out == out_path
+    assert out.exists()
+
+
+def test_plot_run_dir_falls_back_to_train_log(log_file):
+    """plot_run_dir() uses train.log when metrics.jsonl is absent."""
+    import matplotlib
+    matplotlib.use("Agg")
+    out = plot_run_dir(log_file.parent)
+    assert out.exists()
+    assert out.suffix == ".pdf"
 
 
 def test_resolve_run_missing_log(tmp_path):

@@ -364,6 +364,29 @@ def _resolve_run(run_dir: Path) -> Path:
     return log
 
 
+def plot_run_dir(run_dir: Path, output: Path | None = None) -> Path:
+    """Generate training plots for a run directory and save as PDF.
+
+    Reads ``metrics.jsonl`` when present; falls back to ``train.log`` for
+    older runs that pre-date structured JSONL logging.
+
+    Returns the path of the saved PDF.
+    """
+    metrics_path = run_dir / "metrics.jsonl"
+    if metrics_path.exists():
+        data = parse_metrics(run_dir)
+    else:
+        data = parse_log(_resolve_run(run_dir))
+
+    if output is None:
+        output = run_dir / "training_plots.pdf"
+
+    fig = build_figure([data])
+    fig.savefig(output, format="pdf", bbox_inches="tight", dpi=150)
+    plt.close(fig)
+    return output
+
+
 def main():
     parser = argparse.ArgumentParser(
         description="Plot ParrotLLM training logs as a PDF."
@@ -373,7 +396,7 @@ def main():
         nargs="+",
         type=Path,
         metavar="RUN_DIR",
-        help="One or more run directories containing train.log",
+        help="One or more run directories containing metrics.jsonl or train.log",
     )
     parser.add_argument(
         "--output",
@@ -383,20 +406,20 @@ def main():
     )
     args = parser.parse_args()
 
+    if len(args.run_dirs) == 1 and args.output is None:
+        out = plot_run_dir(args.run_dirs[0])
+        print(f"Saved: {out}")
+        return
+
     runs = []
     for run_dir in args.run_dirs:
-        log_path = _resolve_run(run_dir)
-        runs.append(parse_log(log_path))
+        metrics_path = run_dir / "metrics.jsonl"
+        if metrics_path.exists():
+            runs.append(parse_metrics(run_dir))
+        else:
+            runs.append(parse_log(_resolve_run(run_dir)))
 
-    is_comparison = len(runs) > 1
-
-    if args.output:
-        out_path = args.output
-    elif is_comparison:
-        out_path = args.run_dirs[0] / "comparison_plots.pdf"
-    else:
-        out_path = args.run_dirs[0] / "training_plots.pdf"
-
+    out_path = args.output or (args.run_dirs[0] / "comparison_plots.pdf")
     fig = build_figure(runs)
     fig.savefig(out_path, format="pdf", bbox_inches="tight", dpi=150)
     plt.close(fig)

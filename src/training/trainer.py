@@ -1420,6 +1420,12 @@ def run_train(
                                 path=best_candidate_path,
                                 val_loss=val_loss,
                             )
+                        try:
+                            from pathlib import Path as _Path
+                            from src.scripts.plot_training import plot_run_dir as _plot_run_dir
+                            _plot_run_dir(_Path(run_dir))
+                        except Exception as _exc:
+                            log.debug("Auto-plotting skipped: %s", _exc)
                     best_checkpoint_path = checkpoint_manager.best_path
                 if math.isfinite(val_loss) and (not improved) and early_stopping_enabled:
                     evals_without_improvement += 1
@@ -1498,6 +1504,12 @@ def run_train(
                             path=ckpt_path,
                             category="last",
                         )
+                    try:
+                        from pathlib import Path as _Path
+                        from src.scripts.plot_training import plot_run_dir as _plot_run_dir
+                        _plot_run_dir(_Path(run_dir))
+                    except Exception as _exc:
+                        log.debug("Auto-plotting skipped: %s", _exc)
 
             if is_epoch_boundary and completed_steps < tc["max_steps"]:
                 data_iter = _build_epoch_iterator(

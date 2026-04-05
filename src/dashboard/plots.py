@@ -33,12 +33,15 @@ def build_training_figure(metrics: TrainingMetrics) -> Optional[plt.Figure]:
 
     steps = metrics.steps
     eval_steps = metrics.eval_steps
+    # Clip eval-paired lists to eval_steps length to guard against
+    # initial_validation entries that have val_loss but no step.
+    n_eval = len(eval_steps)
 
     # ── [0,0] Train & Val Loss ────────────────────────────────────────
     ax1 = fig.add_subplot(gs[0, 0])
     ax1.plot(steps, metrics.train_losses, color=TRAIN_COLOR, linewidth=1.5, label="Train")
     if eval_steps and metrics.val_losses:
-        ax1.plot(eval_steps, metrics.val_losses, color=VAL_COLOR, linewidth=1.5,
+        ax1.plot(eval_steps, metrics.val_losses[:n_eval], color=VAL_COLOR, linewidth=1.5,
                  linestyle="--", label="Val")
     if metrics.best_step:
         ax1.axvline(metrics.best_step, color="#999", linewidth=0.8, linestyle=":",
@@ -51,7 +54,7 @@ def build_training_figure(metrics: TrainingMetrics) -> Optional[plt.Figure]:
     # ── [0,1] Validation Perplexity ───────────────────────────────────
     ax2 = fig.add_subplot(gs[0, 1])
     if eval_steps and metrics.val_ppls:
-        ax2.plot(eval_steps, metrics.val_ppls, color=VAL_COLOR, linewidth=1.5)
+        ax2.plot(eval_steps, metrics.val_ppls[:n_eval], color=VAL_COLOR, linewidth=1.5)
         ax2.set_yscale("log")
     _style(ax2)
     ax2.set_ylabel("Perplexity (log)")
@@ -85,8 +88,8 @@ def build_training_figure(metrics: TrainingMetrics) -> Optional[plt.Figure]:
     # ── [1,1] Train–Val Gap ───────────────────────────────────────────
     ax5 = fig.add_subplot(gs[1, 1])
     if eval_steps and metrics.val_losses and metrics.eval_train_losses:
-        gap = [v - t for v, t in zip(metrics.val_losses, metrics.eval_train_losses)]
-        ax5.plot(eval_steps, gap, color=VAL_COLOR, linewidth=1.5)
+        gap = [v - t for v, t in zip(metrics.val_losses[:n_eval], metrics.eval_train_losses[:n_eval])]
+        ax5.plot(eval_steps[:len(gap)], gap, color=VAL_COLOR, linewidth=1.5)
         ax5.axhline(0, color="#bbb", linewidth=0.8, linestyle="--")
     _style(ax5)
     ax5.set_ylabel("Val − Train Loss")

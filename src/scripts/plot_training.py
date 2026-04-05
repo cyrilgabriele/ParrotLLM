@@ -14,6 +14,7 @@ Usage:
 
 import re
 import json
+import math
 import argparse
 from pathlib import Path
 
@@ -125,6 +126,74 @@ def parse_log(log_path: Path, label: str | None = None) -> dict:
         "lr": lr,
         "grad_norm": grad_norm,
         "train_ppl": train_ppl,
+        "tokens_per_sec": [math.nan] * len(steps),   # not tracked in train.log
+        "eval_steps": eval_steps,
+        "val_loss": val_loss,
+        "val_ppl": val_ppl,
+        "eval_train_loss": eval_train_loss,
+        "eval_train_ppl": eval_train_ppl,
+        "best_val_step": best_val_step,
+        "label": label,
+    }
+
+
+def parse_metrics(run_dir: Path, label: str | None = None) -> dict:
+    """Parse a metrics.jsonl file into the same dict format as parse_log."""
+    metrics_path = run_dir / "metrics.jsonl"
+    text = metrics_path.read_text()
+
+    steps: list[int] = []
+    train_loss: list[float] = []
+    lr: list[float] = []
+    grad_norm: list[float] = []
+    train_ppl: list[float] = []
+    tokens_per_sec: list[float] = []
+    eval_steps: list[int] = []
+    val_loss: list[float] = []
+    val_ppl: list[float] = []
+    eval_train_loss: list = []
+    eval_train_ppl: list = []
+    best_val_step: int | None = None
+
+    for line in text.splitlines():
+        line = line.strip()
+        if not line:
+            continue
+        try:
+            entry = json.loads(line)
+        except json.JSONDecodeError:
+            continue
+
+        etype = entry.get("type")
+
+        if etype == "step":
+            steps.append(entry["step"])
+            train_loss.append(entry["train_loss"])
+            lr.append(entry["lr"])
+            train_ppl.append(entry["perplexity"])
+            grad_norm.append(float(entry["grad_norm"]) if entry.get("grad_norm") is not None else math.nan)
+            tokens_per_sec.append(float(entry["tokens_per_sec"]) if entry.get("tokens_per_sec") is not None else math.nan)
+
+        elif etype == "eval":
+            eval_steps.append(entry["step"])
+            val_loss.append(entry["val_loss"])
+            val_ppl.append(entry["val_ppl"])
+            eval_train_loss.append(entry.get("eval_train_loss"))
+            eval_train_ppl.append(entry.get("eval_train_ppl"))
+
+        elif etype == "best_checkpoint":
+            best_val_step = entry["step"]
+
+    if label is None:
+        label = _label_from_config(run_dir) or run_dir.name
+
+    return {
+        "steps": steps,
+        "train_loss": train_loss,
+        "lr": lr,
+        "grad_norm": grad_norm,
+        "train_ppl": train_ppl,
+        "tokens_per_sec": tokens_per_sec,
         "eval_steps": eval_steps,
         "val_loss": val_loss,
         "val_ppl": val_ppl,

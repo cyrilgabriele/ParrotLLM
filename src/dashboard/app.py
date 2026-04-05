@@ -79,9 +79,15 @@ def _compute_eta(metrics: TrainingMetrics) -> str:
     avg_tps = sum(metrics.tokens_per_sec[-10:]) / len(metrics.tokens_per_sec[-10:])
     if avg_tps <= 0:
         return "—"
-    eta_sec = remaining * tokens_per_step / avg_tps
-    h, m = int(eta_sec // 3600), int((eta_sec % 3600) // 60)
-    return f"~{h}h {m:02d}m" if h > 0 else f"~{m}m"
+    eta_sec = int(remaining * tokens_per_step / avg_tps)
+    h = eta_sec // 3600
+    m = (eta_sec % 3600) // 60
+    s = eta_sec % 60
+    if h > 0:
+        return f"~{h}h {m:02d}m {s:02d}s"
+    if m > 0:
+        return f"~{m}m {s:02d}s"
+    return f"~{s}s"
 
 
 def _alert_rows(metrics: TrainingMetrics) -> list[list[str]]:

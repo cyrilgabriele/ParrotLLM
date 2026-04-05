@@ -1,0 +1,61 @@
+# Fast-learning sanity-check training config.
+# Purpose: reveal quickly whether optimization and train/val curves behave
+# sensibly on a tiny, easy dataset.
+
+model:
+  vocab_size: 50258
+  pad_token_id: 50257
+  bos_token_id: 50256
+  eos_token_id: 50256
+  d_model: 256
+  n_layers: 4
+  n_heads: 8
+  d_ff: 682
+  context_length: 256
+  bias: false
+  dropout: 0.0
+  rope_theta: 10000.0
+  gradient_checkpointing: false
+
+training:
+  device: auto
+  train_bin: data/processed/train.bin
+  val_bin: data/processed/val.bin
+  num_workers: 0
+  pin_memory: true
+
+  batch_size: 16
+  gradient_accumulation_steps: 1
+
+  learning_rate: 1.0e-3
+  min_lr: 1.0e-4
+  weight_decay: 0.1
+  beta1: 0.9
+  beta2: 0.95
+  grad_clip: 1.0
+
+  warmup_steps: 20
+  max_steps: 300
+  lr_schedule: wsd
+  lr_decay_ratio: 0.2
+  z_loss_coeff: 1.0e-4
+  compile: false
+
+  save_every: 50
+  eval_every: 25
+  checkpoint_dir: checkpoints
+  keep_last_checkpoints: 5
+  keep_best_checkpoints: 5
+  early_stopping_patience: 3
+  early_stopping_min_delta: 0.0
+
+  runs_dir: runs/fast_learn
+  log_every: 10
+
+logging:
+  console_level: INFO
+  file_level: DEBUG
+  components:
+    data_preprocessing: INFO
+    model_initialization: INFO
+    training: INFO

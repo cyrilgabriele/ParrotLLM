@@ -15,7 +15,7 @@ def main() -> None:
     parser.add_argument(
         "--stage",
         required=True,
-        choices=["preprocess", "train", "tune", "eval", "inference", "chat"],
+        choices=["preprocess", "train", "tune", "eval", "inference", "chat", "dashboard"],
     )
     parser.add_argument("--config", type=Path, default=Path("configs/default.yaml"))
     parser.add_argument("--checkpoint", default=None)
@@ -36,6 +36,15 @@ def main() -> None:
     parser.add_argument("--temperature", type=float, default=None)
     parser.add_argument("--leaderboard", action="store_true")
     parser.add_argument("--mock-testing", action="store_true", default=None)
+    # dashboard-specific
+    parser.add_argument("--open", action="store_true",
+                        help="Open browser automatically when starting the dashboard")
+    parser.add_argument("--share", action="store_true",
+                        help="Create a public Gradio share URL")
+    parser.add_argument("--tui", action="store_true",
+                        help="Use terminal UI instead of Gradio")
+    parser.add_argument("--tui-refresh", type=int, default=5, metavar="N",
+                        help="TUI refresh interval in seconds (default: 5)")
     # tune-specific
     parser.add_argument("--n-trials", type=int, default=None,
                         help="Override number of Optuna trials")
@@ -148,6 +157,24 @@ def main() -> None:
         from src.chat.app import run_chat
 
         run_chat(project_config, device=device)
+
+    if args.stage == "dashboard":
+        from pathlib import Path as _Path
+        training_cfg = project_config.training
+        runs_dir = _Path(training_cfg.runs_dir) if training_cfg else _Path("runs")
+
+        if args.tui:
+            from src.dashboard.tui import run_tui
+            run_tui(runs_dir=runs_dir, refresh=args.tui_refresh)
+        else:
+            from src.dashboard.app import run_dashboard
+            run_dashboard(
+                runs_dir=runs_dir,
+                config_path=args.config,
+                share=args.share,
+                open_browser=args.open,
+            )
+        return
 
 
 def _require_section(value, name: str):

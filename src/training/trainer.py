@@ -6,6 +6,7 @@ import json
 import logging
 import math
 import os
+import re
 import time
 from contextlib import nullcontext
 from dataclasses import dataclass
@@ -435,7 +436,13 @@ def load_checkpoint(path: str, model: nn.Module,
                     scheduler: LRScheduler | None = None,
                     *,
                     return_trainer_state: bool = False):
-    ckpt = torch.load(path, map_location=device, weights_only=False)
+    # Always deserialise to CPU first. load_state_dict() then copies each
+    # tensor to the correct device (model parameters and optimiser states live
+    # on `device`). Loading directly to an accelerator device (MPS/CUDA) would
+    # place the *entire* raw checkpoint — model weights + all AdamW moment
+    # buffers — on the device simultaneously, which can spike memory by 3–4×
+    # the model size and cause OOM before training even starts.
+    ckpt = torch.load(path, map_location="cpu", weights_only=False)
     raw_model = _unwrap_model(model)
     raw_model.load_state_dict(ckpt["model"])
     if optimizer is not None and "optimizer" in ckpt:
@@ -457,6 +464,247 @@ def load_checkpoint(path: str, model: nn.Module,
     if return_trainer_state:
         return step, ckpt.get("config", {}), ckpt.get("trainer_state")
     return step, ckpt.get("config", {})
+
+
+# ── Checkpoint discovery ─────────────────────────────────────────────────────
+
+# Matches new format:  last_epoch_0001_step_0015000.pt  → group 1
+# Matches old format:  00_epoch_1000_step               → group 2
+_STEP_RE = re.compile(r"_step_(\d+)\.pt$|_epoch_(\d+)_step(?:\.|$)")
+
+# Old-format checkpoint: no extension, e.g. 00_epoch_1000_step
+_OLD_CKPT_RE = re.compile(r"^\d+_epoch_\d+_step$")
+
+
+def _parse_step_from_filename(filename: str) -> int | None:
+    """Extract the optimizer step from a checkpoint filename, or None if unparseable.
+
+    Handles both the current ``last_epoch_NNNN_step_NNNNNNN.pt`` format and
+    the legacy ``NN_epoch_NNN_step`` format (no file extension).
+    """
+    m = _STEP_RE.search(filename)
+    if m:
+        return int(m.group(1) or m.group(2))
+    return None
+
+
+def _is_checkpoint_candidate(filename: str) -> bool:
+    """Return True for filenames that could be a checkpoint saved by save_checkpoint()."""
+    return filename.endswith(".pt") or bool(_OLD_CKPT_RE.match(filename))
+
+
+def _peek_checkpoint_model_config(path: str) -> dict | None:
+    """Load a checkpoint and return its saved model-config dict, or None on failure.
+
+    Used by :func:`run_train` to reconstruct the exact model architecture that
+    was used when the checkpoint was saved, so that resuming does not require
+    the user to keep the YAML config manually in sync with the checkpoint.
+    """
+    try:
+        ckpt = torch.load(path, map_location="cpu", weights_only=False)
+        cfg = ckpt.get("config")
+        if isinstance(cfg, dict) and "model" in cfg and isinstance(cfg["model"], dict):
+            return cfg["model"]
+        return None
+    except Exception:
+        return None
+
+
+def _validate_checkpoint(path: str) -> tuple[bool, str]:
+    """Check whether a checkpoint file is loadable and structurally valid.
+
+    Loads the file on CPU to avoid occupying GPU memory during discovery.
+    Returns ``(True, "")`` on success, or ``(False, reason)`` on failure so
+    the caller can log a precise diagnostic instead of a silent skip.
+
+    A valid checkpoint must be a ``dict`` with at least ``"model"`` and
+    ``"step"`` keys — the minimum required to resume training.
+    """
+    try:
+        ckpt = torch.load(path, map_location="cpu", weights_only=False)
+        if not isinstance(ckpt, dict):
+            return False, f"payload is {type(ckpt).__name__!r}, expected dict"
+        missing = [k for k in ("model", "step") if k not in ckpt]
+        if missing:
+            return False, f"missing required keys: {missing!r}"
+        return True, ""
+    except Exception as exc:
+        return False, str(exc)
+
+
+def find_latest_checkpoint(
+    runs_dir: str,
+    run_dir: str | None = None,
+    *,
+    checkpoint_subdir: str = "checkpoints",
+    validate: bool = True,
+) -> str:
+    """Find the latest valid checkpoint to resume training from.
+
+    Searches *checkpoint_subdir* inside the target run directory for
+    ``*.pt`` files, picks the one with the highest step number, and —
+    when *validate* is ``True`` — verifies it can be loaded before
+    returning its path. Corrupted or truncated files are skipped
+    automatically and the next-best candidate is tried.
+
+    Run-directory selection
+    -----------------------
+    * If *run_dir* is given, that directory is used directly.
+    * Otherwise the most recently created ``run_*`` directory inside
+      *runs_dir* is selected (directories are sorted lexicographically
+      so the ``run_YYYYMMDD_HHMMSS`` timestamp determines recency).
+
+    Checkpoint ranking
+    ------------------
+    Candidates are ranked by:
+
+    1. **Step number** (descending) — resume as close to the interruption
+       as possible.
+    2. **Checkpoint type** (``last_*`` beats ``best_*`` at equal step) —
+       periodic saves capture full training state regardless of val-loss.
+    3. **File mtime** (descending) — tie-break for non-standard names.
+
+    Args:
+        runs_dir: Base directory containing ``run_*`` sub-directories
+            created by :func:`make_run_dir`.
+        run_dir: Specific run directory to search. When ``None`` the most
+            recent ``run_*`` directory inside *runs_dir* is used.
+        checkpoint_subdir: Sub-directory name inside each run directory
+            where checkpoints are stored (default: ``"checkpoints"``).
+        validate: Verify each candidate is loadable. Corrupted files are
+            skipped and the next candidate is tried.
+
+    Returns:
+        Absolute path to the latest valid checkpoint file.
+
+    Raises:
+        FileNotFoundError: When the directory structure is missing, no
+            checkpoint files exist, or every candidate fails validation.
+    """
+    log = logging.getLogger("parrotllm.training")
+
+    # ── 1. Build ordered list of run directories to search ───────────────────
+    if run_dir is not None:
+        # Explicit path: search only that directory, no fallback.
+        run_dir = os.path.abspath(run_dir)
+        if not os.path.isdir(run_dir):
+            raise FileNotFoundError(
+                f"Specified run directory does not exist: {run_dir!r}"
+            )
+        run_dirs_to_search = [run_dir]
+    else:
+        runs_root = os.path.abspath(runs_dir)
+        if not os.path.isdir(runs_root):
+            raise FileNotFoundError(
+                f"Runs directory does not exist: {runs_root!r}. "
+                "Start a fresh training run first, or pass an explicit "
+                "--resume <run_dir> path."
+            )
+        run_candidates = sorted(
+            (
+                d for d in os.listdir(runs_root)
+                if d.startswith("run_")
+                and os.path.isdir(os.path.join(runs_root, d))
+            ),
+            reverse=True,  # lexicographic descending ≡ newest first
+        )
+        if not run_candidates:
+            raise FileNotFoundError(
+                f"No run_* directories found in {runs_root!r}. "
+                "Start a fresh training run first."
+            )
+        run_dirs_to_search = [os.path.join(runs_root, d) for d in run_candidates]
+
+    # ── 2. Search run directories in order until a valid checkpoint is found ──
+    def _collect_candidates(search_run_dir: str) -> list[str]:
+        """Return all checkpoint candidate file paths from *search_run_dir*.
+
+        Checks two locations:
+        - ``<run_dir>/<checkpoint_subdir>/`` — current layout (*.pt files)
+        - ``<run_dir>/`` root — legacy layout (no extension, NN_epoch_NNN_step)
+        """
+        candidates: list[str] = []
+        for search_path in (
+            os.path.join(search_run_dir, checkpoint_subdir),
+            search_run_dir,
+        ):
+            if not os.path.isdir(search_path):
+                continue
+            for f in os.listdir(search_path):
+                if _is_checkpoint_candidate(f):
+                    candidates.append(os.path.join(search_path, f))
+        return candidates
+
+    def _rank(path: str) -> tuple[int, int, float]:
+        name = os.path.basename(path)
+        step = _parse_step_from_filename(name)
+        is_last = 1 if name.startswith("last_") else 0
+        mtime = os.path.getmtime(path)
+        return (step if step is not None else -1, is_last, mtime)
+
+    def _find_in_run(search_run_dir: str) -> str | None:
+        """Return the best valid checkpoint path from *search_run_dir*, or None."""
+        candidates = _collect_candidates(search_run_dir)
+        if not candidates:
+            return None
+
+        candidates.sort(key=_rank, reverse=True)
+
+        for path in candidates:
+            if validate:
+                ok, reason = _validate_checkpoint(path)
+                if not ok:
+                    log.warning(
+                        "Skipping checkpoint %s — validation failed: %s",
+                        path,
+                        reason,
+                    )
+                    continue
+            return path
+
+        return None
+
+    skipped: list[str] = []
+    for search_dir in run_dirs_to_search:
+        path = _find_in_run(search_dir)
+        if path is not None:
+            if skipped:
+                log.warning(
+                    "%d run(s) skipped (no usable checkpoints): %s",
+                    len(skipped),
+                    ", ".join(os.path.basename(d) for d in skipped),
+                )
+            log.info("Auto-selected run directory for resume: %s", search_dir)
+            step = _parse_step_from_filename(os.path.basename(path))
+            log.info(
+                "Selected checkpoint: %s (step=%s)",
+                path,
+                step if step is not None else "unknown",
+            )
+            return path
+        skipped.append(search_dir)
+
+    if run_dir is not None:
+        # Explicit run_dir — give a targeted error showing what was found.
+        candidates = _collect_candidates(run_dirs_to_search[0])
+        if not candidates:
+            raise FileNotFoundError(
+                f"No checkpoint files found in {run_dirs_to_search[0]!r} "
+                f"(checked '{checkpoint_subdir}/' subdir and run root). "
+                "The run may not have saved any checkpoints yet."
+            )
+        raise FileNotFoundError(
+            f"Found {len(candidates)} checkpoint file(s) in {run_dirs_to_search[0]!r} "
+            "but none passed validation. Run with --resume without a path to search "
+            "older runs, or check the files manually."
+        )
+
+    raise FileNotFoundError(
+        f"No valid checkpoint found in any of the {len(skipped)} run(s) under "
+        f"{os.path.abspath(runs_dir)!r}. "
+        "All runs either have no checkpoint files or every file failed validation. "
+        "Check the WARNING lines above for per-file failure reasons."
+    )
 
 
 # ── Evaluation ───────────────────────────────────────────────────────────────
@@ -528,6 +776,18 @@ def _broadcast_value(value, src: int = 0):
     payload = [value]
     dist.broadcast_object_list(payload, src=src)
     return payload[0]
+
+
+def _empty_device_cache(device: torch.device) -> None:
+    """Release any cached-but-unused memory back to the device allocator.
+
+    Called after checkpoint loading to ensure transient CPU→device copies are
+    freed before the initial evaluation allocates activations.
+    """
+    if device.type == "cuda":
+        torch.cuda.empty_cache()
+    elif device.type == "mps":
+        torch.mps.empty_cache()
 
 
 def _checkpoint_trainer_state(
@@ -688,6 +948,34 @@ def run_train(
 
     tc = tc_model.model_dump()
     mc = mc_model.model_dump()
+
+    # ── Resolve model architecture from checkpoint (must happen before model build) ──
+    # When resuming, the checkpoint's saved model config is the source of truth for
+    # architecture. Using the current YAML config would cause a shape mismatch if the
+    # architecture changed between runs.
+    if checkpoint is not None:
+        ckpt_mc = _peek_checkpoint_model_config(checkpoint)
+        if ckpt_mc is not None:
+            arch_keys = ("d_model", "n_layers", "n_heads", "d_ff", "context_length",
+                         "vocab_size", "bias", "rope_theta")
+            diffs = {
+                k: (mc.get(k), ckpt_mc.get(k))
+                for k in arch_keys
+                if mc.get(k) != ckpt_mc.get(k)
+            }
+            if diffs:
+                diff_lines = "\n".join(
+                    f"  {k}: config={yaml_val!r} → checkpoint={ckpt_val!r}"
+                    for k, (yaml_val, ckpt_val) in diffs.items()
+                )
+                # We don't have a logger yet (setup_logger runs later), use root logger.
+                logging.warning(
+                    "Checkpoint architecture differs from current config — "
+                    "using checkpoint values to build the model:\n%s",
+                    diff_lines,
+                )
+            mc = {**mc, **ckpt_mc}
+            model_config_dict = {**model_config_dict, "model": mc}
 
     device, rank, world_size, local_rank, distributed = _init_distributed(device)
     is_master = rank == 0
@@ -851,6 +1139,23 @@ def run_train(
                     start_step,
                     tc["gradient_accumulation_steps"],
                 )
+            if start_step >= tc["max_steps"]:
+                log.warning(
+                    "Checkpoint step %d >= max_steps %d — training is already complete. "
+                    "No additional steps will be taken. "
+                    "Increase max_steps in the config to extend training.",
+                    start_step,
+                    tc["max_steps"],
+                )
+
+    # Release any unreferenced tensors so the allocator has headroom before the
+    # first estimate_loss call (especially important after checkpoint loading,
+    # where CPU→device copies of model and optimiser states may still occupy
+    # cached memory).
+    if checkpoint:
+        import gc
+        gc.collect()
+        _empty_device_cache(device)
 
     # ── initial evaluation ────────────────────────────────────────────────────
     if val_ds is not None:
@@ -872,12 +1177,14 @@ def run_train(
     # ── training loop ─────────────────────────────────────────────────────────
     model.train()
     grad_accum = tc["gradient_accumulation_steps"]
+    tokens_per_step: int = tc["batch_size"] * mc["context_length"] * grad_accum
     total_micro_batches = len(train_loader)
     if total_micro_batches <= 0:
         raise ValueError("Training dataset produced zero batches.")
     steps_per_epoch = max(1, math.ceil(total_micro_batches / max(1, grad_accum)))
     train_start = time.time()
     t0 = train_start
+    _step_t = train_start
     early_stopping_patience = int(tc.get("early_stopping_patience", 0))
     early_stopping_min_delta = float(tc.get("early_stopping_min_delta", 0.0))
     early_stopping_enabled = val_ds is not None and early_stopping_patience > 0
@@ -985,6 +1292,8 @@ def run_train(
                     grad_norm = nn.utils.clip_grad_norm_(model.parameters(), tc["grad_clip"]).item()
 
                 optimizer_updated = _apply_optimizer_step(optimizer, scaler)
+                _step_dt = time.time() - _step_t
+                _step_t = time.time()
                 if optimizer_updated:
                     scheduler.step()
                     completed_steps += 1
@@ -1031,6 +1340,8 @@ def run_train(
                         "pretraining", "step",
                         epoch=current_epoch, step=completed_steps,
                         train_loss=accum_loss, perplexity=ppl, lr=lr,
+                        grad_norm=round(grad_norm, 6),
+                        tokens_per_sec=round(tokens_per_step / _step_dt) if _step_dt > 0 else 0,
                     )
 
                 if is_master:
@@ -1069,6 +1380,7 @@ def run_train(
                         "pretraining", "eval",
                         step=completed_steps, epoch=eval_epoch,
                         val_loss=val_loss, val_ppl=val_ppl,
+                        eval_train_loss=accum_loss, eval_train_ppl=ppl,
                     )
 
                 if trial_for_rank is not None:

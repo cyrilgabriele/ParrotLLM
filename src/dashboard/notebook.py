@@ -105,7 +105,8 @@ def _alerts_html(metrics: TrainingMetrics) -> str:
 class _Monitor:
     """Phase 1 read-only monitor widget."""
 
-    def __init__(self, runs_dir: Path, run_dir: Optional[Path], refresh: int):
+    def __init__(self, runs_dir: Path, run_dir: Optional[Path], refresh: int,
+                 config_path: Path = Path("configs/default.yaml")):
         self._runs_dir = runs_dir
         self._refresh = refresh
         self._timer: Optional[threading.Timer] = None
@@ -128,7 +129,7 @@ class _Monitor:
         self._plot_w = widgets.Output()
 
         # Phase 2: run management
-        self._config_path = Path("configs/default.yaml")
+        self._config_path = config_path
         self._proc = None
         self._proc_lock = threading.Lock()
 
@@ -244,15 +245,17 @@ def monitor(
     runs_dir: str | Path = "runs",
     run_dir: Optional[str | Path] = None,
     refresh: int = 5,
+    config_path: str | Path = "configs/default.yaml",
 ) -> None:
     """Display the ParrotLLM training monitor widget in a Jupyter notebook.
 
     Args:
-        runs_dir: Directory containing run subdirectories. Default: "runs".
-        run_dir:  Specific run directory to show. Default: auto-detects latest.
-        refresh:  Auto-refresh interval in seconds. Default: 5.
+        runs_dir:    Directory containing run subdirectories. Default: "runs".
+        run_dir:     Specific run directory to show. Default: auto-detects latest.
+        refresh:     Auto-refresh interval in seconds. Default: 5.
+        config_path: Path to the training config YAML. Default: "configs/default.yaml".
     """
     runs_dir = Path(runs_dir)
     run_dir = Path(run_dir) if run_dir is not None else None
-    m = _Monitor(runs_dir, run_dir, refresh)
+    m = _Monitor(runs_dir, run_dir, refresh, config_path=Path(config_path))
     display(m.widget())

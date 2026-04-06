@@ -85,3 +85,51 @@ def test_status_banner_red_on_error():
     m = _metrics_with_grad_explosion()
     html = _fmt_status_banner(m)
     assert "🔴" in html or "red" in html.lower()
+
+
+from src.dashboard.app import _fmt_progress_detail
+
+
+def _metrics_with_history():
+    m = TrainingMetrics()
+    m.steps = list(range(100, 600, 100))      # [100,200,300,400,500]
+    m.train_losses = [4.5, 4.3, 4.1, 3.9, 3.7]
+    m.lrs = [3e-4] * 5
+    m.grad_norms = [0.8, 0.7, 0.65, 0.6, 0.55]
+    m.tokens_per_sec = [12000.0] * 5
+    m.eval_steps = [200, 400]
+    m.val_losses = [4.4, 3.95]
+    m.best_step = 400
+    m.config = {"max_steps": 1000, "batch_size": 64, "context_length": 1024,
+                "gradient_accumulation_steps": 4}
+    return m
+
+
+def test_progress_detail_shows_step():
+    m = _metrics_with_history()
+    html = _fmt_progress_detail(m, m_run_dir=None)
+    assert "500" in html
+
+
+def test_progress_detail_shows_loss_delta():
+    m = _metrics_with_history()
+    html = _fmt_progress_detail(m, m_run_dir=None)
+    assert "Δ" in html or "delta" in html.lower() or "-0." in html
+
+
+def test_progress_detail_shows_progress_bar():
+    m = _metrics_with_history()
+    html = _fmt_progress_detail(m, m_run_dir=None)
+    assert "50" in html or "50.0" in html
+
+
+def test_progress_detail_shows_val_loss():
+    m = _metrics_with_history()
+    html = _fmt_progress_detail(m, m_run_dir=None)
+    assert "3.95" in html or "3.9500" in html
+
+
+def test_progress_detail_empty_state():
+    m = TrainingMetrics()
+    html = _fmt_progress_detail(m, m_run_dir=None)
+    assert "No runs found" in html

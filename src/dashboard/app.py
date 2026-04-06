@@ -120,6 +120,83 @@ def _fmt_status_banner(metrics: TrainingMetrics) -> str:
     return "\n".join(lines)
 
 
+def _fmt_progress_detail(metrics: TrainingMetrics, m_run_dir) -> str:
+    """Return a rich HTML progress section with current values, deltas, and a progress bar."""
+    if not metrics.steps:
+        return "<p style='color:#6b7280'>No runs found in runs/. Start training first.</p>"
+
+    step = metrics.steps[-1]
+    loss = metrics.train_losses[-1]
+    lr = metrics.lrs[-1]
+    max_steps = metrics.config.get("max_steps")
+
+    # ── Progress bar ──────────────────────────────────────────────────
+    if max_steps:
+        pct = 100.0 * step / max_steps
+        bar = (
+            f"<div style='background:#e5e7eb;border-radius:4px;height:12px;margin:6px 0'>"
+            f"<div style='background:#2563EB;width:{pct:.1f}%;height:100%;border-radius:4px'></div>"
+            f"</div>"
+            f"<div style='font-size:13px;color:#6b7280'>Step {step:,} / {max_steps:,} &nbsp;·&nbsp; {pct:.1f}%</div>"
+        )
+    else:
+        bar = f"<div style='font-size:13px;color:#6b7280'>Step {step:,}</div>"
+
+    # ── Loss delta over all recorded steps ───────────────────────────
+    if len(metrics.train_losses) >= 2:
+        delta = metrics.train_losses[-1] - metrics.train_losses[0]
+        delta_str = f"{delta:+.4f}"
+        delta_color = "#16a34a" if delta < 0 else "#dc2626"
+        loss_html = (
+            f"<b>Train Loss</b> {loss:.4f} "
+            f"<span style='color:{delta_color};font-size:12px'>(Δ {delta_str} total)</span>"
+        )
+    else:
+        loss_html = f"<b>Train Loss</b> {loss:.4f}"
+
+    # ── Val loss ──────────────────────────────────────────────────────
+    val_html = ""
+    if metrics.val_losses:
+        val = metrics.val_losses[-1]
+        if len(metrics.val_losses) >= 2:
+            val_delta = metrics.val_losses[-1] - metrics.val_losses[0]
+            vd_color = "#16a34a" if val_delta < 0 else "#dc2626"
+            val_html = (
+                f"&nbsp;·&nbsp; <b>Val Loss</b> {val:.4f} "
+                f"<span style='color:{vd_color};font-size:12px'>(Δ {val_delta:+.4f} total)</span>"
+            )
+        else:
+            val_html = f"&nbsp;·&nbsp; <b>Val Loss</b> {val:.4f}"
+
+    # ── Secondary metrics ─────────────────────────────────────────────
+    secondary = [f"<b>LR</b> {lr:.2e}"]
+    if metrics.grad_norms:
+        secondary.append(f"<b>Grad Norm</b> {metrics.grad_norms[-1]:.3f}")
+    if metrics.tokens_per_sec:
+        secondary.append(f"<b>Tok/s</b> {metrics.tokens_per_sec[-1]:,.0f}")
+    if metrics.best_step:
+        secondary.append(f"<b>Best Step</b> {metrics.best_step:,}")
+
+    # ── Stale warning ─────────────────────────────────────────────────
+    stale_html = ""
+    if m_run_dir is not None:
+        stale, age = is_metrics_stale(m_run_dir)
+        if stale:
+            stale_html = (
+                f"<div style='color:#d97706;margin-top:6px;font-size:13px'>"
+                f"⚠ Metrics not updated for {age}s — training may have stalled or crashed."
+                f"</div>"
+            )
+
+    return (
+        f"{bar}"
+        f"<div style='margin-top:8px;font-size:15px'>{loss_html}{val_html}</div>"
+        f"<div style='margin-top:4px;font-size:13px;color:#4b5563'>"
+        + "&nbsp;·&nbsp;".join(secondary)
+        + f"</div>{stale_html}"
+    )
+
+
 def _gpu_rows(stats) -> list[list[str]]:
     if not stats.gpu_available:
         return [["—", "No GPU detected", "—", "—", "—", "—"]]

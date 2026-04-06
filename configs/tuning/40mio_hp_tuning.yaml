@@ -1,0 +1,113 @@
+# Optuna Hyperparameter Tuning — 40M Final Model
+# Run with: python main.py --stage tune --config configs/tuning/40mio_hp_tuning.yaml
+# Architecture LOCKED from 8.75M→17.5M architecture search (d_model=384, 14L, 6H, d_ff=768)
+# Tuning all 11 training hyperparameters at full model scale.
+
+# ── Fixed architecture ──────────────────────────────────────────────────────────
+model:
+  vocab_size: 50258
+  pad_token_id: 50257
+  bos_token_id: 50256
+  eos_token_id: 50256
+  d_model: 384                    # locked: tuned via architecture search
+  n_layers: 14                    # locked: wide & shallow, scaled from 7L@17.5M
+  n_heads: 6                     # locked: d_head=64 (best practice)
+  d_ff: 768                      # locked: d_ff/d_model=2.0 (tuned optimal)
+  context_length: 256             # shorter ctx for speed (full model uses 1024)
+  bias: false
+  dropout: 0.0
+  rope_theta: 10000.0
+
+training:
+  device: auto
+  train_bin: data/experiment-a/train.bin
+  val_bin: data/experiment-a/val.bin
+  num_workers: 4
+  batch_size: 64
+  gradient_accumulation_steps: 1  # fast proxy; merge with ga=4 for final training
+  learning_rate: 8.0e-4
+  min_lr: 8.0e-5
+  weight_decay: 0.1
+  beta1: 0.9
+  beta2: 0.95
+  grad_clip: 1.0
+  warmup_steps: 100
+  compile: true                   # via WSL2 Ubuntu + Triton
+  max_steps: 3000                 # proxy length for HP signal
+  lr_schedule: wsd
+  lr_decay_ratio: 0.1
+  z_loss_coeff: 1.0e-4
+  save_every: 50000               # disable checkpointing during tuning
+  eval_every: 750                 # eval 4 times per trial
+  checkpoint_dir: checkpoints/40mio_hp_tuning
+  keep_last_checkpoints: 10
+  keep_best_checkpoints: 10
+  runs_dir: runs/tuning/40mio_hp_tuning
+  log_every: 200
+
+logging:
+  console_level: INFO
+  file_level: INFO
+  components:
+    data_preprocessing: WARNING
+    model_initialization: INFO
+    training: INFO
+
+# ── Optuna study settings ─────────────────────────────────────────────────────
+tune:
+  name: parrotllm-40mio-hp-9dim-fast
+  storage: optuna_studies/parrotllm-40mio-hp-9dim-fast.db
+  n_trials: 80
+  timeout: null
+  sampler: tpe
+  pruner: hyperband
+  pruner_kwargs:
+    min_resource: 750
+    max_resource: 3000
+    reduction_factor: 3
+
+  # ── 11-dimensional HP search (architecture fixed) ───────────────────────────
+  search_space:
+    # Optimizer
+    learning_rate:
+      type: log_uniform
+      low: 1.0e-4
+      high: 3.0e-3
+    weight_decay:
+      type: log_uniform
+      low: 0.01
+      high: 0.3
+    beta2:
+      type: uniform
+      low: 0.93
+      high: 0.999
+    warmup_steps:
+      type: int
+      low: 50
+      high: 500
+      step: 50
+    grad_clip:
+      type: uniform
+      low: 0.5
+      high: 2.0
+
+    # LR schedule
+    lr_schedule:
+      type: categorical
+      choices: [wsd, cosine]
+    lr_decay_ratio:
+      type: uniform
+      low: 0.05
+      high: 0.3
+
+    # Batching — fixed at bs=64, ga=4 (effective batch=256, proven optimal)
+
+    # Regularization
+    dropout:
+      type: uniform
+      low: 0.0
+      high: 0.15
+    z_loss_coeff:
+      type: log_uniform
+      low: 1.0e-5
+      high: 1.0e-3

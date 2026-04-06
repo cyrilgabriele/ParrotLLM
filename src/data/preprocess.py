@@ -42,7 +42,6 @@ import unicodedata
 from dataclasses import dataclass
 from pathlib import Path
 
-import fasttext
 import numpy as np
 os.environ.setdefault("HF_DATASETS_CACHE", "/tmp/parrotllm_hf_cache")
 from datasets import disable_caching, load_from_disk
@@ -622,6 +621,7 @@ def classifier_code_filter_batch(
 
     Returns {"code_filter_status": [...], "code_score": [...]}
     """
+    import fasttext
     model = fasttext.load_model(model_path)
     statuses: list[str] = []
     scores: list[float] = []
@@ -662,6 +662,7 @@ def classifier_quality_filter_batch(
             "Install with: pip install kenlm"
         )
 
+    import fasttext
     edu_model = fasttext.load_model(edu_model_path)
     statuses: list[str] = []
     perplexities: list[float] = []
@@ -743,6 +744,7 @@ def detect_language_batch(
     if not texts:
         return {"lang": [], "lang_conf": []}
 
+    import fasttext
     model = fasttext.load_model(lang_model_path)
     langs: list[str] = []
     confs: list[float] = []

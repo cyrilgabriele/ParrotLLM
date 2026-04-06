@@ -218,19 +218,47 @@ def _is_alive() -> bool:
         return _active_proc is not None and _active_proc.poll() is None
 
 
-def _arch_text(metrics: TrainingMetrics) -> str:
+def _arch_and_config_text(metrics: TrainingMetrics) -> str:
+    """Return a formatted string matching training startup output, params-first."""
     arch = metrics.architecture
-    if not arch:
-        return "No architecture data available."
-    return "\n".join([
-        f"Vocab size:       {arch.get('vocab_size', '?'):,}",
-        f"d_model:          {arch.get('d_model', '?')}",
-        f"Layers:           {arch.get('n_layers', '?')}",
-        f"Heads:            {arch.get('n_heads', '?')}",
-        f"FFN dim:          {arch.get('d_ff', '?')}",
-        f"Total params:     {arch.get('total_params', 0):,}",
-        f"Trainable params: {arch.get('trainable_params', 0):,}",
-    ])
+    cfg = metrics.config
+
+    if not arch and not cfg:
+        return "No architecture or config data available. Load a run first."
+
+    lines = []
+
+    if arch:
+        total = arch.get('total_params', '?')
+        trainable = arch.get('trainable_params', '?')
+        vocab = arch.get('vocab_size', '?')
+        lines += [
+            "── Model Architecture ──────────────────────────────",
+            f"  Total params:     {total:,}" if isinstance(total, int) else f"  Total params:     {total}",
+            f"  Trainable params: {trainable:,}" if isinstance(trainable, int) else f"  Trainable params: {trainable}",
+            f"  Vocab size:       {vocab:,}" if isinstance(vocab, int) else f"  Vocab size:       {vocab}",
+            f"  Layers:           {arch.get('n_layers', '?')}",
+            f"  Attention heads:  {arch.get('n_heads', '?')}",
+            f"  d_model:          {arch.get('d_model', '?')}",
+            f"  FFN dim (d_ff):   {arch.get('d_ff', '?')}",
+            f"  Context length:   {arch.get('context_length', cfg.get('context_length', '?'))}",
+        ]
+
+    if cfg:
+        if lines:
+            lines.append("")
+        max_s = cfg.get('max_steps', '?')
+        lines += [
+            "── Training Config ─────────────────────────────────",
+            f"  Max steps:        {max_s:,}" if isinstance(max_s, int) else f"  Max steps:        {max_s}",
+            f"  Batch size:       {cfg.get('batch_size', '?')}",
+            f"  Context length:   {cfg.get('context_length', '?')}",
+            f"  Grad accumulation:{cfg.get('gradient_accumulation_steps', '?')}",
+        ]
+        if "learning_rate" in cfg:
+            lines.append(f"  Learning rate:    {cfg['learning_rate']:.2e}")
+
+    return "\n".join(lines)
 
 
 # ── App builder ───────────────────────────────────────────────────────────────
@@ -263,7 +291,7 @@ def build_app(runs_dir: Path, config_path: Path) -> gr.Blocks:
 
     def refresh_arch(run_name):
         metrics, _ = _selected(runs_dir, run_name)
-        return _arch_text(metrics), metrics.architecture or {}
+        return _arch_and_config_text(metrics), metrics.architecture or {}
 
     def action_start(_):
         global _active_proc

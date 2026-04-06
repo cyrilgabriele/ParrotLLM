@@ -133,3 +133,42 @@ def test_progress_detail_empty_state():
     m = TrainingMetrics()
     html = _fmt_progress_detail(m, m_run_dir=None)
     assert "No runs found" in html
+
+
+from src.dashboard.app import _arch_and_config_text
+
+
+def _metrics_with_arch_and_config():
+    m = TrainingMetrics()
+    m.architecture = {
+        "vocab_size": 50257, "n_layers": 16, "n_heads": 8,
+        "d_model": 320, "d_ff": 854,
+        "total_params": 35763840, "trainable_params": 35763840,
+    }
+    m.config = {
+        "max_steps": 10000, "batch_size": 64, "context_length": 1024,
+        "gradient_accumulation_steps": 4, "learning_rate": 3e-4,
+    }
+    return m
+
+
+def test_arch_text_params_first():
+    m = _metrics_with_arch_and_config()
+    text = _arch_and_config_text(m)
+    params_pos = text.index("35,763,840")
+    layers_pos = text.index("16")
+    assert params_pos < layers_pos
+
+
+def test_arch_text_includes_config():
+    m = _metrics_with_arch_and_config()
+    text = _arch_and_config_text(m)
+    assert "10,000" in text or "10000" in text
+    assert "64" in text
+    assert "3e-04" in text or "3.00e-04" in text or "0.0003" in text
+
+
+def test_arch_text_no_data():
+    m = TrainingMetrics()
+    text = _arch_and_config_text(m)
+    assert "No architecture" in text or "No data" in text

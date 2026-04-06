@@ -54,3 +54,34 @@ def test_eta_dash_when_no_tps():
     m.grad_norms = [0.5]
     m.config = {"max_steps": 1000}
     assert _compute_eta(m) == "—"
+
+
+from src.dashboard.app import _fmt_status_banner
+
+
+def _metrics_with_grad_explosion():
+    m = TrainingMetrics()
+    m.steps = [100, 200, 300]
+    m.train_losses = [4.5, 4.1, 3.8]
+    m.lrs = [3e-4] * 3
+    m.grad_norms = [0.5, 15.0, 12.0]
+    return m
+
+
+def test_status_banner_green_when_no_alerts():
+    m = TrainingMetrics()
+    html = _fmt_status_banner(m)
+    assert "No errors" in html or "No problems" in html or "✅" in html
+    assert "green" in html or "#" in html
+
+
+def test_status_banner_shows_error_code():
+    m = _metrics_with_grad_explosion()
+    html = _fmt_status_banner(m)
+    assert "GRAD_EXPLOSION" in html
+
+
+def test_status_banner_red_on_error():
+    m = _metrics_with_grad_explosion()
+    html = _fmt_status_banner(m)
+    assert "🔴" in html or "red" in html.lower()

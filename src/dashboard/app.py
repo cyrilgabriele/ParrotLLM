@@ -95,6 +95,31 @@ def _alert_rows(metrics: TrainingMetrics) -> list[list[str]]:
     return [[_SEVERITY_EMOJI[a.severity], a.code, a.message] for a in alerts]
 
 
+def _fmt_status_banner(metrics: TrainingMetrics) -> str:
+    """Return an HTML status banner: green when clean, red/yellow when alerts exist."""
+    alerts = detect_problems(metrics)
+    if not alerts:
+        return (
+            "<div style='background:#d1fae5;border:1px solid #6ee7b7;border-radius:6px;"
+            "padding:10px 16px;font-size:15px;font-weight:600;color:#065f46'>"
+            "✅  No errors or malfunctions detected"
+            "</div>"
+        )
+    lines = []
+    for a in alerts:
+        emoji = _SEVERITY_EMOJI[a.severity]
+        bg = "#fee2e2" if a.severity == Severity.ERROR else "#fef3c7"
+        border = "#fca5a5" if a.severity == Severity.ERROR else "#fcd34d"
+        color = "#7f1d1d" if a.severity == Severity.ERROR else "#78350f"
+        lines.append(
+            f"<div style='background:{bg};border:1px solid {border};border-radius:6px;"
+            f"padding:8px 16px;font-size:14px;font-weight:600;color:{color};margin-bottom:4px'>"
+            f"{emoji}  {a.code} — {a.message}: {a.detail}"
+            "</div>"
+        )
+    return "\n".join(lines)
+
+
 def _gpu_rows(stats) -> list[list[str]]:
     if not stats.gpu_available:
         return [["—", "No GPU detected", "—", "—", "—", "—"]]

@@ -8,6 +8,7 @@ from .project_config import (
     InferenceConfig,
     ProjectConfig,
     load_project_config,
+    load_project_config_from_checkpoint,
 )
 from .loggingConfig import LoggingConfig
 from .training.trainingConfig import ModelConfig, TrainingConfig
@@ -26,4 +27,5 @@ __all__ = [
     "TrainingConfig",
     "TuneConfig",
     "load_project_config",
+    "load_project_config_from_checkpoint",
 ]

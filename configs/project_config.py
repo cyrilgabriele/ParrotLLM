@@ -91,6 +91,31 @@ def load_project_config(config_path: str | Path) -> ProjectConfig:
     return ProjectConfig.model_validate(payload)
 
 
+def load_project_config_from_checkpoint(checkpoint_path: str | Path) -> ProjectConfig:
+    """Load and validate the saved project configuration from a checkpoint."""
+
+    import torch
+
+    path = Path(checkpoint_path)
+    if not path.exists():
+        raise FileNotFoundError(f"Checkpoint file not found: {path}")
+
+    checkpoint = torch.load(path, map_location="cpu", weights_only=False)
+    if not isinstance(checkpoint, Dict):
+        raise TypeError(
+            f"Checkpoint {path} must contain a mapping payload, got {type(checkpoint).__name__}."
+        )
+
+    payload = checkpoint.get("config")
+    if payload is None:
+        raise ValueError(f"Checkpoint {path} does not contain a saved config.")
+    if not isinstance(payload, Dict):
+        raise TypeError(
+            f"Checkpoint {path} must store 'config' as a mapping, got {type(payload).__name__}."
+        )
+    return ProjectConfig.model_validate(payload)
+
+
 __all__ = [
     "ChatConfig",
     "EvalConfig",
@@ -98,4 +123,5 @@ __all__ = [
     "InferenceConfig",
     "ProjectConfig",
     "load_project_config",
+    "load_project_config_from_checkpoint",
 ]

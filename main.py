@@ -5,7 +5,7 @@ from __future__ import annotations
 import argparse
 from pathlib import Path
 
-from configs import load_project_config
+from configs import load_project_config, load_project_config_from_checkpoint
 from src.logging_utils import init_logging
 from src.utils import get_device, set_seed, maybe_load_hf_token
 
@@ -20,16 +20,9 @@ def main() -> None:
     parser.add_argument("--config", type=Path, default=Path("configs/default.yaml"))
     parser.add_argument("--checkpoint", default=None)
     parser.add_argument(
-        "--resume",
-        nargs="?",
-        const="",
-        default=None,
-        metavar="RUN_DIR",
-        help=(
-            "Resume training from the latest checkpoint. "
-            "Without a path, auto-discovers the most recent run in the configured runs_dir. "
-            "Optionally provide an explicit run directory, e.g. --resume runs/run_20260405_143000."
-        ),
+        "--resume_training",
+        action="store_true",
+        help="Resume training from the checkpoint passed via --checkpoint.",
     )
     parser.add_argument("--prompt", default=None)
     parser.add_argument("--max-tokens", type=int, default=None)
@@ -46,7 +39,8 @@ def main() -> None:
 
     args = parser.parse_args()
 
-    project_config = load_project_config(args.config)
+    resume_checkpoint = _resolve_train_checkpoint(args, parser)
+    project_config = _load_effective_project_config(args, resume_checkpoint)
 
     logging_cfg = project_config.logging
     if logging_cfg:
@@ -57,7 +51,7 @@ def main() -> None:
     else:
         init_logging()
 
-    config_dict = project_config.model_dump(mode="python")
+    project_config_payload = project_config.model_dump(mode="python")
     HF_TOKEN = maybe_load_hf_token()
 
     SEED = 42
@@ -88,22 +82,10 @@ def main() -> None:
         training_cfg = _require_section(project_config.training, "training")
         _require_section(project_config.model, "model")
 
-        checkpoint = args.checkpoint
-        if args.resume is not None:
-            if checkpoint is not None:
-                parser.error("--resume and --checkpoint are mutually exclusive.")
-            from src.training.trainer import find_latest_checkpoint
-            run_dir = args.resume if args.resume else None
-            checkpoint = find_latest_checkpoint(
-                training_cfg.runs_dir,
-                run_dir=run_dir,
-                checkpoint_subdir=training_cfg.checkpoint_dir,
-            )
-
         device = get_device(training_cfg.device)
         from src.training.trainer import run_train
 
-        run_train(project_config, config_dict, device=device, checkpoint=checkpoint)
+        run_train(project_config, device=device, checkpoint=resume_checkpoint)
         return
 
     if args.stage == "eval":
@@ -114,7 +96,7 @@ def main() -> None:
 
         run_eval(
             project_config,
-            config_dict,
+            project_config_payload,
             checkpoint=checkpoint_path,
             device=device,
             hf_token=HF_TOKEN
@@ -154,6 +136,27 @@ def _require_section(value, name: str):
     if value is None:
         raise ValueError(f"Configuration section '{name}' is missing from the YAML file.")
     return value
+
+
+def _resolve_train_checkpoint(args: argparse.Namespace, parser: argparse.ArgumentParser) -> str | None:
+    if args.stage != "train":
+        return None
+    if args.resume_training:
+        return _require_checkpoint(args.checkpoint, stage="train")
+    if args.checkpoint:
+        parser.error(
+            "--checkpoint only resumes training when used together with --resume_training."
+        )
+    return None
+
+
+def _load_effective_project_config(
+    args: argparse.Namespace,
+    resume_checkpoint: str | None,
+):
+    if args.stage == "train" and resume_checkpoint:
+        return load_project_config_from_checkpoint(resume_checkpoint)
+    return load_project_config(args.config)
 
 
 def _require_checkpoint(path: str | None, stage: str) -> str:

@@ -259,7 +259,6 @@ def _make_objective(tune_cfg: TuneConfig, base_config: dict):
         project_config = build_trial_config(base_config, hp)
 
         device = get_device(project_config.training.device)
-        model_config_dict = project_config.model_dump(mode="python")
 
         mc = project_config.model
         resolved_arch = {k: hp[k] for k in ARCHITECTURE_KEYS if k in hp}
@@ -292,7 +291,6 @@ def _make_objective(tune_cfg: TuneConfig, base_config: dict):
         try:
             best_ppl = run_train(
                 project_config,
-                model_config_dict,
                 device=device,
                 trial=trial,
             )

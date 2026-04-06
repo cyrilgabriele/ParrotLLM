@@ -21,6 +21,29 @@ Track what was changed, why it was changed, and any important notes.
 
 ## Unreleased
 
+### [2026-04-06] - Cyril Gabriele
+
+#### What
+- Kept the training resume CLI explicit in `main.py` via `--resume_training`, but removed all automatic latest-checkpoint and run-directory discovery; resuming now requires an explicit `--checkpoint path/to/checkpoint.pt`
+- Added `load_project_config_from_checkpoint()` in `configs/project_config.py` and changed the training entry path so resumed runs load the effective `ProjectConfig` directly from the checkpoint's saved `config`
+- Simplified `src/training/trainer.py` so `run_train()` now takes only the validated `project_config`; the dumped full-config dict is named `project_config_payload` and is used consistently for model construction and checkpoint saves
+- Removed the now-dead checkpoint auto-discovery helpers from `src/training/trainer.py`
+- Updated the remaining runtime callers in `src/training/tune.py` and `eval_datasets.py` to match the cleaned `run_train()` signature
+- Deleted the obsolete `tests/training/test_find_latest_checkpoint.py` coverage that targeted the removed auto-discovery path
+- Rewrote `tests/training/test_lr_scheduler.py` around the current trainer behavior: closed-form LR progression, WSD boundary handling, `resume_to_step()`, scheduler/optimizer/trainer/RNG checkpoint restore, legacy checkpoint fast-forward warnings, AMP skip gating, and end-to-end mid-epoch resume equivalence
+
+#### Why
+- Resume behavior should be explicit and deterministic: if the user wants to resume, they should point at the exact checkpoint file instead of relying on hidden directory scans or "latest" heuristics
+- The project config is meant to be the single source of truth, so resumed training should use the config embedded in the checkpoint rather than partially mixing checkpoint state with whatever YAML happens to be passed at resume time
+- The previous `model_config_dict` naming was misleading because the object being passed around was actually the full dumped project config, not just the model section
+- Once checkpoint discovery was removed, the old discovery test file became dead coverage and would only preserve assumptions the runtime no longer implements
+- The scheduler tests needed to assert the real contracts that `src/training/trainer.py` depends on during resume and mixed-precision stepping, rather than only checking a few isolated LR values
+
+#### Remarks
+- Verified syntax with `python -m compileall main.py configs src/training/trainer.py src/training/tune.py eval_datasets.py`
+- Verified with `uv run pytest tests/training/test_lr_scheduler.py -q`
+- Verified with `uv run pytest tests/training -q`
+
 ### [2026-04-04] - Cyril Gabriele
 
 #### What

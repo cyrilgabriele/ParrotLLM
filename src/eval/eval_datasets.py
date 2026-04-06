@@ -51,7 +51,6 @@ def run_single_dataset(name: str, train_bin: str, val_bin: str, compile: bool) -
 
     project_config = ProjectConfig.model_validate(cfg)
     device = get_device(project_config.training.device)
-    model_config_dict = project_config.model_dump(mode="python")
 
     print(f"\n{'='*60}")
     print(f"  DATASET: {name}")
@@ -62,7 +61,6 @@ def run_single_dataset(name: str, train_bin: str, val_bin: str, compile: bool) -
     t0 = time.time()
     best_ppl = run_train(
         project_config,
-        model_config_dict,
         device=device,
     )
     elapsed = time.time() - t0

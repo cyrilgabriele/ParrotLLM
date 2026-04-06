@@ -5,7 +5,7 @@ import pytest
 
 def test_load_tune_config():
     """tune.yaml loads and has required sections."""
-    from tune import load_tune_config
+    from src.tune.tune import load_tune_config
     cfg = load_tune_config("configs/tuning/tune.yaml")
     assert "tune" in cfg
     assert "model" in cfg

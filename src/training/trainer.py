@@ -6,7 +6,7 @@ import json
 import logging
 import math
 import os
-import re
+import random
 import time
 from contextlib import nullcontext
 from dataclasses import dataclass
@@ -245,6 +245,63 @@ def get_autocast_context(device: torch.device):
 
 # ── Checkpointing ────────────────────────────────────────────────────────────
 
+def _capture_rng_state() -> dict[str, object]:
+    """Capture host/device RNG state so resumed training can continue exactly."""
+    state: dict[str, object] = {
+        "python": random.getstate(),
+        "numpy": np.random.get_state(),
+        "torch": torch.get_rng_state(),
+    }
+    if torch.cuda.is_available():
+        state["cuda"] = torch.cuda.get_rng_state_all()
+    mps = getattr(torch, "mps", None)
+    if mps is not None and hasattr(mps, "get_rng_state"):
+        try:
+            state["mps"] = mps.get_rng_state()
+        except RuntimeError:
+            pass
+    return state
+
+
+def _restore_rng_state(rng_state: dict | None) -> None:
+    """Restore RNG state saved by `_capture_rng_state()` when available."""
+    if not isinstance(rng_state, dict):
+        return
+
+    python_state = rng_state.get("python")
+    if python_state is not None:
+        random.setstate(python_state)
+
+    numpy_state = rng_state.get("numpy")
+    if numpy_state is not None:
+        np.random.set_state(numpy_state)
+
+    torch_state = rng_state.get("torch")
+    if torch_state is not None:
+        torch.set_rng_state(torch_state)
+
+    cuda_state = rng_state.get("cuda")
+    if cuda_state is not None and torch.cuda.is_available():
+        try:
+            torch.cuda.set_rng_state_all(cuda_state)
+        except RuntimeError as exc:
+            logging.getLogger("parrotllm.training").warning(
+                "Failed to restore CUDA RNG state from checkpoint: %s",
+                exc,
+            )
+
+    mps_state = rng_state.get("mps")
+    mps = getattr(torch, "mps", None)
+    if mps_state is not None and mps is not None and hasattr(mps, "set_rng_state"):
+        try:
+            mps.set_rng_state(mps_state)
+        except RuntimeError as exc:
+            logging.getLogger("parrotllm.training").warning(
+                "Failed to restore MPS RNG state from checkpoint: %s",
+                exc,
+            )
+
+
 def save_checkpoint(model: nn.Module, optimizer: torch.optim.Optimizer,
                     config: dict, step: int, epoch: int,
                     scaler: torch.amp.GradScaler | None,
@@ -265,6 +322,7 @@ def save_checkpoint(model: nn.Module, optimizer: torch.optim.Optimizer,
         "optimizer": optimizer.state_dict(),
         "config": config,
         "step": step,
+        "rng_state": _capture_rng_state(),
     }
     if scheduler is not None:
         state["scheduler"] = scheduler.state_dict()
@@ -461,251 +519,10 @@ def load_checkpoint(path: str, model: nn.Module,
                 path,
             )
             scheduler.resume_to_step(step)
+    _restore_rng_state(ckpt.get("rng_state"))
     if return_trainer_state:
         return step, ckpt.get("config", {}), ckpt.get("trainer_state")
     return step, ckpt.get("config", {})
-
-
-# ── Checkpoint discovery ─────────────────────────────────────────────────────
-
-# Matches new format:  last_epoch_0001_step_0015000.pt  → group 1
-# Matches old format:  00_epoch_1000_step               → group 2
-_STEP_RE = re.compile(r"_step_(\d+)\.pt$|_epoch_(\d+)_step(?:\.|$)")
-
-# Old-format checkpoint: no extension, e.g. 00_epoch_1000_step
-_OLD_CKPT_RE = re.compile(r"^\d+_epoch_\d+_step$")
-
-
-def _parse_step_from_filename(filename: str) -> int | None:
-    """Extract the optimizer step from a checkpoint filename, or None if unparseable.
-
-    Handles both the current ``last_epoch_NNNN_step_NNNNNNN.pt`` format and
-    the legacy ``NN_epoch_NNN_step`` format (no file extension).
-    """
-    m = _STEP_RE.search(filename)
-    if m:
-        return int(m.group(1) or m.group(2))
-    return None
-
-
-def _is_checkpoint_candidate(filename: str) -> bool:
-    """Return True for filenames that could be a checkpoint saved by save_checkpoint()."""
-    return filename.endswith(".pt") or bool(_OLD_CKPT_RE.match(filename))
-
-
-def _peek_checkpoint_model_config(path: str) -> dict | None:
-    """Load a checkpoint and return its saved model-config dict, or None on failure.
-
-    Used by :func:`run_train` to reconstruct the exact model architecture that
-    was used when the checkpoint was saved, so that resuming does not require
-    the user to keep the YAML config manually in sync with the checkpoint.
-    """
-    try:
-        ckpt = torch.load(path, map_location="cpu", weights_only=False)
-        cfg = ckpt.get("config")
-        if isinstance(cfg, dict) and "model" in cfg and isinstance(cfg["model"], dict):
-            return cfg["model"]
-        return None
-    except Exception:
-        return None
-
-
-def _validate_checkpoint(path: str) -> tuple[bool, str]:
-    """Check whether a checkpoint file is loadable and structurally valid.
-
-    Loads the file on CPU to avoid occupying GPU memory during discovery.
-    Returns ``(True, "")`` on success, or ``(False, reason)`` on failure so
-    the caller can log a precise diagnostic instead of a silent skip.
-
-    A valid checkpoint must be a ``dict`` with at least ``"model"`` and
-    ``"step"`` keys — the minimum required to resume training.
-    """
-    try:
-        ckpt = torch.load(path, map_location="cpu", weights_only=False)
-        if not isinstance(ckpt, dict):
-            return False, f"payload is {type(ckpt).__name__!r}, expected dict"
-        missing = [k for k in ("model", "step") if k not in ckpt]
-        if missing:
-            return False, f"missing required keys: {missing!r}"
-        return True, ""
-    except Exception as exc:
-        return False, str(exc)
-
-
-def find_latest_checkpoint(
-    runs_dir: str,
-    run_dir: str | None = None,
-    *,
-    checkpoint_subdir: str = "checkpoints",
-    validate: bool = True,
-) -> str:
-    """Find the latest valid checkpoint to resume training from.
-
-    Searches *checkpoint_subdir* inside the target run directory for
-    ``*.pt`` files, picks the one with the highest step number, and —
-    when *validate* is ``True`` — verifies it can be loaded before
-    returning its path. Corrupted or truncated files are skipped
-    automatically and the next-best candidate is tried.
-
-    Run-directory selection
-    -----------------------
-    * If *run_dir* is given, that directory is used directly.
-    * Otherwise the most recently created ``run_*`` directory inside
-      *runs_dir* is selected (directories are sorted lexicographically
-      so the ``run_YYYYMMDD_HHMMSS`` timestamp determines recency).
-
-    Checkpoint ranking
-    ------------------
-    Candidates are ranked by:
-
-    1. **Step number** (descending) — resume as close to the interruption
-       as possible.
-    2. **Checkpoint type** (``last_*`` beats ``best_*`` at equal step) —
-       periodic saves capture full training state regardless of val-loss.
-    3. **File mtime** (descending) — tie-break for non-standard names.
-
-    Args:
-        runs_dir: Base directory containing ``run_*`` sub-directories
-            created by :func:`make_run_dir`.
-        run_dir: Specific run directory to search. When ``None`` the most
-            recent ``run_*`` directory inside *runs_dir* is used.
-        checkpoint_subdir: Sub-directory name inside each run directory
-            where checkpoints are stored (default: ``"checkpoints"``).
-        validate: Verify each candidate is loadable. Corrupted files are
-            skipped and the next candidate is tried.
-
-    Returns:
-        Absolute path to the latest valid checkpoint file.
-
-    Raises:
-        FileNotFoundError: When the directory structure is missing, no
-            checkpoint files exist, or every candidate fails validation.
-    """
-    log = logging.getLogger("parrotllm.training")
-
-    # ── 1. Build ordered list of run directories to search ───────────────────
-    if run_dir is not None:
-        # Explicit path: search only that directory, no fallback.
-        run_dir = os.path.abspath(run_dir)
-        if not os.path.isdir(run_dir):
-            raise FileNotFoundError(
-                f"Specified run directory does not exist: {run_dir!r}"
-            )
-        run_dirs_to_search = [run_dir]
-    else:
-        runs_root = os.path.abspath(runs_dir)
-        if not os.path.isdir(runs_root):
-            raise FileNotFoundError(
-                f"Runs directory does not exist: {runs_root!r}. "
-                "Start a fresh training run first, or pass an explicit "
-                "--resume <run_dir> path."
-            )
-        run_candidates = sorted(
-            (
-                d for d in os.listdir(runs_root)
-                if d.startswith("run_")
-                and os.path.isdir(os.path.join(runs_root, d))
-            ),
-            reverse=True,  # lexicographic descending ≡ newest first
-        )
-        if not run_candidates:
-            raise FileNotFoundError(
-                f"No run_* directories found in {runs_root!r}. "
-                "Start a fresh training run first."
-            )
-        run_dirs_to_search = [os.path.join(runs_root, d) for d in run_candidates]
-
-    # ── 2. Search run directories in order until a valid checkpoint is found ──
-    def _collect_candidates(search_run_dir: str) -> list[str]:
-        """Return all checkpoint candidate file paths from *search_run_dir*.
-
-        Checks two locations:
-        - ``<run_dir>/<checkpoint_subdir>/`` — current layout (*.pt files)
-        - ``<run_dir>/`` root — legacy layout (no extension, NN_epoch_NNN_step)
-        """
-        candidates: list[str] = []
-        for search_path in (
-            os.path.join(search_run_dir, checkpoint_subdir),
-            search_run_dir,
-        ):
-            if not os.path.isdir(search_path):
-                continue
-            for f in os.listdir(search_path):
-                if _is_checkpoint_candidate(f):
-                    candidates.append(os.path.join(search_path, f))
-        return candidates
-
-    def _rank(path: str) -> tuple[int, int, float]:
-        name = os.path.basename(path)
-        step = _parse_step_from_filename(name)
-        is_last = 1 if name.startswith("last_") else 0
-        mtime = os.path.getmtime(path)
-        return (step if step is not None else -1, is_last, mtime)
-
-    def _find_in_run(search_run_dir: str) -> str | None:
-        """Return the best valid checkpoint path from *search_run_dir*, or None."""
-        candidates = _collect_candidates(search_run_dir)
-        if not candidates:
-            return None
-
-        candidates.sort(key=_rank, reverse=True)
-
-        for path in candidates:
-            if validate:
-                ok, reason = _validate_checkpoint(path)
-                if not ok:
-                    log.warning(
-                        "Skipping checkpoint %s — validation failed: %s",
-                        path,
-                        reason,
-                    )
-                    continue
-            return path
-
-        return None
-
-    skipped: list[str] = []
-    for search_dir in run_dirs_to_search:
-        path = _find_in_run(search_dir)
-        if path is not None:
-            if skipped:
-                log.warning(
-                    "%d run(s) skipped (no usable checkpoints): %s",
-                    len(skipped),
-                    ", ".join(os.path.basename(d) for d in skipped),
-                )
-            log.info("Auto-selected run directory for resume: %s", search_dir)
-            step = _parse_step_from_filename(os.path.basename(path))
-            log.info(
-                "Selected checkpoint: %s (step=%s)",
-                path,
-                step if step is not None else "unknown",
-            )
-            return path
-        skipped.append(search_dir)
-
-    if run_dir is not None:
-        # Explicit run_dir — give a targeted error showing what was found.
-        candidates = _collect_candidates(run_dirs_to_search[0])
-        if not candidates:
-            raise FileNotFoundError(
-                f"No checkpoint files found in {run_dirs_to_search[0]!r} "
-                f"(checked '{checkpoint_subdir}/' subdir and run root). "
-                "The run may not have saved any checkpoints yet."
-            )
-        raise FileNotFoundError(
-            f"Found {len(candidates)} checkpoint file(s) in {run_dirs_to_search[0]!r} "
-            "but none passed validation. Run with --resume without a path to search "
-            "older runs, or check the files manually."
-        )
-
-    raise FileNotFoundError(
-        f"No valid checkpoint found in any of the {len(skipped)} run(s) under "
-        f"{os.path.abspath(runs_dir)!r}. "
-        "All runs either have no checkpoint files or every file failed validation. "
-        "Check the WARNING lines above for per-file failure reasons."
-    )
-
 
 # ── Evaluation ───────────────────────────────────────────────────────────────
 
@@ -934,7 +751,6 @@ def _log_model_architecture(log: logging.Logger, jlog: JSONLLogger,
 
 def run_train(
     project_config: ProjectConfig,
-    model_config_dict: dict,
     *,
     device: torch.device,
     checkpoint: str | None = None,
@@ -945,37 +761,10 @@ def run_train(
     tc_model = project_config.training
     mc_model = project_config.model
     lc_model = project_config.logging
+    project_config_payload = project_config.model_dump(mode="python")
 
     tc = tc_model.model_dump()
     mc = mc_model.model_dump()
-
-    # ── Resolve model architecture from checkpoint (must happen before model build) ──
-    # When resuming, the checkpoint's saved model config is the source of truth for
-    # architecture. Using the current YAML config would cause a shape mismatch if the
-    # architecture changed between runs.
-    if checkpoint is not None:
-        ckpt_mc = _peek_checkpoint_model_config(checkpoint)
-        if ckpt_mc is not None:
-            arch_keys = ("d_model", "n_layers", "n_heads", "d_ff", "context_length",
-                         "vocab_size", "bias", "rope_theta")
-            diffs = {
-                k: (mc.get(k), ckpt_mc.get(k))
-                for k in arch_keys
-                if mc.get(k) != ckpt_mc.get(k)
-            }
-            if diffs:
-                diff_lines = "\n".join(
-                    f"  {k}: config={yaml_val!r} → checkpoint={ckpt_val!r}"
-                    for k, (yaml_val, ckpt_val) in diffs.items()
-                )
-                # We don't have a logger yet (setup_logger runs later), use root logger.
-                logging.warning(
-                    "Checkpoint architecture differs from current config — "
-                    "using checkpoint values to build the model:\n%s",
-                    diff_lines,
-                )
-            mc = {**mc, **ckpt_mc}
-            model_config_dict = {**model_config_dict, "model": mc}
 
     device, rank, world_size, local_rank, distributed = _init_distributed(device)
     is_master = rank == 0
@@ -1075,7 +864,7 @@ def run_train(
     )
 
     # model
-    model = ParrotLLM(model_config_dict).to(device)
+    model = ParrotLLM(project_config_payload).to(device)
 
     # torch.compile (skip if compile=false in config — useful for short HP tuning trials)
     use_compile = tc.get("compile", True)
@@ -1405,7 +1194,7 @@ def run_train(
                     best_candidate_path = checkpoint_manager.maybe_save_best(
                         model,
                         optimizer,
-                        model_config_dict,
+                        project_config_payload,
                         completed_steps,
                         eval_epoch,
                         scaler,
@@ -1491,7 +1280,7 @@ def run_train(
                 ckpt_path = checkpoint_manager.save_last(
                     model,
                     optimizer,
-                    model_config_dict,
+                    project_config_payload,
                     completed_steps,
                     eval_epoch,
                     scaler,
@@ -1542,7 +1331,7 @@ def run_train(
         final_ckpt = checkpoint_manager.save_last(
             model,
             optimizer,
-            model_config_dict,
+            project_config_payload,
             completed_steps,
             final_epoch,
             scaler,

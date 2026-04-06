@@ -269,12 +269,12 @@ def build_app(runs_dir: Path, config_path: Path) -> gr.Blocks:
     def refresh_monitor(run_name):
         metrics, run_dir = _selected(runs_dir, run_name)
         stats = get_system_stats()
-        alert_data = _alert_rows(metrics)
         log_lines = get_log_lines(run_dir) if run_dir else []
+        eta = _compute_eta(metrics)
         return (
-            _fmt_progress(metrics, run_dir),
-            _compute_eta(metrics),
-            gr.update(value=alert_data, visible=bool(alert_data)),
+            _fmt_status_banner(metrics),
+            _fmt_progress_detail(metrics, run_dir),
+            eta,
             f"CPU {stats.cpu_percent:.1f}%  |  RAM {stats.ram_used_gb:.1f}/{stats.ram_total_gb:.1f} GB",
             _gpu_rows(stats),
             build_training_figure(metrics),
@@ -338,18 +338,20 @@ def build_app(runs_dir: Path, config_path: Path) -> gr.Blocks:
 
             # ── TAB 1: Live Monitor ───────────────────────────────────
             with gr.Tab("Live Monitor"):
+                # Status banner — always visible at top
+                status_banner = gr.HTML(
+                    value="<div style='background:#f3f4f6;border-radius:6px;padding:10px 16px;"
+                          "font-size:14px;color:#6b7280'>Waiting for first refresh…</div>"
+                )
+
                 with gr.Row():
                     run_selector = gr.Dropdown(label="Run", choices=choices, scale=3)
                     refresh_slider = gr.Slider(1, 30, value=5, step=1,
                                                label="Refresh every (s)", scale=2)
+                    eta_box = gr.Textbox(label="ETA", scale=1, interactive=False)
 
-                alerts_table = gr.Dataframe(
-                    headers=["", "Code", "Message"], label="Alerts", visible=False,
-                )
-
-                with gr.Row():
-                    progress_box = gr.Textbox(label="Progress", scale=4)
-                    eta_box = gr.Textbox(label="ETA", scale=1)
+                # Progress section — HTML for richer display
+                progress_html = gr.HTML()
 
                 plot_out = gr.Plot(label="Training Metrics")
 
@@ -370,7 +372,7 @@ def build_app(runs_dir: Path, config_path: Path) -> gr.Blocks:
                 timer = gr.Timer(value=5)
                 timer.tick(
                     fn=refresh_monitor, inputs=[run_selector],
-                    outputs=[progress_box, eta_box, alerts_table,
+                    outputs=[status_banner, progress_html, eta_box,
                              sys_header_box, gpu_table, plot_out, log_box],
                 )
                 refresh_slider.change(

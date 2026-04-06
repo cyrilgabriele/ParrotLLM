@@ -1,14 +1,11 @@
 # src/dashboard/notebook.py
-"""ParrotLLM Training Dashboard — Jupyter ipywidgets UI.
-
-Phase 1: read-only monitoring (auto-refresh, run selector, GPU table, alerts, plot).
-Phase 2: run management buttons (see bottom of file).
+"""ParrotLLM Training Dashboard — Jupyter ipywidgets UI (read-only monitor).
 
 Usage:
     from src.dashboard.notebook import monitor
     monitor()                          # auto-detects latest run
     monitor(run_dir="runs/20260405_…") # specific run
-    monitor(refresh=10)                # custom refresh interval in seconds
+    monitor(refresh=2)                 # custom refresh interval in seconds
 """
 from __future__ import annotations
 
@@ -28,7 +25,7 @@ from IPython.display import display, Image, clear_output
 from src.dashboard.metrics_reader import read_metrics, TrainingMetrics, is_metrics_stale
 from src.dashboard.system_monitor import get_system_stats
 from src.dashboard.problem_detector import detect_problems, Severity
-from src.dashboard.run_manager import list_runs, get_latest_run_dir, launch_training, kill_training
+from src.dashboard.run_manager import list_runs, get_latest_run_dir
 from src.dashboard.plots import build_training_figure
 
 _SEVERITY_EMOJI = {Severity.ERROR: "🔴", Severity.WARNING: "🟡", Severity.INFO: "🔵"}
@@ -41,27 +38,129 @@ def _fig_to_png(fig) -> bytes:
     return buf.getvalue()
 
 
-def _metrics_html(metrics: TrainingMetrics, run_dir: Optional[Path]) -> str:
+def _compute_eta(metrics: TrainingMetrics) -> str:
+    if not metrics.steps or not metrics.tokens_per_sec:
+        return "—"
+    max_steps = metrics.config.get("max_steps")
+    if not max_steps:
+        return "—"
+    remaining = max_steps - metrics.steps[-1]
+    if remaining <= 0:
+        return "Done"
+    tokens_per_step = (
+        metrics.config.get("batch_size", 64)
+        * metrics.config.get("context_length", 1024)
+        * metrics.config.get("gradient_accumulation_steps", 4)
+    )
+    avg_tps = sum(metrics.tokens_per_sec[-10:]) / len(metrics.tokens_per_sec[-10:])
+    if avg_tps <= 0:
+        return "—"
+    eta_sec = int(remaining * tokens_per_step / avg_tps)
+    h, rem = divmod(eta_sec, 3600)
+    m, s = divmod(rem, 60)
+    if h > 0:
+        return f"~{h}h {m:02d}m {s:02d}s"
+    if m > 0:
+        return f"~{m}m {s:02d}s"
+    return f"~{s}s"
+
+
+def _alerts_html(metrics: TrainingMetrics) -> str:
+    alerts = detect_problems(metrics)
+    if not alerts:
+        return (
+            "<div style='background:#d1fae5;border:1px solid #6ee7b7;border-radius:6px;"
+            "padding:8px 16px;font-size:14px;font-weight:600;color:#065f46;margin-bottom:6px'>"
+            "✅  No errors or malfunctions detected</div>"
+        )
+    lines = []
+    for a in alerts:
+        emoji = _SEVERITY_EMOJI[a.severity]
+        bg = "#fee2e2" if a.severity == Severity.ERROR else "#fef3c7"
+        border = "#fca5a5" if a.severity == Severity.ERROR else "#fcd34d"
+        color = "#7f1d1d" if a.severity == Severity.ERROR else "#78350f"
+        lines.append(
+            f"<div style='background:{bg};border:1px solid {border};border-radius:6px;"
+            f"padding:8px 16px;font-size:14px;font-weight:600;color:{color};margin-bottom:4px'>"
+            f"{emoji}  {a.code} — {a.message}: {a.detail}</div>"
+        )
+    return "\n".join(lines)
+
+
+def _progress_html(metrics: TrainingMetrics, run_dir: Optional[Path]) -> str:
     if not metrics.steps:
-        return "<i>No training data yet. Start training first.</i>"
+        return "<p style='color:#6b7280'>No training data yet.</p>"
+
     step = metrics.steps[-1]
     loss = metrics.train_losses[-1]
     lr = metrics.lrs[-1]
-    parts = [f"<b>Step</b> {step:,}", f"<b>Train Loss</b> {loss:.4f}", f"<b>LR</b> {lr:.2e}"]
+    max_steps = metrics.config.get("max_steps")
+    eta = _compute_eta(metrics)
+
+    # Progress bar
+    if max_steps:
+        pct = 100.0 * step / max_steps
+        bar = (
+            f"<div style='background:#e5e7eb;border-radius:4px;height:12px;margin:6px 0'>"
+            f"<div style='background:#2563EB;width:{pct:.1f}%;height:100%;border-radius:4px'></div>"
+            f"</div>"
+            f"<div style='font-size:13px;color:#6b7280'>"
+            f"Step {step:,} / {max_steps:,} &nbsp;·&nbsp; {pct:.1f}% &nbsp;·&nbsp; ETA {eta}"
+            f"</div>"
+        )
+    else:
+        bar = f"<div style='font-size:13px;color:#6b7280'>Step {step:,} &nbsp;·&nbsp; ETA {eta}</div>"
+
+    # Line 1: Train loss with delta
+    if len(metrics.train_losses) >= 2:
+        delta = metrics.train_losses[-1] - metrics.train_losses[0]
+        delta_color = "#16a34a" if delta < 0 else "#dc2626"
+        loss_html = (
+            f"<b>Train Loss</b> {loss:.4f} "
+            f"<span style='color:{delta_color};font-size:12px'>(Δ {delta:+.4f} total)</span>"
+        )
+    else:
+        loss_html = f"<b>Train Loss</b> {loss:.4f}"
+
+    # Val loss with delta (line 2 — only when available)
+    val_html = ""
     if metrics.val_losses:
-        parts.append(f"<b>Val</b> {metrics.val_losses[-1]:.4f}")
+        val = metrics.val_losses[-1]
+        if len(metrics.val_losses) >= 2:
+            vd = metrics.val_losses[-1] - metrics.val_losses[0]
+            vd_color = "#16a34a" if vd < 0 else "#dc2626"
+            val_html = (
+                f"&nbsp;·&nbsp; <b>Val Loss</b> {val:.4f} "
+                f"<span style='color:{vd_color};font-size:12px'>(Δ {vd:+.4f} total)</span>"
+            )
+        else:
+            val_html = f"&nbsp;·&nbsp; <b>Val Loss</b> {val:.4f}"
+
+    # Secondary: LR, Grad Norm, Tok/s, Best Step
+    secondary = [f"<b>LR</b> {lr:.2e}"]
     if metrics.grad_norms:
-        parts.append(f"<b>Grad Norm</b> {metrics.grad_norms[-1]:.3f}")
+        secondary.append(f"<b>Grad Norm</b> {metrics.grad_norms[-1]:.3f}")
     if metrics.tokens_per_sec:
-        parts.append(f"<b>Tok/s</b> {metrics.tokens_per_sec[-1]:,.0f}")
+        secondary.append(f"<b>Tok/s</b> {metrics.tokens_per_sec[-1]:,.0f}")
     if metrics.best_step:
-        parts.append(f"<b>Best Step</b> {metrics.best_step:,}")
-    html = "  │  ".join(parts)
+        secondary.append(f"<b>Best Step</b> {metrics.best_step:,}")
+
+    stale_html = ""
     if run_dir is not None:
         stale, age = is_metrics_stale(run_dir)
         if stale:
-            html += f"<br><span style='color:orange'>⚠ Metrics not updated for {age}s — training may have stalled or crashed.</span>"
-    return html
+            stale_html = (
+                f"<div style='color:#d97706;margin-top:6px;font-size:13px'>"
+                f"⚠ Metrics not updated for {age}s — training may have stalled or crashed.</div>"
+            )
+
+    return (
+        f"{bar}"
+        f"<div style='margin-top:8px;font-size:15px'>{loss_html}{val_html}</div>"
+        f"<div style='margin-top:4px;font-size:13px;color:#4b5563'>"
+        + "&nbsp;·&nbsp;".join(secondary)
+        + f"</div>{stale_html}"
+    )
 
 
 def _gpu_html(stats) -> str:
@@ -91,22 +190,10 @@ def _gpu_html(stats) -> str:
     return header + "<br>" + table
 
 
-def _alerts_html(metrics: TrainingMetrics) -> str:
-    alerts = detect_problems(metrics)
-    if not alerts:
-        return ""
-    lines = [f"{_SEVERITY_EMOJI[a.severity]} <b>{a.code}</b> — {a.message}" for a in alerts]
-    return (
-        "<div style='background:#fff3cd;padding:6px;border-radius:4px;margin:4px 0'>"
-        + "<br>".join(lines) + "</div>"
-    )
-
-
 class _Monitor:
-    """Phase 1 read-only monitor widget."""
+    """Read-only monitor widget."""
 
-    def __init__(self, runs_dir: Path, run_dir: Optional[Path], refresh: int,
-                 config_path: Path = Path("configs/default.yaml")):
+    def __init__(self, runs_dir: Path, run_dir: Optional[Path], refresh: int):
         self._runs_dir = runs_dir
         self._refresh = refresh
         self._timer: Optional[threading.Timer] = None
@@ -118,33 +205,18 @@ class _Monitor:
             run_names[0] if run_names else ""
         )
 
-        self._dropdown = widgets.Dropdown(options=run_names, value=initial,
-                                          description="Run:", layout=widgets.Layout(width="300px"))
-        self._stop_btn = widgets.Button(description="■ Stop refresh",
-                                        button_style="warning",
-                                        layout=widgets.Layout(width="140px"))
-        self._metrics_w = widgets.HTML()
+        self._dropdown = widgets.Dropdown(
+            options=run_names, value=initial,
+            description="Run:", layout=widgets.Layout(width="320px"),
+        )
+        self._stop_btn = widgets.Button(
+            description="■ Stop refresh", button_style="warning",
+            layout=widgets.Layout(width="140px"),
+        )
+        self._status_w = widgets.HTML()
+        self._progress_w = widgets.HTML()
         self._gpu_w = widgets.HTML()
-        self._alerts_w = widgets.HTML()
         self._plot_w = widgets.Output()
-
-        # Phase 2: run management
-        self._config_path = config_path
-        self._proc = None
-        self._proc_lock = threading.Lock()
-
-        self._start_btn = widgets.Button(description="▶ Start", button_style="success",
-                                         layout=widgets.Layout(width="100px"))
-        self._resume_btn = widgets.Button(description="⏩ Resume", button_style="info",
-                                          layout=widgets.Layout(width="100px"))
-        self._stop_btn2 = widgets.Button(description="⏹ Stop", button_style="danger",
-                                         layout=widgets.Layout(width="100px"),
-                                         disabled=True)
-        self._action_out = widgets.HTML()
-
-        self._start_btn.on_click(self._on_start)
-        self._resume_btn.on_click(self._on_resume)
-        self._stop_btn2.on_click(self._on_stop)
 
         self._stop_btn.on_click(lambda _: self._stop())
         self._dropdown.observe(
@@ -163,15 +235,13 @@ class _Monitor:
     def _refresh_data(self):
         run_dir = self._get_run_dir()
         if run_dir is None:
-            self._metrics_w.value = "<i>No runs found in runs/. Start training first.</i>"
+            self._status_w.value = "<p style='color:#6b7280'>No runs found in runs/.</p>"
             return
         metrics = read_metrics(run_dir)
         stats = get_system_stats()
-        self._metrics_w.value = _metrics_html(metrics, run_dir)
+        self._status_w.value = _alerts_html(metrics)
+        self._progress_w.value = _progress_html(metrics, run_dir)
         self._gpu_w.value = _gpu_html(stats)
-        alerts = _alerts_html(metrics)
-        self._alerts_w.value = alerts
-        self._alerts_w.layout.display = "" if alerts else "none"
         fig = build_training_figure(metrics)
         with self._plot_w:
             clear_output(wait=True)
@@ -195,48 +265,13 @@ class _Monitor:
         self._stop_btn.description = "■ Stopped"
         self._stop_btn.disabled = True
 
-    def _on_start(self, _):
-        with self._proc_lock:
-            self._proc = launch_training(config_path=self._config_path)
-        self._action_out.value = f"<b>Started.</b> PID: {self._proc.pid}"
-        self._start_btn.disabled = True
-        self._resume_btn.disabled = True
-        self._stop_btn2.disabled = False
-
-    def _on_resume(self, _):
-        run_dir = self._get_run_dir()
-        if run_dir is None:
-            self._action_out.value = "<span style='color:red'>No run selected.</span>"
-            return
-        with self._proc_lock:
-            self._proc = launch_training(config_path=self._config_path,
-                                         resume_run_dir=run_dir)
-        self._action_out.value = f"<b>Resumed</b> {run_dir.name}. PID: {self._proc.pid}"
-        self._start_btn.disabled = True
-        self._resume_btn.disabled = True
-        self._stop_btn2.disabled = False
-
-    def _on_stop(self, _):
-        with self._proc_lock:
-            if self._proc is not None:
-                kill_training(self._proc)
-                self._proc = None
-        self._action_out.value = "<b>Training stopped.</b>"
-        self._start_btn.disabled = False
-        self._resume_btn.disabled = False
-        self._stop_btn2.disabled = True
-
     def widget(self) -> widgets.VBox:
-        refresh_header = widgets.HBox([self._dropdown, self._stop_btn])
-        mgmt_row = widgets.HBox([
-            self._start_btn, self._resume_btn, self._stop_btn2, self._action_out
-        ])
+        header = widgets.HBox([self._dropdown, self._stop_btn])
         return widgets.VBox([
-            refresh_header,
-            mgmt_row,
-            self._metrics_w,
+            header,
+            self._status_w,
+            self._progress_w,
             self._gpu_w,
-            self._alerts_w,
             self._plot_w,
         ])
 
@@ -244,7 +279,7 @@ class _Monitor:
 def monitor(
     runs_dir: str | Path = "runs",
     run_dir: Optional[str | Path] = None,
-    refresh: int = 5,
+    refresh: int = 2,
     config_path: str | Path = "configs/default.yaml",
 ) -> None:
     """Display the ParrotLLM training monitor widget in a Jupyter notebook.
@@ -252,10 +287,10 @@ def monitor(
     Args:
         runs_dir:    Directory containing run subdirectories. Default: "runs".
         run_dir:     Specific run directory to show. Default: auto-detects latest.
-        refresh:     Auto-refresh interval in seconds. Default: 5.
-        config_path: Path to the training config YAML. Default: "configs/default.yaml".
+        refresh:     Auto-refresh interval in seconds. Default: 2.
+        config_path: Unused, kept for backwards compatibility.
     """
     runs_dir = Path(runs_dir)
     run_dir = Path(run_dir) if run_dir is not None else None
-    m = _Monitor(runs_dir, run_dir, refresh, config_path=Path(config_path))
+    m = _Monitor(runs_dir, run_dir, refresh)
     display(m.widget())

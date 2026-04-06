@@ -19,12 +19,40 @@ from rich.panel import Panel
 from rich.table import Table
 from rich.text import Text
 
-from src.dashboard.metrics_reader import read_metrics, is_metrics_stale
+from src.dashboard.metrics_reader import read_metrics, TrainingMetrics, is_metrics_stale
 from src.dashboard.system_monitor import get_system_stats
 from src.dashboard.problem_detector import detect_problems, Severity
 from src.dashboard.run_manager import get_latest_run_dir
 
 _SEVERITY_STYLE = {Severity.ERROR: "red", Severity.WARNING: "yellow", Severity.INFO: "blue"}
+_BAR_WIDTH = 36
+
+
+def _compute_eta(metrics: TrainingMetrics) -> str:
+    if not metrics.steps or not metrics.tokens_per_sec:
+        return "—"
+    max_steps = metrics.config.get("max_steps")
+    if not max_steps:
+        return "—"
+    remaining = max_steps - metrics.steps[-1]
+    if remaining <= 0:
+        return "Done"
+    tokens_per_step = (
+        metrics.config.get("batch_size", 64)
+        * metrics.config.get("context_length", 1024)
+        * metrics.config.get("gradient_accumulation_steps", 4)
+    )
+    avg_tps = sum(metrics.tokens_per_sec[-10:]) / len(metrics.tokens_per_sec[-10:])
+    if avg_tps <= 0:
+        return "—"
+    eta_sec = int(remaining * tokens_per_step / avg_tps)
+    h, rem = divmod(eta_sec, 3600)
+    m, s = divmod(rem, 60)
+    if h > 0:
+        return f"~{h}h {m:02d}m {s:02d}s"
+    if m > 0:
+        return f"~{m}m {s:02d}s"
+    return f"~{s}s"
 
 
 def _progress_panel(run_dir: Path) -> Panel:
@@ -36,31 +64,38 @@ def _progress_panel(run_dir: Path) -> Panel:
     loss = metrics.train_losses[-1]
     lr = metrics.lrs[-1]
     max_steps = metrics.config.get("max_steps")
+    eta = _compute_eta(metrics)
 
     lines = [Text(f"Run: {run_dir.name}", style="bold")]
 
-    step_line = f"Step {step:,}"
+    # Progress bar
     if max_steps:
-        step_line += f" / {max_steps:,}  ({100.0 * step / max_steps:.1f}%)"
-    lines.append(Text(step_line))
+        pct = 100.0 * step / max_steps
+        filled = int(_BAR_WIDTH * pct / 100)
+        bar_str = "█" * filled + "░" * (_BAR_WIDTH - filled)
+        lines.append(Text(f"[{bar_str}] {pct:.1f}%  Step {step:,} / {max_steps:,}", style="cyan"))
+    else:
+        lines.append(Text(f"Step {step:,}", style="cyan"))
 
-    row = f"Train {loss:.4f}"
-    if metrics.val_losses:
-        row += f"  │  Val {metrics.val_losses[-1]:.4f}"
-    if metrics.val_ppls:
-        row += f"  │  Val PPL {metrics.val_ppls[-1]:.1f}"
-    row += f"  │  LR {lr:.2e}"
-    lines.append(Text(row))
-
-    extra = []
+    # Line 1: always-changing metrics + ETA
+    row1 = [f"Train {loss:.4f}", f"LR {lr:.2e}"]
     if metrics.grad_norms:
-        extra.append(f"Grad Norm {metrics.grad_norms[-1]:.3f}")
+        row1.append(f"Grad {metrics.grad_norms[-1]:.3f}")
     if metrics.tokens_per_sec:
-        extra.append(f"Tok/s {metrics.tokens_per_sec[-1]:,.0f}")
+        row1.append(f"Tok/s {metrics.tokens_per_sec[-1]:,.0f}")
+    row1.append(f"ETA {eta}")
+    lines.append(Text("  │  ".join(row1)))
+
+    # Line 2: val-only metrics (only shown once val data exists)
+    row2 = []
+    if metrics.val_losses:
+        row2.append(f"Val Loss {metrics.val_losses[-1]:.4f}")
+    if metrics.val_ppls:
+        row2.append(f"Val PPL {metrics.val_ppls[-1]:.1f}")
     if metrics.best_step:
-        extra.append(f"Best Step {metrics.best_step:,}")
-    if extra:
-        lines.append(Text("  │  ".join(extra)))
+        row2.append(f"Best @ {metrics.best_step:,}")
+    if row2:
+        lines.append(Text("  │  ".join(row2), style="dim"))
 
     stale, age = is_metrics_stale(run_dir)
     if stale:

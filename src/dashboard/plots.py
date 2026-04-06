@@ -31,9 +31,9 @@ def build_training_figure(metrics: TrainingMetrics) -> Optional[plt.Figure]:
     if not metrics.steps:
         return None
 
-    fig = plt.figure(figsize=(20, 10))
+    fig = plt.figure(figsize=(20, 10), layout="constrained")
     fig.patch.set_facecolor("white")
-    gs = gridspec.GridSpec(2, 3, figure=fig, hspace=0.45, wspace=0.38)
+    gs = gridspec.GridSpec(2, 3, figure=fig)
 
     steps = metrics.steps
     eval_steps = metrics.eval_steps
@@ -104,5 +104,4 @@ def build_training_figure(metrics: TrainingMetrics) -> Optional[plt.Figure]:
     ax6 = fig.add_subplot(gs[1, 2])
     ax6.set_visible(False)
 
-    fig.tight_layout(pad=1.5)
     return fig

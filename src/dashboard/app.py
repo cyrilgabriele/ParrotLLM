@@ -16,13 +16,9 @@ from src.dashboard.metrics_reader import read_metrics, TrainingMetrics, is_metri
 from src.dashboard.system_monitor import get_system_stats
 from src.dashboard.problem_detector import detect_problems, Severity
 from src.dashboard.run_manager import (
-    list_runs, launch_training, get_latest_run_dir,
-    kill_training, get_log_lines,
+    list_runs, get_latest_run_dir, get_log_lines,
 )
 from src.dashboard.plots import build_training_figure
-
-_active_proc: Optional[object] = None
-_proc_lock = threading.Lock()
 
 _SEVERITY_EMOJI = {Severity.ERROR: "🔴", Severity.WARNING: "🟡", Severity.INFO: "🔵"}
 
@@ -213,11 +209,6 @@ def _gpu_rows(stats) -> list[list[str]]:
     return rows
 
 
-def _is_alive() -> bool:
-    with _proc_lock:
-        return _active_proc is not None and _active_proc.poll() is None
-
-
 def _arch_and_config_text(metrics: TrainingMetrics) -> str:
     """Return a formatted string matching training startup output, params-first."""
     arch = metrics.architecture
@@ -264,7 +255,6 @@ def _arch_and_config_text(metrics: TrainingMetrics) -> str:
 # ── App builder ───────────────────────────────────────────────────────────────
 
 def build_app(runs_dir: Path, config_path: Path) -> gr.Blocks:
-    global _active_proc
 
     def refresh_monitor(run_name):
         metrics, run_dir = _selected(runs_dir, run_name)
@@ -292,38 +282,6 @@ def build_app(runs_dir: Path, config_path: Path) -> gr.Blocks:
     def refresh_arch(run_name):
         metrics, _ = _selected(runs_dir, run_name)
         return _arch_and_config_text(metrics), metrics.architecture or {}, metrics.config or {}
-
-    def action_start(_):
-        global _active_proc
-        with _proc_lock:
-            _active_proc = launch_training(config_path=config_path)
-        return (f"Started. PID: {_active_proc.pid}",
-                gr.update(interactive=False), gr.update(interactive=True))
-
-    def action_resume(run_name):
-        global _active_proc
-        if not run_name:
-            return "Select a run to resume.", gr.update(), gr.update(), gr.update()
-        with _proc_lock:
-            _active_proc = launch_training(config_path=config_path,
-                                           resume_run_dir=runs_dir / run_name)
-        return (f"Resumed {run_name}. PID: {_active_proc.pid}",
-                gr.update(interactive=False), gr.update(interactive=False),
-                gr.update(interactive=True))
-
-    def action_stop(_):
-        global _active_proc
-        with _proc_lock:
-            if _active_proc is not None:
-                kill_training(_active_proc)
-                _active_proc = None
-        return "Stopped.", gr.update(interactive=True), gr.update(interactive=True), gr.update(interactive=False)
-
-    def refresh_status():
-        alive = _is_alive()
-        pid = _active_proc.pid if alive and _active_proc else None
-        status = f"● Running — PID {pid}" if alive else "○ Idle"
-        return status, gr.update(interactive=not alive), gr.update(interactive=alive)
 
     choices = _run_choices(runs_dir)
 
@@ -399,49 +357,6 @@ def build_app(runs_dir: Path, config_path: Path) -> gr.Blocks:
                     inputs=[arch_run_selector],
                     outputs=[arch_box, arch_json, config_json],
                 )
-
-            # ── TAB 3: Run Manager ────────────────────────────────────
-            with gr.Tab("Run Manager"):
-                status_box = gr.Textbox(label="Status", value="○ Idle", interactive=False)
-
-                with gr.Row():
-                    with gr.Column():
-                        gr.Markdown("**Start new run**")
-                        start_btn = gr.Button("▶ Start Training", variant="primary")
-                        start_out = gr.Textbox(label="Output", lines=2, interactive=False)
-
-                    with gr.Column():
-                        gr.Markdown("**Resume existing run**")
-                        resume_selector = gr.Dropdown(label="Run to Resume", choices=choices)
-                        resume_btn = gr.Button("⏩ Resume Training")
-                        resume_out = gr.Textbox(label="Output", lines=2, interactive=False)
-
-                    with gr.Column():
-                        gr.Markdown("**Stop training**")
-                        stop_btn = gr.Button("⏹ Stop Training", variant="stop",
-                                             interactive=False)
-                        stop_out = gr.Textbox(label="Output", lines=2, interactive=False)
-
-                start_btn.click(fn=action_start, inputs=[start_btn],
-                                outputs=[start_out, start_btn, stop_btn])
-                resume_btn.click(fn=action_resume, inputs=[resume_selector],
-                                 outputs=[resume_out, resume_btn, start_btn, stop_btn])
-                stop_btn.click(fn=action_stop, inputs=[stop_btn],
-                               outputs=[stop_out, start_btn, resume_btn, stop_btn])
-
-                gr.Markdown("### All Runs")
-                runs_table = gr.Dataframe(
-                    headers=["Run", "Last Step", "Best Val Loss", "Status"],
-                    value=[[r.name, str(r.last_step or "—"),
-                            f"{r.best_val_loss:.4f}" if r.best_val_loss else "—",
-                            "unknown"]
-                           for r in list_runs(runs_dir)],
-                    label="Runs",
-                )
-
-                status_timer = gr.Timer(value=5)
-                status_timer.tick(fn=refresh_status, inputs=[],
-                                  outputs=[status_box, start_btn, stop_btn])
 
     return demo
 

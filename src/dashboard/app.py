@@ -291,7 +291,7 @@ def build_app(runs_dir: Path, config_path: Path) -> gr.Blocks:
 
     def refresh_arch(run_name):
         metrics, _ = _selected(runs_dir, run_name)
-        return _arch_and_config_text(metrics), metrics.architecture or {}
+        return _arch_and_config_text(metrics), metrics.architecture or {}, metrics.config or {}
 
     def action_start(_):
         global _active_proc
@@ -385,13 +385,19 @@ def build_app(runs_dir: Path, config_path: Path) -> gr.Blocks:
             with gr.Tab("Architecture"):
                 arch_run_selector = gr.Dropdown(label="Run", choices=choices)
                 arch_load_btn = gr.Button("Load")
-                arch_box = gr.Textbox(label="Architecture Summary",
-                                      lines=10, elem_id="arch_box")
-                with gr.Accordion("Raw JSON", open=False):
-                    arch_json = gr.JSON(elem_id="arch_json")
+                arch_box = gr.Textbox(
+                    label="Model Architecture & Training Config",
+                    lines=20,
+                    interactive=False,
+                )
+                with gr.Accordion("Raw JSON — Architecture", open=False):
+                    arch_json = gr.JSON()
+                with gr.Accordion("Raw JSON — Config", open=False):
+                    config_json = gr.JSON()
                 arch_load_btn.click(
-                    fn=refresh_arch, inputs=[arch_run_selector],
-                    outputs=[arch_box, arch_json],
+                    fn=refresh_arch,
+                    inputs=[arch_run_selector],
+                    outputs=[arch_box, arch_json, config_json],
                 )
 
             # ── TAB 3: Run Manager ────────────────────────────────────

@@ -134,14 +134,20 @@ def _build_layout(run_dir: Path):
     return layout
 
 
-def run_tui(runs_dir: Path, refresh: int = 5) -> None:
+def run_tui(runs_dir: Path, refresh: int = 2, run_name: str | None = None) -> None:
     """Run the terminal dashboard. Blocks until Ctrl+C."""
     console = Console()
 
-    run_dir = get_latest_run_dir(runs_dir)
-    if run_dir is None:
-        console.print("[yellow]No runs found in runs/. Start training first.[/yellow]")
-        return
+    if run_name:
+        run_dir = runs_dir / run_name
+        if not run_dir.is_dir():
+            console.print(f"[red]Run not found: {run_dir}[/red]")
+            return
+    else:
+        run_dir = get_latest_run_dir(runs_dir)
+        if run_dir is None:
+            console.print("[yellow]No runs found in runs/. Start training first.[/yellow]")
+            return
 
     console.print(
         f"[dim]ParrotLLM TUI — {refresh}s refresh — Ctrl+C to exit — "
@@ -152,10 +158,11 @@ def run_tui(runs_dir: Path, refresh: int = 5) -> None:
         try:
             while True:
                 time.sleep(refresh)
-                # Re-detect latest run each tick in case a new run started
-                latest = get_latest_run_dir(runs_dir)
-                if latest:
-                    run_dir = latest
+                if not run_name:
+                    # Auto-follow the latest run unless user pinned one
+                    latest = get_latest_run_dir(runs_dir)
+                    if latest:
+                        run_dir = latest
                 live.update(_build_layout(run_dir))
         except KeyboardInterrupt:
             pass

@@ -43,8 +43,10 @@ def main() -> None:
                         help="Create a public Gradio share URL")
     parser.add_argument("--tui", action="store_true",
                         help="Use terminal UI instead of Gradio")
-    parser.add_argument("--tui-refresh", type=int, default=5, metavar="N",
-                        help="TUI refresh interval in seconds (default: 5)")
+    parser.add_argument("--tui-refresh", type=int, default=2, metavar="N",
+                        help="TUI refresh interval in seconds (default: 2)")
+    parser.add_argument("--tui-run", default=None, metavar="RUN_NAME",
+                        help="Pin TUI to a specific run, e.g. run_20260406_130146 (default: latest)")
     # tune-specific
     parser.add_argument("--n-trials", type=int, default=None,
                         help="Override number of Optuna trials")
@@ -165,7 +167,7 @@ def main() -> None:
 
         if args.tui:
             from src.dashboard.tui import run_tui
-            run_tui(runs_dir=runs_dir, refresh=args.tui_refresh)
+            run_tui(runs_dir=runs_dir, refresh=args.tui_refresh, run_name=args.tui_run)
         else:
             from src.dashboard.app import run_dashboard
             run_dashboard(

@@ -23,7 +23,7 @@ def list_runs(runs_dir: Path) -> list[RunInfo]:
     if not runs_dir.exists():
         return []
     dirs = sorted(
-        [d for d in runs_dir.iterdir() if d.is_dir()],
+        [d for d in runs_dir.iterdir() if d.is_dir() and d.name.startswith("run_")],
         key=lambda d: d.name,
         reverse=True,
     )

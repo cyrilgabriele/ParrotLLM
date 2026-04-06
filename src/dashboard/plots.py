@@ -23,80 +23,84 @@ def _style(ax):
 
 
 def build_training_figure(metrics: TrainingMetrics) -> Optional[plt.Figure]:
-    """Return a 2×3 Figure from TrainingMetrics, or None if no data."""
+    """Return a 2×3 Figure from TrainingMetrics, or None if no data.
+
+    Top row (most active): Train & Val Loss | Tokens/sec | LR & Grad Norm
+    Bottom row (contextual): Val Perplexity | Generalization Gap | (hidden)
+    """
     if not metrics.steps:
         return None
 
-    fig = plt.figure(figsize=(18, 9))
+    fig = plt.figure(figsize=(20, 10))
     fig.patch.set_facecolor("white")
-    gs = gridspec.GridSpec(2, 3, figure=fig, hspace=0.4, wspace=0.35)
+    gs = gridspec.GridSpec(2, 3, figure=fig, hspace=0.45, wspace=0.38)
 
     steps = metrics.steps
     eval_steps = metrics.eval_steps
-    # Clip eval-paired lists to eval_steps length to guard against
-    # initial_validation entries that have val_loss but no step.
     n_eval = len(eval_steps)
 
-    # ── [0,0] Train & Val Loss ────────────────────────────────────────
+    # ── [0,0] Train & Val Loss (most important) ───────────────────────
     ax1 = fig.add_subplot(gs[0, 0])
-    ax1.plot(steps, metrics.train_losses, color=TRAIN_COLOR, linewidth=1.5, label="Train")
+    ax1.plot(steps, metrics.train_losses, color=TRAIN_COLOR, linewidth=1.8, label="Train")
     if eval_steps and metrics.val_losses:
-        ax1.plot(eval_steps, metrics.val_losses[:n_eval], color=VAL_COLOR, linewidth=1.5,
+        ax1.plot(eval_steps, metrics.val_losses[:n_eval], color=VAL_COLOR, linewidth=1.8,
                  linestyle="--", label="Val")
     if metrics.best_step:
         ax1.axvline(metrics.best_step, color="#999", linewidth=0.8, linestyle=":",
                     label=f"Best @ {metrics.best_step}")
     _style(ax1)
     ax1.set_ylabel("Loss")
-    ax1.set_title("Train & Validation Loss")
-    ax1.legend(fontsize=7, frameon=False)
+    ax1.set_title("Train & Validation Loss", fontweight="bold")
+    ax1.legend(fontsize=8, frameon=False)
 
-    # ── [0,1] Validation Perplexity ───────────────────────────────────
+    # ── [0,1] Tokens per second ───────────────────────────────────────
     ax2 = fig.add_subplot(gs[0, 1])
-    if eval_steps and metrics.val_ppls:
-        ax2.plot(eval_steps, metrics.val_ppls[:n_eval], color=VAL_COLOR, linewidth=1.5)
-        ax2.set_yscale("log")
-    _style(ax2)
-    ax2.set_ylabel("Perplexity (log)")
-    ax2.set_title("Validation Perplexity")
-
-    # ── [0,2] Tokens per second ───────────────────────────────────────
-    ax3 = fig.add_subplot(gs[0, 2])
     if metrics.tokens_per_sec:
-        ax3.plot(steps[:len(metrics.tokens_per_sec)], metrics.tokens_per_sec,
-                 color=TRAIN_COLOR, linewidth=1.5)
+        ax2.plot(steps[:len(metrics.tokens_per_sec)], metrics.tokens_per_sec,
+                 color=TRAIN_COLOR, linewidth=1.8)
+    _style(ax2)
+    ax2.set_ylabel("Tok/s")
+    ax2.set_title("Tokens per Second", fontweight="bold")
+
+    # ── [0,2] LR + Grad Norm (twin axis) ─────────────────────────────
+    ax3 = fig.add_subplot(gs[0, 2])
+    ax3.plot(steps, metrics.lrs, color=LR_COLOR, linewidth=1.8, label="LR")
+    ax3.set_ylabel("Learning Rate", color=LR_COLOR)
+    ax3.tick_params(axis="y", labelcolor=LR_COLOR)
+    ax3.set_xlabel("Step")
+    ax3.set_title("LR & Grad Norm", fontweight="bold")
     _style(ax3)
-    ax3.set_ylabel("Tok/s")
-    ax3.set_title("Tokens per Second")
-
-    # ── [1,0] Learning Rate + Grad Norm (twin axis) ───────────────────
-    ax4 = fig.add_subplot(gs[1, 0])
-    ax4.plot(steps, metrics.lrs, color=LR_COLOR, linewidth=1.5, label="LR")
-    ax4.set_ylabel("Learning Rate", color=LR_COLOR)
-    ax4.tick_params(axis="y", labelcolor=LR_COLOR)
-    ax4.set_xlabel("Step")
-    ax4.set_title("LR & Grad Norm")
-    _style(ax4)
     if metrics.grad_norms:
-        ax4b = ax4.twinx()
-        ax4b.plot(steps, metrics.grad_norms, color=GRAD_COLOR, linewidth=1.0,
+        ax3b = ax3.twinx()
+        ax3b.plot(steps, metrics.grad_norms, color=GRAD_COLOR, linewidth=1.2,
                   alpha=0.7, label="Grad Norm")
-        ax4b.set_ylabel("Grad Norm", color=GRAD_COLOR)
-        ax4b.tick_params(axis="y", labelcolor=GRAD_COLOR)
-        ax4b.spines["top"].set_visible(False)
+        ax3b.set_ylabel("Grad Norm", color=GRAD_COLOR)
+        ax3b.tick_params(axis="y", labelcolor=GRAD_COLOR)
+        ax3b.spines["top"].set_visible(False)
 
-    # ── [1,1] Train–Val Gap ───────────────────────────────────────────
+    # ── [1,0] Validation Perplexity ───────────────────────────────────
+    ax4 = fig.add_subplot(gs[1, 0])
+    if eval_steps and metrics.val_ppls:
+        ax4.plot(eval_steps, metrics.val_ppls[:n_eval], color=VAL_COLOR, linewidth=1.8)
+        ax4.set_yscale("log")
+    _style(ax4)
+    ax4.set_ylabel("Perplexity (log)")
+    ax4.set_xlabel("Step")
+    ax4.set_title("Validation Perplexity")
+
+    # ── [1,1] Generalization Gap ──────────────────────────────────────
     ax5 = fig.add_subplot(gs[1, 1])
     if eval_steps and metrics.val_losses and metrics.eval_train_losses:
-        gap = [v - t for v, t in zip(metrics.val_losses[:n_eval], metrics.eval_train_losses[:n_eval])]
-        ax5.plot(eval_steps[:len(gap)], gap, color=VAL_COLOR, linewidth=1.5)
+        gap = [v - t for v, t in zip(metrics.val_losses[:n_eval],
+                                      metrics.eval_train_losses[:n_eval])]
+        ax5.plot(eval_steps[:len(gap)], gap, color=VAL_COLOR, linewidth=1.8)
         ax5.axhline(0, color="#bbb", linewidth=0.8, linestyle="--")
     _style(ax5)
     ax5.set_ylabel("Val − Train Loss")
     ax5.set_xlabel("Step")
     ax5.set_title("Generalization Gap")
 
-    # ── [1,2] unused — keep axes clean ───────────────────────────────
+    # ── [1,2] hidden ──────────────────────────────────────────────────
     ax6 = fig.add_subplot(gs[1, 2])
     ax6.set_visible(False)
 

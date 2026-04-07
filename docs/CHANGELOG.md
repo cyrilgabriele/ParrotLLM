@@ -21,6 +21,32 @@ Track what was changed, why it was changed, and any important notes.
 
 ## Unreleased
 
+### [2026-04-06] - Gian Seifert
+
+#### What
+- Added auto-plotting of training metrics after each run completes
+
+#### Why
+- Continued monitoring of training progress without manual intervention
+
+#### Remarks
+- Triggered automatically post-training via `uv run python src/plot.py`
+
+---
+
+### [2026-04-06] - Gian Seifert
+
+#### What
+- Added interactive training dashboard for run inspection and live monitoring
+
+#### Why
+- Easier access to training monitoring across all runs
+
+#### Remarks
+- Launch with `uv run python src/dashboard/app.py`
+
+---
+
 ### [2026-04-04] - Cyril Gabriele
 
 #### What

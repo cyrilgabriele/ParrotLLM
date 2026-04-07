@@ -15,15 +15,38 @@ def main() -> None:
     parser.add_argument(
         "--stage",
         required=True,
-        choices=["preprocess", "train", "tune", "eval", "inference", "chat"],
+        choices=["preprocess", "train", "tune", "eval", "inference", "chat", "dashboard"],
     )
     parser.add_argument("--config", type=Path, default=Path("configs/default.yaml"))
     parser.add_argument("--checkpoint", default=None)
+    parser.add_argument(
+        "--resume",
+        nargs="?",
+        const="",
+        default=None,
+        metavar="RUN_DIR",
+        help=(
+            "Resume training from the latest checkpoint. "
+            "Without a path, auto-discovers the most recent run in the configured runs_dir. "
+            "Optionally provide an explicit run directory, e.g. --resume runs/run_20260405_143000."
+        ),
+    )
     parser.add_argument("--prompt", default=None)
     parser.add_argument("--max-tokens", type=int, default=None)
     parser.add_argument("--temperature", type=float, default=None)
     parser.add_argument("--leaderboard", action="store_true")
     parser.add_argument("--mock-testing", action="store_true", default=None)
+    # dashboard-specific
+    parser.add_argument("--open", action="store_true",
+                        help="Open browser automatically when starting the dashboard")
+    parser.add_argument("--share", action="store_true",
+                        help="Create a public Gradio share URL")
+    parser.add_argument("--tui", action="store_true",
+                        help="Use terminal UI instead of Gradio")
+    parser.add_argument("--tui-refresh", type=int, default=2, metavar="N",
+                        help="TUI refresh interval in seconds (default: 2)")
+    parser.add_argument("--tui-run", default=None, metavar="RUN_NAME",
+                        help="Pin TUI to a specific run, e.g. run_20260406_130146 (default: latest)")
     # tune-specific
     parser.add_argument("--n-trials", type=int, default=None,
                         help="Override number of Optuna trials")
@@ -75,10 +98,23 @@ def main() -> None:
     if args.stage == "train":
         training_cfg = _require_section(project_config.training, "training")
         _require_section(project_config.model, "model")
+
+        checkpoint = args.checkpoint
+        if args.resume is not None:
+            if checkpoint is not None:
+                parser.error("--resume and --checkpoint are mutually exclusive.")
+            from src.training.trainer import find_latest_checkpoint
+            run_dir = args.resume if args.resume else None
+            checkpoint = find_latest_checkpoint(
+                training_cfg.runs_dir,
+                run_dir=run_dir,
+                checkpoint_subdir=training_cfg.checkpoint_dir,
+            )
+
         device = get_device(training_cfg.device)
         from src.training.trainer import run_train
 
-        run_train(project_config, config_dict, device=device, checkpoint=args.checkpoint)
+        run_train(project_config, config_dict, device=device, checkpoint=checkpoint)
         return
 
     if args.stage == "eval":
@@ -123,6 +159,24 @@ def main() -> None:
         from src.chat.app import run_chat
 
         run_chat(project_config, device=device)
+
+    if args.stage == "dashboard":
+        from pathlib import Path as _Path
+        training_cfg = project_config.training
+        runs_dir = _Path(training_cfg.runs_dir) if training_cfg else _Path("runs")
+
+        if args.tui:
+            from src.dashboard.tui import run_tui
+            run_tui(runs_dir=runs_dir, refresh=args.tui_refresh, run_name=args.tui_run)
+        else:
+            from src.dashboard.app import run_dashboard
+            run_dashboard(
+                runs_dir=runs_dir,
+                config_path=args.config,
+                share=args.share,
+                open_browser=args.open,
+            )
+        return
 
 
 def _require_section(value, name: str):

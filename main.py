@@ -20,7 +20,7 @@ def main() -> None:
     parser.add_argument("--config", type=Path, default=Path("configs/default.yaml"))
     parser.add_argument("--checkpoint", default=None)
     parser.add_argument(
-        "--resume_training",
+        "--resume-training",
         action="store_true",
         help="Resume training from the checkpoint passed via --checkpoint.",
     )
@@ -145,7 +145,7 @@ def _resolve_train_checkpoint(args: argparse.Namespace, parser: argparse.Argumen
         return _require_checkpoint(args.checkpoint, stage="train")
     if args.checkpoint:
         parser.error(
-            "--checkpoint only resumes training when used together with --resume_training."
+            "--checkpoint only resumes training when used together with --resume-training."
         )
     return None
 

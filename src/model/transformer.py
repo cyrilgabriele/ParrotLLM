@@ -68,7 +68,7 @@ class MultiHeadAttention(nn.Module):
         self.o_proj = nn.Linear(d_model, d_model, bias=bias)
 
         # QK-Norm: bound attention logit magnitude for training stability at depth
-        # (Dehghani et al., arXiv:2302.05442). Applied after RoPE, before attention.
+        # (Dehghani et al., arXiv:2302.05442). Applied before RoPE, after projection.
         self.q_norm = RMSNorm(self.d_head)
         self.k_norm = RMSNorm(self.d_head)
 
@@ -82,9 +82,9 @@ class MultiHeadAttention(nn.Module):
         k = self.k_proj(x).view(B, T, self.n_heads, self.d_head).transpose(1, 2)
         v = self.v_proj(x).view(B, T, self.n_heads, self.d_head).transpose(1, 2)
 
-        # Apply RoPE then QK-Norm to Q and K
-        q = self.q_norm(apply_rope(q, freqs_cis))
-        k = self.k_norm(apply_rope(k, freqs_cis))
+        # Apply QK-Norm then RoPE (norm-before-rotation, as in Gemma 3/4 and OLMo 2)
+        q = apply_rope(self.q_norm(q), freqs_cis)
+        k = apply_rope(self.k_norm(k), freqs_cis)
 
         # Causal self-attention; Flash Attention if available
         out = F.scaled_dot_product_attention(

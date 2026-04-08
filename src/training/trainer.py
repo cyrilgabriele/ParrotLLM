@@ -771,6 +771,28 @@ def _apply_optimizer_step(
     return current_scale >= previous_scale
 
 
+def _compute_z_loss(
+    logits: torch.Tensor,
+    coeff: float,
+    *,
+    chunk_bytes: int = 128 * 1024 * 1024,
+) -> torch.Tensor:
+    """Compute z-loss in float32 without materializing a full fp32 logits copy."""
+    if coeff <= 0.0:
+        return torch.zeros((), device=logits.device, dtype=logits.dtype)
+
+    flat_logits = logits.reshape(-1, logits.size(-1))
+    bytes_per_row = flat_logits.size(-1) * torch.finfo(torch.float32).bits // 8
+    rows_per_chunk = max(1, chunk_bytes // bytes_per_row)
+
+    total = torch.zeros((), device=logits.device, dtype=torch.float32)
+    for start in range(0, flat_logits.size(0), rows_per_chunk):
+        chunk = flat_logits[start:start + rows_per_chunk]
+        total = total + torch.logsumexp(chunk.float(), dim=-1).pow(2).sum()
+
+    return coeff * (total / flat_logits.size(0))
+
+
 # ── Training ─────────────────────────────────────────────────────────────────
 
 def _log_model_architecture(log: logging.Logger, jlog: JSONLLogger,
@@ -1134,11 +1156,9 @@ def run_train(
                         logits, ce_loss = model(x, targets=y)
                         if z_loss_coeff > 0.0:
                             # Z-loss (arXiv:2202.08906): penalises large pre-softmax logits to
-                            # prevent numerical instability in mixed precision. Operates in
-                            # float32 to avoid precision issues, then cast back.
-                            z_loss = z_loss_coeff * torch.logsumexp(
-                                logits.float(), dim=-1
-                            ).pow(2).mean()
+                            # prevent numerical instability in mixed precision. Compute it in
+                            # float32 chunks to avoid allocating a full fp32 logits tensor.
+                            z_loss = _compute_z_loss(logits, z_loss_coeff)
                             loss = (ce_loss + z_loss) / micro_batches_target
                         else:
                             loss = ce_loss / micro_batches_target

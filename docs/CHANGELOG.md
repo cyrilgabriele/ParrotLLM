@@ -21,6 +21,26 @@ Track what was changed, why it was changed, and any important notes.
 
 ## Unreleased
 
+### [2026-04-08] - Cyril Gabriele
+
+#### What
+- Added an optional `training.hf_upload` config block in `configs/training/trainingConfig.py` so training runs can target a defined Hugging Face repo via `repo_id`, `repo_type`, `path_in_repo`, and `private`
+- Extended `src/training/trainer.py` with a Hugging Face upload helper that mirrors the finished local run directory into the Hub repo while preserving its relative local path (for example `runs/.../run_*`)
+- Hooked the upload into the master-rank end-of-training finalization path so the run is pushed exactly once, after all local checkpoints, logs, metrics, and config artifacts have already been written
+- Made the trainer auto-create the target Hub repo if it does not exist yet and reuse the existing `HF_TOKEN` loading path for authentication
+- Updated `configs/default.yaml` and `README.md` to document how to enable end-of-training run uploads
+
+#### Why
+- The run directory is the durable experiment artifact, so syncing that whole folder once at the end is simpler and less error-prone than trying to push partial artifacts incrementally during training
+- Keeping the remote folder layout aligned with the local `runs/.../run_*` structure makes run archival, browsing, and later retrieval easier to reason about
+- Making the feature config-driven keeps the default local-only workflow unchanged while allowing a single YAML switch to enable remote archival when needed
+
+#### Remarks
+- Verified syntax with `python -m py_compile configs/__init__.py configs/project_config.py configs/training/trainingConfig.py src/training/trainer.py`
+- A deeper `uv run` validation could not be completed from this macOS shell because the project currently resolves to a CUDA-only `torch` wheel that is not installable on this platform
+
+---
+
 ### [2026-04-06] - Cyril Gabriele
 
 #### What

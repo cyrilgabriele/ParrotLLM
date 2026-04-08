@@ -365,6 +365,44 @@ def _download_preprocessed_subset(*, subset: str, out_dir: Path) -> None:
     print(f"[done] Dataset available at {out_dir}")
 
 
+def _download_hf_dataset_folder(*, repo_id: str, folder: str, out_dir: Path) -> None:
+    """Download an entire subfolder from a Hugging Face dataset repo."""
+    import shutil
+
+    try:
+        from huggingface_hub import snapshot_download
+    except ImportError as exc:  # pragma: no cover - depends on environment
+        raise RuntimeError(
+            "Downloading a full HF folder requires the `huggingface_hub` package."
+        ) from exc
+
+    if out_dir.exists():
+        print(f"[skip] {out_dir} already exists")
+        return
+
+    out_dir.parent.mkdir(parents=True, exist_ok=True)
+
+    token = _maybe_load_hf_token()
+    print(f"[download] {repo_id}/{folder} to {out_dir}...")
+    snapshot_dir = Path(
+        snapshot_download(
+            repo_id=repo_id,
+            repo_type="dataset",
+            allow_patterns=[f"{folder}/*", f"{folder}/**"],
+            token=token,
+        )
+    )
+
+    source_dir = snapshot_dir / folder
+    if not source_dir.exists():
+        raise RuntimeError(
+            f"Folder '{folder}' was not found in the Hugging Face dataset repo '{repo_id}'."
+        )
+
+    shutil.copytree(source_dir, out_dir)
+    print(f"[done] Folder available at {out_dir}")
+
+
 def download_experiment_a():
     """Download the ExperimentA dataset to the legacy architecture-tuning path."""
     _download_preprocessed_subset(
@@ -429,6 +467,15 @@ def download_exp_f():
     )
 
 
+def download_smoke_test():
+    """Download the SmokeTest folder from the ParrotLabs HF dataset repo."""
+    _download_hf_dataset_folder(
+        repo_id="ParrotLabs/Preprocessed",
+        folder="SmokeTest",
+        out_dir=DATA_DIR / "SmokeTest",
+    )
+
+
 DOWNLOAD_TARGETS = {
     "openwebtext-100": download_openwebtext_100,
     "openwebtext-1k": download_openwebtext_1k,
@@ -446,6 +493,8 @@ DOWNLOAD_TARGETS = {
     "exp-d": download_exp_d,
     "exp-e": download_exp_e,
     "exp-f": download_exp_f,
+    "smoke-test": download_smoke_test,
+    "smoketest": download_smoke_test,
 }
 
 

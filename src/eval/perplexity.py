@@ -26,7 +26,8 @@ def compute_perplexity(
     model.eval()
     n_tokens = len(token_ids)
     stride = context_length
-    losses = []
+    total_loss = 0.0
+    total_tokens = 0
 
     starts = list(range(0, n_tokens - context_length, stride))[:max_sequences]
 
@@ -43,9 +44,11 @@ def compute_perplexity(
 
         with torch.no_grad():
             _, loss = model(x, targets=y, return_logits=False)
-        losses.append(loss.item())
+        n_toks = y.numel()
+        total_loss += loss.item() * n_toks
+        total_tokens += n_toks
 
-    avg_loss = sum(losses) / len(losses)
+    avg_loss = total_loss / total_tokens
     return math.exp(avg_loss)
 
 
@@ -114,8 +117,6 @@ def run_eval(
     if eval_cfg is None:
         raise ValueError("Eval configuration missing; cannot run eval stage.")
 
-    datasets = {ds.name: ds for ds in eval_cfg.datasets}
-
     ckpt = torch.load(checkpoint, map_location=device, weights_only=False)
     ckpt_config = ckpt.get("config", full_config)
 
@@ -125,34 +126,23 @@ def run_eval(
     log.info(f"loaded checkpoint: {checkpoint}")
     log.info(f"parameters: {model.count_parameters():,}")
 
-    # Wikitext-103
-    try:
-        wt_dataset = datasets.get("wikitext") or datasets.get("wikitext103-test")
-        if wt_dataset:
-            wt_ppl = eval_wikitext(
-                model,
-                ckpt_config,
-                device,
-                wt_dataset,
-                eval_cfg.batch_size,
-                eval_cfg.max_sequences,
-                hf_token,
-            )
-            log.info(f"Wikitext-103 perplexity: {wt_ppl:.2f}")
-    except Exception as e:
-        log.warning(f"Wikitext-103 skipped: {e}")
+    WIKITEXT_NAMES = {"wikitext", "wikitext103-test"}
 
-    # OWT val
-    try:
-        owt_dataset = datasets.get("owt_val")
-        owt_ppl = eval_owt_val(
-            model,
-            ckpt_config,
-            device,
-            owt_dataset,
-            eval_cfg.batch_size,
-            eval_cfg.max_sequences,
-        )
-        log.info(f"OWT val perplexity: {owt_ppl:.2f}")
-    except Exception as e:
-        log.warning(f"OWT val skipped: {e}")
+    for ds_cfg in eval_cfg.datasets:
+        try:
+            if ds_cfg.name in WIKITEXT_NAMES:
+                ppl = eval_wikitext(
+                    model, ckpt_config, device, ds_cfg,
+                    eval_cfg.batch_size, eval_cfg.max_sequences, hf_token,
+                )
+            elif ds_cfg.path and ds_cfg.path.endswith(".bin"):
+                ppl = eval_owt_val(
+                    model, ckpt_config, device, ds_cfg,
+                    eval_cfg.batch_size, eval_cfg.max_sequences,
+                )
+            else:
+                log.warning(f"Dataset '{ds_cfg.name}' skipped: unsupported type")
+                continue
+            log.info(f"{ds_cfg.name} perplexity: {ppl:.2f}")
+        except Exception as e:
+            log.warning(f"{ds_cfg.name} skipped: {e}")

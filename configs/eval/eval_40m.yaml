@@ -1,0 +1,34 @@
+# Eval config for 40M model (exp_c big run)
+# Model config is loaded from the checkpoint, so this section is a fallback only.
+
+model:
+  vocab_size: 50258
+  pad_token_id: 50257
+  bos_token_id: 50256
+  eos_token_id: 50256
+  d_model: 384
+  n_layers: 14
+  n_heads: 6
+  d_ff: 768
+  context_length: 1024
+  bias: false
+  dropout: 0.0
+  rope_theta: 10000.0
+
+logging:
+  console_level: INFO
+  file_level: DEBUG
+
+eval:
+  device: auto
+  batch_size: 32
+  max_sequences: 512
+  datasets:
+    - name: wikitext
+      path: wikitext
+      subset: wikitext-103-raw-v1
+      split: test
+    - name: owt_val
+      path: data/processed/val.bin
+    - name: exp_c_val
+      path: data/exp_c/val.bin

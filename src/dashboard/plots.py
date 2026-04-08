@@ -13,6 +13,8 @@ TRAIN_COLOR = "#2563EB"   # blue
 VAL_COLOR   = "#EA580C"   # orange
 LR_COLOR    = "#16A34A"   # green
 GRAD_COLOR  = "#D97706"   # amber
+TOKSEC_COLOR = "#7C3AED"  # purple
+LRxGN_COLOR  = "#92400E"  # brown
 
 
 def _style(ax):
@@ -100,8 +102,34 @@ def build_training_figure(metrics: TrainingMetrics) -> Optional[plt.Figure]:
     ax5.set_xlabel("Step")
     ax5.set_title("Generalization Gap")
 
-    # ── [1,2] hidden ──────────────────────────────────────────────────
+    # ── [1,2] Combined Metrics: Tokens/sec + LR × Grad Norm ────────
     ax6 = fig.add_subplot(gs[1, 2])
-    ax6.set_visible(False)
+    if metrics.tokens_per_sec and metrics.grad_norms:
+        n = min(len(steps), len(metrics.tokens_per_sec))
+        ax6.plot(steps[:n], metrics.tokens_per_sec[:n],
+                 color=TOKSEC_COLOR, linewidth=1.2, alpha=0.8, label="Tokens/sec")
+        ax6.set_ylabel("Tokens/sec", color=TOKSEC_COLOR)
+        ax6.tick_params(axis="y", labelcolor=TOKSEC_COLOR)
+        ax6.set_xlabel("Step")
+        ax6.set_title("Combined Metrics", fontweight="bold")
+        _style(ax6)
+
+        # LR × Grad Norm on right axis
+        n_lg = min(len(steps), len(metrics.lrs), len(metrics.grad_norms))
+        lr_x_gn = [lr * gn for lr, gn in
+                    zip(metrics.lrs[:n_lg], metrics.grad_norms[:n_lg])]
+        ax6b = ax6.twinx()
+        ax6b.plot(steps[:n_lg], lr_x_gn,
+                  color=LRxGN_COLOR, linewidth=1.2, alpha=0.7, label="LR × Grad Norm")
+        ax6b.set_ylabel("LR × Grad Norm", color=LRxGN_COLOR)
+        ax6b.tick_params(axis="y", labelcolor=LRxGN_COLOR)
+        ax6b.spines["top"].set_visible(False)
+
+        # Combined legend
+        lines1, labels1 = ax6.get_legend_handles_labels()
+        lines2, labels2 = ax6b.get_legend_handles_labels()
+        ax6.legend(lines1 + lines2, labels1 + labels2, fontsize=8, frameon=False)
+    else:
+        ax6.set_visible(False)
 
     return fig

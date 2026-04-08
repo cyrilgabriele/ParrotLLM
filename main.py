@@ -191,7 +191,29 @@ def _load_effective_project_config(
 def _require_checkpoint(path: str | None, stage: str) -> str:
     if not path:
         raise ValueError(f"--checkpoint is required for stage '{stage}'.")
+    p = Path(path)
+    if p.is_dir():
+        return _find_best_checkpoint(p, stage)
     return path
+
+
+def _find_best_checkpoint(checkpoint_dir: Path, stage: str) -> str:
+    """Auto-select the best checkpoint from a directory (lowest val loss)."""
+    best_files = sorted(checkpoint_dir.glob("best_loss_*.pt"))
+    if not best_files:
+        raise ValueError(
+            f"No best_loss_*.pt checkpoints found in '{checkpoint_dir}' for stage '{stage}'."
+        )
+    # Filenames: best_loss_3p1234_epoch_0001_step_0003052.pt
+    # Parse loss value (e.g. "3p1234" -> 3.1234) and pick lowest.
+    def _parse_loss(f: Path) -> float:
+        name = f.stem  # best_loss_3p1234_epoch_0001_step_0003052
+        loss_str = name.split("best_loss_")[1].split("_epoch_")[0]
+        return float(loss_str.replace("p", "."))
+
+    best = min(best_files, key=_parse_loss)
+    print(f"[eval] Auto-selected best checkpoint: {best.name}")
+    return str(best)
 
 
 if __name__ == "__main__":

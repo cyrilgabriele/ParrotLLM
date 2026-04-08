@@ -742,7 +742,8 @@ def estimate_loss(model: nn.Module, dataset: torch.utils.data.Dataset,
     # not participating in.
     eval_model = _unwrap_model(model)
     eval_model.eval()
-    losses = []
+    total_loss = 0.0
+    total_tokens = 0
     loader = torch.utils.data.DataLoader(
         dataset,
         batch_size=batch_size,
@@ -758,9 +759,11 @@ def estimate_loss(model: nn.Module, dataset: torch.utils.data.Dataset,
         x, y = x.to(device), y.to(device)
         with autocast_ctx:
             _, loss = eval_model(x, targets=y, return_logits=False)
-        losses.append(loss.item())
+        n_toks = y.numel()
+        total_loss += loss.item() * n_toks
+        total_tokens += n_toks
     eval_model.train()
-    avg = sum(losses) / len(losses) if losses else float("nan")
+    avg = total_loss / total_tokens if total_tokens > 0 else float("nan")
     return {"loss": avg, "perplexity": math.exp(avg) if avg == avg else float("nan")}
 
 

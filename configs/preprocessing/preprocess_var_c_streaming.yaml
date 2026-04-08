@@ -7,7 +7,7 @@
 #       --config configs/preprocessing/preprocess_var_c_streaming.yaml
 
 streaming_preprocess:
-  max_time_seconds: 14400          # 4 hours of streaming + filtering
+  max_time_seconds: 36000          # 10 hours of streaming + filtering
   lang: en
   data_dir: data
   seed: 42

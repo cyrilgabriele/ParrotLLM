@@ -2,14 +2,13 @@
 
 import argparse
 import math
+import os
 import sys
 import urllib.request
 from pathlib import Path
 
 # Add project root to sys.path to allow 'from src...' imports when run as a script
 sys.path.append(str(Path(__file__).resolve().parent.parent.parent))
-
-from datasets import load_dataset
 
 
 DATA_DIR = Path("data")
@@ -24,8 +23,31 @@ NLP26_OWT_EVAL_URLS = (
 )
 
 
+def _maybe_load_hf_token(env_path: str | Path = Path(".env")) -> str | None:
+    """Return the HF token if explicitly provided, otherwise None."""
+    try:
+        from dotenv import load_dotenv
+    except ImportError:
+        load_dotenv = None
+
+    if load_dotenv is not None:
+        load_dotenv()
+
+    token = os.getenv("HF_TOKEN")
+    if token:
+        return token
+
+    path = Path(env_path)
+    if not path.exists():
+        return None
+
+    return None
+
+
 def _download_openwebtext_subset(count: int, suffix: str):
     """Stream a subset of OpenWebText and persist it locally."""
+    from datasets import load_dataset
+
     out = DATA_DIR / f"openwebtext-{suffix}"
     if out.exists():
         print(f"[skip] {out} already exists")
@@ -65,6 +87,7 @@ def download_openwebtext_subset_by_tokens(
     Returns:
         Path to the saved dataset directory.
     """
+    from datasets import load_dataset
     from datasets import Dataset  # local import keeps module-level imports light
 
     out = data_dir / f"openwebtext-subset-{target_tokens}-seed{seed}"
@@ -141,6 +164,8 @@ def download_openwebtext_100():
 
 def download_wikitext103_test():
     """Test set for perplexity evaluation."""
+    from datasets import load_dataset
+
     out = DATA_DIR / "wikitext-103-test"
     if out.exists():
         print(f"[skip] {out} already exists")
@@ -165,6 +190,8 @@ def download_fasttext_langdetect():
 
 def download_openwebtext_full():
     """Full OpenWebText (~38GB, ~8M documents). Takes a while."""
+    from datasets import load_dataset
+
     out = DATA_DIR / "openwebtext"
     if out.exists():
         print(f"[skip] {out} already exists")
@@ -238,7 +265,6 @@ def download_nlp26_eval():
 def download_parrotlabs_preprocessed():
     """Download preprocessed .bin files from the ParrotLabs HF group."""
     import requests
-    from src.utils import maybe_load_hf_token
 
     # Save to a dedicated folder for 800k
     out_dir = DATA_DIR / "parrotlabs-800k"
@@ -248,7 +274,7 @@ def download_parrotlabs_preprocessed():
     subset = "800000tokens-seed42"
     files = ["train.bin", "val.bin"]
     
-    token = maybe_load_hf_token()
+    token = _maybe_load_hf_token()
     headers = {"Authorization": f"Bearer {token}"} if token else {}
 
     print(f"[download] ParrotLabs/Preprocessed ({subset}) to {out_dir}...")
@@ -270,6 +296,59 @@ def download_parrotlabs_preprocessed():
                     if total_size > 0:
                         from tqdm import tqdm
                         with tqdm(total=total_size, unit='B', unit_scale=True, desc=f"    {f_name}") as pbar:
+                            for chunk in r.iter_content(chunk_size=8192):
+                                f.write(chunk)
+                                pbar.update(len(chunk))
+                    else:
+                        for chunk in r.iter_content(chunk_size=8192):
+                            f.write(chunk)
+            print(f"  [done] -> {target_path}")
+        except Exception as e:
+            print(f"  [error] Failed to download {f_name}: {e}")
+            if target_path.exists():
+                target_path.unlink()
+            continue
+
+    print(f"[done] Dataset available at {out_dir}")
+
+
+def _download_preprocessed_subset(*, subset: str, out_dir: Path) -> None:
+    """Download a preprocessed subset from the ParrotLabs HF dataset repo."""
+    import requests
+
+    out_dir.mkdir(parents=True, exist_ok=True)
+
+    repo_id = "ParrotLabs/Preprocessed"
+    files = ["train.bin", "val.bin"]
+
+    token = _maybe_load_hf_token()
+    headers = {"Authorization": f"Bearer {token}"} if token else {}
+
+    print(f"[download] ParrotLabs/Preprocessed ({subset}) to {out_dir}...")
+
+    for f_name in files:
+        target_path = out_dir / f_name
+        if target_path.exists():
+            print(f"  [skip] {f_name} already exists")
+            continue
+
+        url = f"https://huggingface.co/datasets/{repo_id}/resolve/main/{subset}/{f_name}"
+
+        print(f"  Downloading {f_name}...")
+        try:
+            with requests.get(url, headers=headers, stream=True) as r:
+                r.raise_for_status()
+                total_size = int(r.headers.get("content-length", 0))
+                with open(target_path, "wb") as f:
+                    if total_size > 0:
+                        from tqdm import tqdm
+
+                        with tqdm(
+                            total=total_size,
+                            unit="B",
+                            unit_scale=True,
+                            desc=f"    {f_name}",
+                        ) as pbar:
                             for chunk in r.iter_content(chunk_size=8192):
                                 f.write(chunk)
                                 pbar.update(len(chunk))
@@ -287,54 +366,59 @@ def download_parrotlabs_preprocessed():
 
 
 def download_experiment_a():
-    """Download the ExperimentA dataset from ParrotLabs HF group."""
-    import requests
-    from src.utils import maybe_load_hf_token
+    """Download the ExperimentA dataset to the legacy architecture-tuning path."""
+    _download_preprocessed_subset(
+        subset="ExperimentA",
+        out_dir=DATA_DIR / "experiment-a",
+    )
 
-    # Save to a dedicated folder for ExperimentA
-    out_dir = DATA_DIR / "experiment-a"
-    out_dir.mkdir(parents=True, exist_ok=True)
 
-    repo_id = "ParrotLabs/Preprocessed"
-    subset = "ExperimentA"
-    files = ["train.bin", "val.bin"]
-    
-    token = maybe_load_hf_token()
-    headers = {"Authorization": f"Bearer {token}"} if token else {}
+def download_exp_a():
+    """Download the ExperimentA dataset to the final-training path."""
+    _download_preprocessed_subset(
+        subset="ExperimentA",
+        out_dir=DATA_DIR / "exp_a",
+    )
 
-    print(f"[download] ParrotLabs/Preprocessed ({subset}) to {out_dir}...")
-    
-    for f_name in files:
-        target_path = out_dir / f_name
-        if target_path.exists():
-            print(f"  [skip] {f_name} already exists")
-            continue
-            
-        url = f"https://huggingface.co/datasets/{repo_id}/resolve/main/{subset}/{f_name}"
-        
-        print(f"  Downloading {f_name}...")
-        try:
-            with requests.get(url, headers=headers, stream=True) as r:
-                r.raise_for_status()
-                total_size = int(r.headers.get('content-length', 0))
-                with open(target_path, 'wb') as f:
-                    if total_size > 0:
-                        from tqdm import tqdm
-                        with tqdm(total=total_size, unit='B', unit_scale=True, desc=f"    {f_name}") as pbar:
-                            for chunk in r.iter_content(chunk_size=8192):
-                                f.write(chunk)
-                                pbar.update(len(chunk))
-                    else:
-                        for chunk in r.iter_content(chunk_size=8192):
-                            f.write(chunk)
-            print(f"  [done] -> {target_path}")
-        except Exception as e:
-            print(f"  [error] Failed to download {f_name}: {e}")
-            if target_path.exists():
-                target_path.unlink()
-            continue
 
-    print(f"[done] Dataset available at {out_dir}")
+def download_exp_b():
+    """Download the ExperimentB dataset to the final-training path."""
+    _download_preprocessed_subset(
+        subset="ExperimentB",
+        out_dir=DATA_DIR / "exp_b",
+    )
+
+
+def download_exp_c():
+    """Download the ExperimentC dataset to the final-training path."""
+    _download_preprocessed_subset(
+        subset="ExperimentC",
+        out_dir=DATA_DIR / "exp_c",
+    )
+
+
+def download_exp_d():
+    """Download the ExperimentD dataset to the final-training path."""
+    _download_preprocessed_subset(
+        subset="ExperimentD",
+        out_dir=DATA_DIR / "exp_d",
+    )
+
+
+def download_exp_e():
+    """Download the ExperimentE dataset to the final-training path."""
+    _download_preprocessed_subset(
+        subset="ExperimentE",
+        out_dir=DATA_DIR / "exp_e",
+    )
+
+
+def download_exp_f():
+    """Download the ExperimentF dataset to the final-training path."""
+    _download_preprocessed_subset(
+        subset="ExperimentF",
+        out_dir=DATA_DIR / "exp_f",
+    )
 
 
 DOWNLOAD_TARGETS = {
@@ -347,6 +431,12 @@ DOWNLOAD_TARGETS = {
     "nlp26-eval": download_nlp26_eval,
     "parrotlabs-800k": download_parrotlabs_preprocessed,
     "experiment-a": download_experiment_a,
+    "exp-a": download_exp_a,
+    "exp-b": download_exp_b,
+    "exp-c": download_exp_c,
+    "exp-d": download_exp_d,
+    "exp-e": download_exp_e,
+    "exp-f": download_exp_f,
 }
 
 

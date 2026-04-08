@@ -33,6 +33,10 @@ training:
   batch_size: 32
   gradient_accumulation_steps: 1
 
+  train_samples_per_epoch: null   # null = legacy-sized epoch budget, but drawn from random overlapping windows
+  val_sequence_stride: null       # null = context_length; deterministic contiguous validation windows
+
+
   # ── 800M token budget ─────────────────────────────────────────────────────
   # 800,000,000 tokens / 262,144 tokens-per-step ≈ 3052 steps
   max_steps: 3052

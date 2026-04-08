@@ -70,6 +70,22 @@ class TrainingConfig(BaseModel):
     # batching
     batch_size: int = Field(...)
     gradient_accumulation_steps: int = Field(...)
+    train_samples_per_epoch: int | None = Field(
+        default=None,
+        ge=1,
+        description=(
+            "Optional number of random overlapping training windows to draw per epoch. "
+            "Defaults to the legacy non-overlapping chunk count."
+        ),
+    )
+    val_sequence_stride: int | None = Field(
+        default=None,
+        ge=1,
+        description=(
+            "Optional stride for deterministic validation windows. "
+            "Defaults to model.context_length."
+        ),
+    )
 
     # optimizer
     learning_rate: float = Field(..., gt=0.0)

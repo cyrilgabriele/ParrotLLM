@@ -22,7 +22,6 @@ import torch.nn as nn
 import torch.distributed as dist
 from torch.optim.lr_scheduler import LRScheduler
 from torch.nn.parallel import DistributedDataParallel as DDP
-from torch.utils.data.distributed import DistributedSampler
 
 from configs import ProjectConfig
 from configs.training.trainingConfig import HfUploadConfig
@@ -36,22 +35,152 @@ from src.utils import maybe_load_hf_token
 
 # ── Dataset ──────────────────────────────────────────────────────────────────
 
-class PretrainingDataset(torch.utils.data.Dataset):
+def _count_window_starts(n_tokens: int, context_length: int) -> int:
+    """Return the number of valid context windows in a flat token array."""
+    return max(0, int(n_tokens) - int(context_length))
+
+
+def _count_strided_windows(n_tokens: int, context_length: int, stride: int) -> int:
+    """Return the number of valid windows when stepping forward by `stride`."""
+    num_starts = _count_window_starts(n_tokens, context_length)
+    if num_starts == 0:
+        return 0
+    return 1 + (num_starts - 1) // stride
+
+
+def _mix_u64(value: int) -> int:
+    """SplitMix64 mixer used to derive deterministic sampler parameters."""
+    value = (value + 0x9E3779B97F4A7C15) & 0xFFFFFFFFFFFFFFFF
+    value = ((value ^ (value >> 30)) * 0xBF58476D1CE4E5B9) & 0xFFFFFFFFFFFFFFFF
+    value = ((value ^ (value >> 27)) * 0x94D049BB133111EB) & 0xFFFFFFFFFFFFFFFF
+    return value ^ (value >> 31)
+
+
+class WindowDataset(torch.utils.data.Dataset):
+    """Random-access dataset over all valid context-window start positions."""
+
     def __init__(self, bin_path: str, context_length: int):
         self.data = np.memmap(bin_path, dtype=np.uint16, mode="r")
-        self.context_length = context_length
-        # drop the last partial chunk
-        self.n_chunks = len(self.data) // (context_length + 1)
+        self.context_length = int(context_length)
+        self.window_size = self.context_length + 1
+        self.num_start_positions = _count_window_starts(len(self.data), self.context_length)
 
     def __len__(self) -> int:
-        return self.n_chunks
+        return self.num_start_positions
 
-    def __getitem__(self, idx: int) -> tuple[torch.Tensor, torch.Tensor]:
-        start = idx * (self.context_length + 1)
+    def _window_from_start(self, start: int) -> tuple[torch.Tensor, torch.Tensor]:
+        start = int(start)
+        if start < 0 or start >= self.num_start_positions:
+            raise IndexError(
+                f"Window start {start} is out of range for {self.num_start_positions} windows."
+            )
         chunk = torch.from_numpy(
-            self.data[start : start + self.context_length + 1].astype(np.int64)
+            self.data[start : start + self.window_size].astype(np.int64)
         )
         return chunk[:-1], chunk[1:]
+
+    def __getitem__(self, idx: int) -> tuple[torch.Tensor, torch.Tensor]:
+        return self._window_from_start(idx)
+
+
+class StridedWindowDataset(WindowDataset):
+    """Deterministic sequential windows used for validation/evaluation."""
+
+    def __init__(self, bin_path: str, context_length: int, *, stride: int):
+        super().__init__(bin_path, context_length)
+        if stride <= 0:
+            raise ValueError("stride must be positive.")
+        self.stride = int(stride)
+        self.n_windows = _count_strided_windows(len(self.data), self.context_length, self.stride)
+
+    def __len__(self) -> int:
+        return self.n_windows
+
+    def __getitem__(self, idx: int) -> tuple[torch.Tensor, torch.Tensor]:
+        idx = int(idx)
+        if idx < 0 or idx >= self.n_windows:
+            raise IndexError(f"Window index {idx} is out of range for {self.n_windows} windows.")
+        return self._window_from_start(idx * self.stride)
+
+
+class RandomWindowSampler(torch.utils.data.Sampler[int]):
+    """Deterministically sample overlapping training windows without materializing them."""
+
+    def __init__(
+        self,
+        num_start_positions: int,
+        *,
+        samples_per_epoch: int,
+        seed: int = 0,
+        num_replicas: int = 1,
+        rank: int = 0,
+        drop_last: bool = False,
+    ) -> None:
+        if num_start_positions <= 0:
+            raise ValueError("RandomWindowSampler requires at least one valid window.")
+        if samples_per_epoch <= 0:
+            raise ValueError("samples_per_epoch must be positive.")
+        if num_replicas <= 0:
+            raise ValueError("num_replicas must be positive.")
+        if rank < 0 or rank >= num_replicas:
+            raise ValueError(f"Invalid rank {rank} for num_replicas={num_replicas}.")
+        if samples_per_epoch > num_start_positions:
+            raise ValueError(
+                "samples_per_epoch must not exceed the number of valid window starts "
+                f"({num_start_positions})."
+            )
+
+        self.num_start_positions = int(num_start_positions)
+        self.samples_per_epoch = int(samples_per_epoch)
+        self.seed = int(seed)
+        self.num_replicas = int(num_replicas)
+        self.rank = int(rank)
+        self.drop_last = bool(drop_last)
+        self.epoch = 0
+
+        if self.drop_last and self.samples_per_epoch % self.num_replicas != 0:
+            self.num_samples = math.ceil(
+                (self.samples_per_epoch - self.num_replicas) / self.num_replicas
+            )
+        else:
+            self.num_samples = math.ceil(self.samples_per_epoch / self.num_replicas)
+        self.total_size = self.num_samples * self.num_replicas
+
+    def __len__(self) -> int:
+        return self.num_samples
+
+    def set_epoch(self, epoch: int) -> None:
+        self.epoch = int(epoch)
+
+    def set_seed(self, seed: int) -> None:
+        self.seed = int(seed)
+
+    def _permutation_parameters(self) -> tuple[int, int]:
+        modulus = self.num_start_positions
+        if modulus == 1:
+            return 0, 1
+
+        base = _mix_u64(self.seed)
+        offset = (base + self.epoch) % modulus
+        step_seed = _mix_u64(base ^ ((self.epoch + 1) * 0xD1B54A32D192ED03))
+        step = 1 + (step_seed % (modulus - 1))
+        while math.gcd(step, modulus) != 1:
+            step += 1
+            if step >= modulus:
+                step = 1
+        return offset, step
+
+    def __iter__(self) -> Iterator[int]:
+        offset, step = self._permutation_parameters()
+        modulus = self.num_start_positions
+        if self.drop_last:
+            total_size = min(self.total_size, self.samples_per_epoch)
+        else:
+            total_size = self.total_size
+
+        for position in range(self.rank, total_size, self.num_replicas):
+            permuted = position % modulus
+            yield (offset + permuted * step) % modulus
 
 
 # ── LR Schedule ──────────────────────────────────────────────────────────────
@@ -604,7 +733,7 @@ def load_checkpoint(path: str, model: nn.Module,
 # ── Evaluation ───────────────────────────────────────────────────────────────
 
 @torch.no_grad()
-def estimate_loss(model: nn.Module, dataset: PretrainingDataset,
+def estimate_loss(model: nn.Module, dataset: torch.utils.data.Dataset,
                   device: torch.device, autocast_ctx, batch_size: int,
                   max_batches: int = 20, *, num_workers: int = 0,
                   pin_memory: bool = False) -> dict:
@@ -737,16 +866,16 @@ def _build_epoch_iterator(
     train_loader: torch.utils.data.DataLoader,
     *,
     epoch: int,
-    train_sampler: DistributedSampler | None,
-    shuffle_generator: torch.Generator | None,
+    train_sampler: torch.utils.data.Sampler[int] | None,
     data_seed: int,
     skip_micro_batches: int = 0,
 ) -> Iterator[tuple[torch.Tensor, torch.Tensor]]:
     """Create a deterministic iterator for one training epoch."""
     if train_sampler is not None:
-        train_sampler.set_epoch(epoch)
-    elif shuffle_generator is not None:
-        shuffle_generator.manual_seed(data_seed + epoch)
+        if hasattr(train_sampler, "set_seed"):
+            train_sampler.set_seed(data_seed)
+        if hasattr(train_sampler, "set_epoch"):
+            train_sampler.set_epoch(epoch)
 
     data_iter = iter(train_loader)
     for _ in range(skip_micro_batches):
@@ -918,33 +1047,61 @@ def run_train(
         )
 
     # data
-    train_ds = PretrainingDataset(tc["train_bin"], mc["context_length"])
+    train_ds = WindowDataset(tc["train_bin"], mc["context_length"])
+    train_samples_per_epoch = tc.get("train_samples_per_epoch")
+    if train_samples_per_epoch is None:
+        train_samples_per_epoch = len(train_ds.data) // (mc["context_length"] + 1)
+    train_samples_per_epoch = int(train_samples_per_epoch)
+    if train_samples_per_epoch <= 0:
+        raise ValueError(
+            "Training bin does not contain enough tokens for a single context window."
+        )
+
     val_ds = None
     if os.path.exists(tc["val_bin"]) and (not distributed or is_master):
-        val_ds = PretrainingDataset(tc["val_bin"], mc["context_length"])
+        val_stride = int(tc.get("val_sequence_stride") or mc["context_length"])
+        val_ds = StridedWindowDataset(
+            tc["val_bin"],
+            mc["context_length"],
+            stride=val_stride,
+        )
 
     pin_memory = bool(tc.get("pin_memory", True)) and device.type == "cuda"
     num_workers = int(tc.get("num_workers", 0))
-    train_sampler = None
-    train_shuffle_generator = None
-    if distributed:
-        train_sampler = DistributedSampler(
-            train_ds, num_replicas=world_size, rank=rank, shuffle=True, drop_last=True,
-        )
-    else:
-        train_shuffle_generator = torch.Generator()
+    train_sampler = RandomWindowSampler(
+        train_ds.num_start_positions,
+        samples_per_epoch=train_samples_per_epoch,
+        num_replicas=world_size if distributed else 1,
+        rank=rank,
+        drop_last=distributed,
+    )
 
     train_loader = torch.utils.data.DataLoader(
         train_ds,
         batch_size=tc["batch_size"],
         sampler=train_sampler,
-        shuffle=train_sampler is None,
-        generator=train_shuffle_generator,
+        shuffle=False,
         num_workers=num_workers,
         pin_memory=pin_memory,
         drop_last=distributed,
         persistent_workers=num_workers > 0,
     )
+
+    if is_master:
+        log.info(
+            "train windows=random-overlapping | tokens=%d | valid_starts=%d | "
+            "sampled_windows_per_epoch=%d",
+            len(train_ds.data),
+            train_ds.num_start_positions,
+            train_samples_per_epoch,
+        )
+        if val_ds is not None:
+            log.info(
+                "val windows=sequential | tokens=%d | stride=%d | windows=%d",
+                len(val_ds.data),
+                val_ds.stride,
+                len(val_ds),
+            )
 
     # model
     model = ParrotLLM(project_config_payload).to(device)
@@ -1081,7 +1238,6 @@ def run_train(
             train_loader,
             epoch=current_epoch,
             train_sampler=train_sampler,
-            shuffle_generator=train_shuffle_generator,
             data_seed=data_seed,
             skip_micro_batches=resume_micro_batch,
         )
@@ -1109,7 +1265,6 @@ def run_train(
                     train_loader,
                     epoch=current_epoch,
                     train_sampler=train_sampler,
-                    shuffle_generator=train_shuffle_generator,
                     data_seed=data_seed,
                 )
 
@@ -1388,7 +1543,6 @@ def run_train(
                     train_loader,
                     epoch=next_epoch,
                     train_sampler=train_sampler,
-                    shuffle_generator=train_shuffle_generator,
                     data_seed=data_seed,
                 )
             current_epoch = next_epoch

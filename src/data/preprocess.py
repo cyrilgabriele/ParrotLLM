@@ -1365,24 +1365,20 @@ def run_preprocess(args: PreprocessConfig, seed: int) -> None:
     train_tokens = token_array[n_val:]
 
 
-    chunk_size = args.context_length + 1
-    def _pad_to_chunk(arr: np.ndarray) -> np.ndarray:
-        """Trim arr to the largest multiple of chunk_size by discarding tail tokens.
-
-        The data loader slices the flat token array into chunks of exactly
-        context_length + 1 tokens (input + label shifted by one position).
-        Any remainder shorter than a full chunk would be silently ignored at
-        load time; trimming here keeps the printed token counts accurate.
-        """
-        remainder = len(arr) % chunk_size
-        if remainder == 0:
-            return arr
-        return arr[:-remainder]
-
-    train_tokens = _pad_to_chunk(train_tokens)
-    val_tokens   = _pad_to_chunk(val_tokens)
-    log.info(f"  train: {len(train_tokens):,} tokens → {len(train_tokens) // chunk_size:,} complete chunks (chunk_size={chunk_size})")
-    log.info(f"  val:   {len(val_tokens):,} tokens → {len(val_tokens) // chunk_size:,} complete chunks")
+    window_size = args.context_length + 1
+    train_windows = max(0, len(train_tokens) - args.context_length)
+    val_windows = max(0, len(val_tokens) - args.context_length)
+    log.info(
+        "  train: %s tokens → %s possible context windows (window_size=%s)",
+        f"{len(train_tokens):,}",
+        f"{train_windows:,}",
+        window_size,
+    )
+    log.info(
+        "  val:   %s tokens → %s possible context windows",
+        f"{len(val_tokens):,}",
+        f"{val_windows:,}",
+    )
 
     # Save
     train_path = out_dir / "train.bin"

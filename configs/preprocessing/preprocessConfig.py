@@ -34,11 +34,10 @@ class PreprocessConfig(BaseModel):
     append_eos_token: bool = Field(..., description="Append EOS token per document before saving.")
     token_dtype: Literal["uint16", "uint32"] = Field(..., description="Output dtype for binary files.")
     min_tokens: int = Field(..., ge=1, description="Minimum tokens required to keep a document.")
-    # Must match model.context_length in configs/default.yaml.  The training
-    # data loader counts chunks via integer division, so any tail tokens that
-    # don’t fill a complete window would be silently dropped.  Knowing the
-    # context length at save time lets Phase 8 pad both splits to exact
-    # multiples of (context_length + 1) and avoid this loss entirely.
+    # Used when reporting how many downstream context windows the saved flat
+    # token arrays can support. Preprocessing keeps all tokens; training and
+    # evaluation now handle windowing dynamically instead of requiring the
+    # binaries to be exact multiples of (context_length + 1).
     context_length: int = Field(default=1024, ge=1)
 
     # ── Token-budget subset download ───────────────────────────────────────────────

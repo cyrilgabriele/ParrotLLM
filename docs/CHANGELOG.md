@@ -24,6 +24,30 @@ Track what was changed, why it was changed, and any important notes.
 ### [2026-04-08] - Cyril Gabriele
 
 #### What
+- Replaced the old non-overlapping pretraining chunk path in `src/training/trainer.py` with a window-based token dataset plus a deterministic `RandomWindowSampler`, so training now draws randomized overlapping context windows instead of slicing the token stream at `idx * (context_length + 1)`
+- Added `StridedWindowDataset` for deterministic validation/evaluation windows, so validation remains stable and cheap while training uses overlapping randomized samples
+- Kept resume semantics exact by integrating the new sampler into the existing epoch/micro-batch restore flow instead of moving randomness into `__getitem__`
+- Added `training.train_samples_per_epoch` and `training.val_sequence_stride` to `configs/training/trainingConfig.py` and exposed both in `configs/default.yaml`
+- Kept the default epoch budget equal to the legacy non-overlapping chunk count when `train_samples_per_epoch` is unset, so the number of sampled training windows per epoch stays comparable unless explicitly increased
+- Removed the preprocessing-time trimming of `train.bin` and `val.bin` to exact multiples of `(context_length + 1)` in `src/data/preprocess.py`; preprocessing now keeps all tokens and reports the number of possible downstream context windows instead
+- Updated the preprocessing config comment in `configs/preprocessing/preprocessConfig.py` so it no longer documents the old chunk-aligned assumption
+- Added `tests/training/test_sequence_sampling.py` covering sampler determinism, epoch variation, DDP-style sharding, and strided validation windows
+
+#### Why
+- The previous trainer only exposed each token stream position to the model once per dataset pass in a non-overlapping chunk layout, which is not the established sliding-window style the training setup was intended to use
+- A literal stride-1 dataset combined with the existing `DistributedSampler` would have been unsafe at scale because it would force materialization/shuffling over the full overlapping-window index space
+- Sampling overlapping windows through a deterministic sampler preserves the intended coverage behavior while remaining scalable under DDP and compatible with exact checkpoint resume
+- Keeping validation deterministic and strided avoids introducing noisy random validation subsets while still benefiting from the new dynamic windowing approach
+- Removing preprocessing-time tail trimming avoids silently discarding usable tokens now that training and evaluation windowing are handled dynamically at load time
+
+#### Remarks
+- Verified with `UV_CACHE_DIR=.uv_cache uv run --no-sync --python .venv/bin/python python -m pytest tests/training/test_sequence_sampling.py tests/training/test_lr_scheduler.py tests/training/test_distributed_eval.py`
+- Targeted validation passed: `21 passed in 12.99s`
+- Existing `.bin` files remain usable with the new trainer, but any tail tokens that were already discarded by older preprocessing runs can only be recovered by rerunning preprocessing
+
+### [2026-04-08] - Cyril Gabriele
+
+#### What
 - Fixed the model architecture logger in `src/training/trainer.py` so it unwraps `torch.compile` and DDP wrappers before counting parameters or calling `torchinfo.summary()`
 - Reused the existing `_unwrap_model()` helper inside `_log_model_architecture()` so compiled `ParrotLLM` runs no longer pass the wrapper object into `torchinfo`
 - Reworked `src/model/transformer.py` so training/eval can compute CE loss and optional z-loss without returning full logits, using chunked `F.linear` + `F.cross_entropy(..., reduction="sum")` over flattened token rows

@@ -28,6 +28,10 @@ training:
   # Match Exp C per-rank batching so compile/DDP run through the same path.
   batch_size: 32
   gradient_accumulation_steps: 1
+
+  train_samples_per_epoch: null   # null = legacy-sized epoch budget, but drawn from random overlapping windows
+  val_sequence_stride: null       # null = context_length; deterministic contiguous validation windows
+
  
   # Keep the smoke test short; everything else mirrors Exp C.
   max_steps: 12

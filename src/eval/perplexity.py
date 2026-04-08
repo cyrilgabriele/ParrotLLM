@@ -97,6 +97,7 @@ def eval_wikitext(
 
     subset = dataset_cfg.subset if dataset_cfg and dataset_cfg.subset else "wikitext-103-raw-v1"
     split = dataset_cfg.split if dataset_cfg and dataset_cfg.split else "test"
+    stride = dataset_cfg.stride if dataset_cfg and dataset_cfg.stride else None
 
     load_kwargs = {"split": split}
     if hf_token:
@@ -112,6 +113,7 @@ def eval_wikitext(
         device,
         batch_size,
         max_sequences,
+        stride=stride,
     )
     return ppl
 
@@ -121,6 +123,7 @@ def eval_owt_val(
 ):
     mc = config["model"]
     val_path = dataset_cfg.path if dataset_cfg and dataset_cfg.path else "data/processed/val.bin"
+    stride = dataset_cfg.stride if dataset_cfg and dataset_cfg.stride else None
 
     data = np.memmap(val_path, dtype=np.uint16, mode="r")
     token_ids = torch.from_numpy(data.astype(np.int64))
@@ -132,6 +135,7 @@ def eval_owt_val(
         device,
         batch_size,
         max_sequences,
+        stride=stride,
     )
     return ppl
 

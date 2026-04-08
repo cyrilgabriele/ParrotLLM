@@ -1,0 +1,32 @@
+# Variant C (streaming): 5-minute test run
+streaming_preprocess:
+  max_time_seconds: 300
+  lang: en
+  data_dir: data
+  seed: 42
+  shuffle_buffer_size: 100000
+  stream_batch_size: 5000
+  filter_mode: heuristic
+  skip_dedup: false
+  skip_decontam: false
+  skip_code_filter: false
+  skip_quality_filter: false
+  skip_ellipsis_filter: false
+  skip_topic_filter: false
+  append_eos_token: true
+  token_dtype: uint16
+  context_length: 1024
+  minimum_tokens_per_doc: 64
+  validation_split_ratio: 0.01
+  topic_classes:
+    - World
+    - Business
+    - Sci/Tech
+  topic_distribution:
+    World: 0.34
+    Business: 0.33
+    Sci/Tech: 0.33
+
+logging:
+  console_level: INFO
+  file_level: DEBUG

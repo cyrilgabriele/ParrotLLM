@@ -15,7 +15,7 @@ def main() -> None:
     parser.add_argument(
         "--stage",
         required=True,
-        choices=["preprocess", "train", "tune", "eval", "inference", "chat", "dashboard"],
+        choices=["preprocess", "preprocess-streaming", "train", "tune", "eval", "inference", "chat", "dashboard"],
     )
     parser.add_argument("--config", type=Path, default=Path("configs/default.yaml"))
     parser.add_argument("--checkpoint", default=None)
@@ -73,6 +73,15 @@ def main() -> None:
         from src.data.preprocess import run_preprocess
 
         run_preprocess(preprocess_cfg, SEED)
+        return
+
+    if args.stage == "preprocess-streaming":
+        streaming_cfg = _require_section(
+            project_config.streaming_preprocess, "streaming_preprocess"
+        )
+        from src.data.preprocess_streaming import run_preprocess_streaming
+
+        run_preprocess_streaming(streaming_cfg)
         return
 
     if args.stage == "tune":

@@ -34,10 +34,9 @@ class PreprocessConfig(BaseModel):
     append_eos_token: bool = Field(..., description="Append EOS token per document before saving.")
     token_dtype: Literal["uint16", "uint32"] = Field(..., description="Output dtype for binary files.")
     min_tokens: int = Field(..., ge=1, description="Minimum tokens required to keep a document.")
-    # Used when reporting how many downstream context windows the saved flat
-    # token arrays can support. Preprocessing keeps all tokens; training and
-    # evaluation now handle windowing dynamically instead of requiring the
-    # binaries to be exact multiples of (context_length + 1).
+    # Used when reporting how many sliding-window starts the saved flat token
+    # arrays can support. Preprocessing keeps all tokens; training and
+    # evaluation handle windowing dynamically via sliding windows.
     context_length: int = Field(default=1024, ge=1)
 
     # ── Token-budget subset download ───────────────────────────────────────────────
@@ -275,4 +274,100 @@ class PreprocessConfig(BaseModel):
                 f"Topic weights sum to {weight_sum:.3f} instead of 1.0; they will be normalized.",
                 stacklevel=3,
             )
+        return value
+
+
+class StreamingPreprocessConfig(BaseModel):
+    """Configuration for the time-bounded streaming preprocessing pipeline.
+
+    Instead of downloading a fixed subset then processing, this pipeline
+    streams documents from HF, filters each micro-batch inline, and stops
+    accepting new documents when the time budget expires.  Dedup, tokenization,
+    and binary output happen once at the end on the accumulated survivors.
+    """
+
+    max_time_seconds: int = Field(
+        ..., ge=60,
+        description="Wall-clock time budget in seconds. Streaming + filtering stops when this expires; "
+                    "dedup/tokenize/write happen afterward (not counted against the budget).",
+    )
+    lang: str = Field(default="en", min_length=1, description="Target ISO language code.")
+    data_dir: Path = Field(..., description="Root directory containing downloaded datasets and models.")
+    seed: int = Field(default=42, description="Random seed for HF stream shuffle.")
+    shuffle_buffer_size: int = Field(
+        default=100_000, ge=1_000,
+        description="Buffer size for HF streaming shuffle.",
+    )
+    stream_batch_size: int = Field(
+        default=5_000, ge=100,
+        description="Documents to accumulate before running filter phases on a micro-batch.",
+    )
+
+    # ── Filter toggles (same semantics as PreprocessConfig) ────────────────────
+    filter_mode: Literal["none", "heuristic", "classifier"] = Field(
+        default="heuristic", description="Filtering mode for code/quality phases.",
+    )
+    skip_dedup: bool = Field(default=False, description="Skip MinHash deduplication.")
+    skip_decontam: bool = Field(default=False, description="Skip decontamination.")
+    skip_code_filter: bool = Field(default=False, description="Skip code/artifact filtering.")
+    skip_quality_filter: bool = Field(default=False, description="Skip quality filtering.")
+    skip_ellipsis_filter: bool = Field(default=False, description="Skip ellipsis filtering.")
+    skip_topic_filter: bool = Field(default=False, description="Force-skip topic filtering.")
+    append_eos_token: bool = Field(default=True, description="Append EOS token per document.")
+    token_dtype: Literal["uint16", "uint32"] = Field(default="uint16", description="Output dtype.")
+    context_length: int = Field(default=1024, ge=1)
+    minimum_tokens_per_doc: int = Field(default=64, ge=1, description="Min tokens per doc after tokenization.")
+    validation_split_ratio: float = Field(default=0.01, ge=0.0, le=1.0)
+
+    # ── Topic ──────────────────────────────────────────────────────────────────
+    topic_classes: list[str] | None = Field(default=None)
+    topic_distribution: dict[str, float] | None = Field(default=None)
+    topic_text_truncation: int = Field(default=256, ge=1)
+    topic_batch_size: int = Field(default=512, ge=1)
+
+    # ── Language detection ─────────────────────────────────────────────────────
+    language_confidence_threshold: float = Field(default=0.8, ge=0.0, le=1.0)
+
+    # ── Tokenizer ──────────────────────────────────────────────────────────────
+    tokenizer_name: str | None = Field(default=None)
+
+    # ── Dedup params ───────────────────────────────────────────────────────────
+    dedup_num_perm: int = Field(default=16, ge=1)
+    dedup_bands: int = Field(default=4, ge=1)
+    dedup_rows: int = Field(default=4, ge=1)
+    dedup_shingle_size: int = Field(default=5, ge=1)
+    dedup_threshold: float = Field(default=0.8, ge=0.0, le=1.0)
+
+    model_config = ConfigDict(extra="ignore")
+
+    @field_validator("data_dir", mode="before")
+    @classmethod
+    def _coerce_data_dir(cls, value):
+        return Path(str(value)) if not isinstance(value, Path) else value
+
+    @field_validator("topic_classes")
+    @classmethod
+    def _validate_topic_classes(cls, value: list[str] | None) -> list[str] | None:
+        if not value:
+            return None
+        invalid = sorted(set(value) - VALID_TOPIC_CLASSES)
+        if invalid:
+            raise ValueError(
+                f"topic_classes contains invalid labels: {', '.join(invalid)}; "
+                f"valid classes are {', '.join(sorted(VALID_TOPIC_CLASSES))}."
+            )
+        return value
+
+    @field_validator("topic_distribution")
+    @classmethod
+    def _validate_topic_distribution(
+        cls, value: dict[str, float] | None,
+    ) -> dict[str, float] | None:
+        if not value:
+            return None
+        for key in value:
+            if key not in VALID_TOPIC_CLASSES:
+                raise ValueError(f"Invalid topic label '{key}'.")
+        if sum(value.values()) <= 0:
+            raise ValueError("topic_distribution weights must sum to a positive value.")
         return value

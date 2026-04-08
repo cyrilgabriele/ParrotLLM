@@ -1053,7 +1053,7 @@ def run_train(
     train_ds = WindowDataset(tc["train_bin"], mc["context_length"])
     train_samples_per_epoch = tc.get("train_samples_per_epoch")
     if train_samples_per_epoch is None:
-        train_samples_per_epoch = len(train_ds.data) // (mc["context_length"] + 1)
+        train_samples_per_epoch = train_ds.num_start_positions
     train_samples_per_epoch = int(train_samples_per_epoch)
     if train_samples_per_epoch <= 0:
         raise ValueError(
@@ -1062,7 +1062,7 @@ def run_train(
 
     val_ds = None
     if os.path.exists(tc["val_bin"]) and (not distributed or is_master):
-        val_stride = int(tc.get("val_sequence_stride") or mc["context_length"])
+        val_stride = int(tc.get("val_sequence_stride") or mc["context_length"] // 2)
         val_ds = StridedWindowDataset(
             tc["val_bin"],
             mc["context_length"],
@@ -1213,6 +1213,9 @@ def run_train(
     # ── training loop ─────────────────────────────────────────────────────────
     model.train()
     grad_accum = tc["gradient_accumulation_steps"]
+    # Tokens processed per optimizer step (may count the same token more than
+    # once across overlapping sliding windows — this is a throughput metric,
+    # not a unique-token-coverage metric).
     tokens_per_step: int = tc["batch_size"] * mc["context_length"] * grad_accum
     total_micro_batches = len(train_loader)
     if total_micro_batches <= 0:

@@ -1379,17 +1379,16 @@ def run_preprocess(args: PreprocessConfig, seed: int) -> None:
     train_tokens = token_array[n_val:]
 
 
-    window_size = args.context_length + 1
     train_windows = max(0, len(train_tokens) - args.context_length)
     val_windows = max(0, len(val_tokens) - args.context_length)
     log.info(
-        "  train: %s tokens → %s possible context windows (window_size=%s)",
+        "  train: %s tokens → %s sliding-window starts (context_length=%d)",
         f"{len(train_tokens):,}",
         f"{train_windows:,}",
-        window_size,
+        args.context_length,
     )
     log.info(
-        "  val:   %s tokens → %s possible context windows",
+        "  val:   %s tokens → %s sliding-window starts",
         f"{len(val_tokens):,}",
         f"{val_windows:,}",
     )

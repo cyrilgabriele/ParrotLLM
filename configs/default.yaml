@@ -48,8 +48,8 @@ training:
   # batching
   batch_size: 64             # per-GPU micro-batch from best tuning run
   gradient_accumulation_steps: 4  # effective batch = 64 * 4 * num_gpus
-  train_samples_per_epoch: null   # null = legacy-sized epoch budget, but drawn from random overlapping windows
-  val_sequence_stride: null       # null = context_length; deterministic contiguous validation windows
+  train_samples_per_epoch: null   # null = all sliding-window starts (n_tokens - context_length)
+  val_sequence_stride: null       # null = context_length // 2; sliding-window evaluation
 
   # optimizer — AdamW
   learning_rate: 4.261e-4

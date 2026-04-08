@@ -58,16 +58,17 @@ def main() -> None:
         )
 
     n_tokens = size_bytes // dtype_bytes
-    valid_sliding_window_starts = max(0, n_tokens - args.context_length)
-    legacy_non_overlapping_windows = n_tokens // (args.context_length + 1)
+    sliding_window_starts = max(0, n_tokens - args.context_length)
+    stride_half = max(1, args.context_length // 2)
+    eval_windows = 1 + max(0, sliding_window_starts - 1) // stride_half if sliding_window_starts > 0 else 0
 
     print(f"path: {path}")
     print(f"size_bytes: {size_bytes:,}")
     print(f"dtype: {args.dtype} ({dtype_bytes} bytes/token)")
     print(f"context_length: {args.context_length:,}")
     print(f"tokens: {n_tokens:,}")
-    print(f"valid_sliding_window_starts: {valid_sliding_window_starts:,}")
-    print(f"legacy_non_overlapping_windows: {legacy_non_overlapping_windows:,}")
+    print(f"sliding_window_starts: {sliding_window_starts:,}")
+    print(f"eval_windows (stride={stride_half}): {eval_windows:,}")
 
 
 if __name__ == "__main__":

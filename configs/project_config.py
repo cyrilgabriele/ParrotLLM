@@ -8,7 +8,7 @@ from typing import Dict
 import yaml
 from pydantic import BaseModel, ConfigDict, Field, PositiveInt, field_validator
 
-from .preprocessing.preprocessConfig import PreprocessConfig
+from .preprocessing.preprocessConfig import PreprocessConfig, StreamingPreprocessConfig
 from .training.trainingConfig import HfUploadConfig, ModelConfig, TrainingConfig
 from .tuning.tuneConfig import TuneConfig
 from .loggingConfig import LoggingConfig
@@ -21,6 +21,7 @@ class EvalDatasetConfig(BaseModel):
     path: str
     subset: str | None = None
     split: str | None = None
+    stride: int | None = None  # null = context_length // 2 (sliding window default)
 
 
 class EvalConfig(BaseModel):
@@ -67,6 +68,7 @@ class ProjectConfig(BaseModel):
     model_config = ConfigDict(extra="ignore")
 
     preprocess: PreprocessConfig | None = None
+    streaming_preprocess: StreamingPreprocessConfig | None = None
     model: ModelConfig | None = None
     training: TrainingConfig | None = None
     tune: TuneConfig | None = None

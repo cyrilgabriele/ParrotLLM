@@ -75,7 +75,7 @@ class TrainingConfig(BaseModel):
         ge=1,
         description=(
             "Optional number of random overlapping training windows to draw per epoch. "
-            "Defaults to the legacy non-overlapping chunk count."
+            "Defaults to all sliding-window starts (n_tokens - context_length)."
         ),
     )
     val_sequence_stride: int | None = Field(
@@ -83,7 +83,7 @@ class TrainingConfig(BaseModel):
         ge=1,
         description=(
             "Optional stride for deterministic validation windows. "
-            "Defaults to model.context_length."
+            "Defaults to context_length // 2 (sliding window)."
         ),
     )
 

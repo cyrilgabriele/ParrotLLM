@@ -1,6 +1,6 @@
 # Full pretraining run on Dataset C — 8 GPU cluster, 800M token budget
 # Architecture: locked from staged 8.75M → 17.5M → 40M architecture search
-# HPs: from Exp C HP tuning Trial #4 (best so far) — UPDATE once tuning finishes
+# HPs: from 40M Optuna Run 2, Trial #10 (val ppl ~51.38 on dataset A)
 # Batch remapped for 8x V100: bs=32, ga=1 preserves the Optuna winner's
 # effective batch of 256 sequences/update (single-GPU proxy used bs=64, ga=4).
 # Run with: torchrun --nproc_per_node=8 main.py --stage train --config configs/big_run/exp_c.yaml
@@ -16,7 +16,7 @@ model:
   d_ff: 768
   context_length: 1024
   bias: false
-  dropout: 0.0050
+  dropout: 0.05907333047599156
   rope_theta: 10000.0
   gradient_checkpointing: false
 
@@ -41,18 +41,18 @@ training:
   # 800,000,000 tokens / 262,144 tokens-per-step ≈ 3052 steps
   max_steps: 3052
 
-  # ── Hyperparameters (best from exp_c tuning Trial #4) ─────────────────────
-  learning_rate: 1.305e-3
-  min_lr: 1.305e-4
-  weight_decay: 0.0630
+  # ── Hyperparameters (40M Optuna Run 2, Trial #10) ─────────────────────────
+  learning_rate: 8.671641902052599e-4
+  min_lr: 8.671641902052599e-5
+  weight_decay: 0.05437007402622742
   beta1: 0.9
-  beta2: 0.9978
-  grad_clip: 1.786
+  beta2: 0.9943152258897952
+  grad_clip: 1.685833540749385
 
-  warmup_steps: 305               # ~10% of total (scaled from 1526-step run)
+  warmup_steps: 450
   lr_schedule: wsd
-  lr_decay_ratio: 0.179            # WSD decay phase = last ~18% of steps
-  z_loss_coeff: 2.75e-4
+  lr_decay_ratio: 0.17582282033955543
+  z_loss_coeff: 3.8205137184905524e-4
 
   compile: true
   save_every: 250

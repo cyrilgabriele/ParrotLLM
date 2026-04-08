@@ -1,4 +1,9 @@
-"""Evaluate perplexity on Wikitext-103 and OWT validation split."""
+"""Evaluate perplexity on Wikitext-103 and OWT validation split.
+
+Uses a sliding-window approach (stride = context_length // 2) following
+Radford et al. (2019) and the HuggingFace evaluate convention so that
+reported numbers are directly comparable to published results.
+"""
 
 import logging
 import math
@@ -8,6 +13,7 @@ log = logging.getLogger("parrotllm.eval")
 
 import numpy as np
 import torch
+import torch.nn.functional as F
 
 from configs import EvalDatasetConfig, ProjectConfig
 from src.model import ParrotLLM
@@ -22,20 +28,40 @@ def compute_perplexity(
     device: torch.device,
     batch_size: int = 32,
     max_sequences: int = 512,
+    stride: int | None = None,
 ) -> float:
+    """Token-weighted perplexity with sliding-window evaluation.
+
+    Args:
+        stride: Step between consecutive windows.  Defaults to
+            ``context_length // 2`` (sliding window, paper-comparable).
+            Set to ``context_length`` for non-overlapping evaluation
+            matching training-time ``estimate_loss``.
+    """
     model.eval()
+    if stride is None:
+        stride = context_length // 2
+
     n_tokens = len(token_ids)
-    stride = context_length
-    total_loss = 0.0
-    total_tokens = 0
+    total_nll = 0.0
+    total_scored = 0
 
-    starts = list(range(0, n_tokens - context_length, stride))[:max_sequences]
+    # Build (begin, score_from) pairs.
+    # score_from: index within the window from which tokens are scored.
+    # First window scores all positions; later windows score only the
+    # last `stride` positions (the new, non-overlapping tokens).
+    windows: list[tuple[int, int]] = []
+    for begin in range(0, n_tokens - context_length, stride):
+        score_from = 0 if begin == 0 else context_length - stride
+        windows.append((begin, score_from))
+        if len(windows) >= max_sequences:
+            break
 
-    for batch_start in range(0, len(starts), batch_size):
-        batch_offsets = starts[batch_start : batch_start + batch_size]
+    for batch_start in range(0, len(windows), batch_size):
+        batch_windows = windows[batch_start : batch_start + batch_size]
         xs, ys = [], []
-        for s in batch_offsets:
-            chunk = token_ids[s : s + context_length + 1]
+        for begin, _ in batch_windows:
+            chunk = token_ids[begin : begin + context_length + 1]
             xs.append(chunk[:-1])
             ys.append(chunk[1:])
 
@@ -43,12 +69,17 @@ def compute_perplexity(
         y = torch.stack(ys).to(device)
 
         with torch.no_grad():
-            _, loss = model(x, targets=y, return_logits=False)
-        n_toks = y.numel()
-        total_loss += loss.item() * n_toks
-        total_tokens += n_toks
+            logits, _ = model(x, targets=None, return_logits=True)
 
-    avg_loss = total_loss / total_tokens
+        # Score only the non-overlapping portion of each window.
+        for i, (_, score_from) in enumerate(batch_windows):
+            scored_logits = logits[i, score_from:]
+            scored_targets = y[i, score_from:]
+            nll = F.cross_entropy(scored_logits, scored_targets, reduction="sum")
+            total_nll += nll.item()
+            total_scored += scored_targets.numel()
+
+    avg_loss = total_nll / total_scored
     return math.exp(avg_loss)
 
 

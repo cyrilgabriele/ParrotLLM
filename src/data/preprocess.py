@@ -920,6 +920,19 @@ def run_preprocess(args: PreprocessConfig, seed: int) -> None:
     subset_seed = seed
 
     if target_tokens is not None:
+        # Estimate topic-filter attrition so we download enough raw documents.
+        # AG News has 4 roughly-equal classes; keeping a subset removes ~1/4 per
+        # dropped class.  This compounds with the base pipeline attrition rate.
+        topic_classes = getattr(args, "topic_classes", None)
+        skip_topic = getattr(args, "skip_topic_filter", False)
+        _N_AG_NEWS_CLASSES = 4
+        if topic_classes and not skip_topic:
+            topic_keep_frac = len(topic_classes) / _N_AG_NEWS_CLASSES
+        else:
+            topic_keep_frac = 1.0
+        from src.scripts.download_data import _PIPELINE_ATTRITION_RATE
+        combined_attrition = 1.0 - topic_keep_frac * (1.0 - _PIPELINE_ATTRITION_RATE)
+
         subset_path = data_dir / f"openwebtext-subset-{target_tokens}-seed{subset_seed}"
         if not subset_path.exists():
             log.info(
@@ -930,6 +943,7 @@ def run_preprocess(args: PreprocessConfig, seed: int) -> None:
             download_openwebtext_subset_by_tokens(
                 target_tokens=target_tokens,
                 seed=subset_seed,
+                attrition_rate=combined_attrition,
                 data_dir=data_dir,
             )
         log.info(

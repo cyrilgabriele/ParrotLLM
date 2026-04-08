@@ -48,15 +48,15 @@ training:
   keep_best_checkpoints: 5
   early_stopping_patience: 3
   early_stopping_min_delta: 0.0
+  
+  runs_dir: runs/fast_learn
+  log_every: 10
 
   hf_upload:
     repo_id: ParrotLabs/Preprocessed
     repo_type: dataset
     # path_in_repo: ""
     # private: true
-
-  runs_dir: runs/fast_learn
-  log_every: 10
 
 logging:
   console_level: INFO

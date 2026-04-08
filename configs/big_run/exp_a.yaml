@@ -1,6 +1,8 @@
 # Full pretraining run on Dataset A — 8 GPU cluster, 800M token budget
 # Architecture: locked from staged 8.75M → 17.5M → 40M architecture search
 # HPs: from Exp A HP tuning Trial #10 (study: parrotllm-40mio-hp, val ppl=51.38)
+# Batch remapped for 8x V100: bs=32, ga=1 preserves the Optuna winner's
+# effective batch of 256 sequences/update (single-GPU proxy used bs=64, ga=4).
 # Run with: torchrun --nproc_per_node=8 main.py --stage train --config configs/big_run/exp_a.yaml
 
 model:
@@ -26,14 +28,14 @@ training:
   pin_memory: true
 
   # ── Cluster batching ──────────────────────────────────────────────────────
-  # 8 GPUs × bs=64 × ga=1 × ctx=1024 = 524,288 tokens / optimizer step
-  # Effective global batch = 64 × 8 × 1 = 512 sequences
-  batch_size: 64
+  # 8 GPUs × bs=32 × ga=1 × ctx=1024 = 262,144 tokens / optimizer step
+  # Effective global batch = 32 × 8 × 1 = 256 sequences
+  batch_size: 32
   gradient_accumulation_steps: 1
 
   # ── 800M token budget ─────────────────────────────────────────────────────
-  # 800,000,000 tokens / 524,288 tokens-per-step ≈ 1526 steps
-  max_steps: 1526
+  # 800,000,000 tokens / 262,144 tokens-per-step ≈ 3052 steps
+  max_steps: 3052
 
   # ── Hyperparameters (best from exp_a tuning Trial #10, val ppl=51.38) ─────
   learning_rate: 8.672e-4
@@ -43,7 +45,7 @@ training:
   beta2: 0.9943
   grad_clip: 1.686
 
-  warmup_steps: 229               # ~15% of total (scaled from tuned 450 @ 3000 steps)
+  warmup_steps: 450               # ~15% of total; matches tuned 450 @ 3000-step proxy
   lr_schedule: wsd
   lr_decay_ratio: 0.1758           # WSD decay phase = last ~18% of steps
   z_loss_coeff: 3.821e-4
@@ -59,6 +61,12 @@ training:
 
   runs_dir: runs/big_run/exp_a
   log_every: 10
+
+  hf_upload:
+    repo_id: ParrotLabs/Preprocessed
+    repo_type: dataset
+    # path_in_repo: ""
+    # private: true
 
 logging:
   console_level: INFO

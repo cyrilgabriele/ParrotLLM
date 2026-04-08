@@ -1,6 +1,8 @@
 # Full pretraining run on Dataset C — 8 GPU cluster, 800M token budget
 # Architecture: locked from staged 8.75M → 17.5M → 40M architecture search
 # HPs: from Exp C HP tuning Trial #4 (best so far) — UPDATE once tuning finishes
+# Batch remapped for 8x V100: bs=32, ga=1 preserves the Optuna winner's
+# effective batch of 256 sequences/update (single-GPU proxy used bs=64, ga=4).
 # Run with: torchrun --nproc_per_node=8 main.py --stage train --config configs/big_run/exp_c.yaml
 
 model:
@@ -26,14 +28,14 @@ training:
   pin_memory: true
 
   # ── Cluster batching ──────────────────────────────────────────────────────
-  # 8 GPUs × bs=64 × ga=1 × ctx=1024 = 524,288 tokens / optimizer step
-  # Effective global batch = 64 × 8 × 1 = 512 sequences
-  batch_size: 64
+  # 8 GPUs × bs=32 × ga=1 × ctx=1024 = 262,144 tokens / optimizer step
+  # Effective global batch = 32 × 8 × 1 = 256 sequences
+  batch_size: 32
   gradient_accumulation_steps: 1
 
   # ── 800M token budget ─────────────────────────────────────────────────────
-  # 800,000,000 tokens / 524,288 tokens-per-step ≈ 1526 steps
-  max_steps: 1526
+  # 800,000,000 tokens / 262,144 tokens-per-step ≈ 3052 steps
+  max_steps: 3052
 
   # ── Hyperparameters (best from exp_c tuning Trial #4) ─────────────────────
   learning_rate: 1.305e-3
@@ -43,7 +45,7 @@ training:
   beta2: 0.9978
   grad_clip: 1.786
 
-  warmup_steps: 150               # ~10% of total
+  warmup_steps: 305               # ~10% of total (scaled from 1526-step run)
   lr_schedule: wsd
   lr_decay_ratio: 0.179            # WSD decay phase = last ~18% of steps
   z_loss_coeff: 2.75e-4
@@ -59,6 +61,12 @@ training:
 
   runs_dir: runs/big_run/exp_c
   log_every: 10
+
+  hf_upload:
+    repo_id: ParrotLabs/Preprocessed
+    repo_type: dataset
+    # path_in_repo: ""
+    # private: true
 
 logging:
   console_level: INFO

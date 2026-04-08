@@ -293,6 +293,10 @@ class StreamingPreprocessConfig(BaseModel):
     )
     lang: str = Field(default="en", min_length=1, description="Target ISO language code.")
     data_dir: Path = Field(..., description="Root directory containing downloaded datasets and models.")
+    output_dir: Path | None = Field(
+        default=None,
+        description="Directory to write train.bin/val.bin. Defaults to <data_dir>/processed.",
+    )
     seed: int = Field(default=42, description="Random seed for HF stream shuffle.")
     shuffle_buffer_size: int = Field(
         default=100_000, ge=1_000,

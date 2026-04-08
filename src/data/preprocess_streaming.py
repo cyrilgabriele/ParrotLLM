@@ -184,7 +184,7 @@ def run_preprocess_streaming(args: StreamingPreprocessConfig) -> None:
     disable_caching()
 
     data_dir = Path(args.data_dir)
-    out_dir = data_dir / "processed"
+    out_dir = Path(args.output_dir) if args.output_dir else data_dir / "processed"
     out_dir.mkdir(parents=True, exist_ok=True)
 
     seed = args.seed

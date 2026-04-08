@@ -10,6 +10,7 @@ streaming_preprocess:
   max_time_seconds: 36000          # 10 hours of streaming + filtering
   lang: en
   data_dir: data
+  output_dir: data/processed/filter_c
   seed: 42
   shuffle_buffer_size: 100000
   stream_batch_size: 5000

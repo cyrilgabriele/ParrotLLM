@@ -1,0 +1,96 @@
+# Optuna Hyperparameter Tuning Configuration — 17.5M Architecture Search
+# Run with: python main.py --stage tune --config configs/tuning/model_achitecture/17_5mio_model_tuning.yaml
+# Narrowed architecture search based on 8.75M results (wide & shallow, 2 heads, d_ff ratio ~2.0)
+# Validates that these ratios hold at 2× scale before locking architecture for the 35.5M model.
+
+# ── Proxy model — anchor scaled from 8.75M winner ──────────────────────────────
+# 8.75M best: d_model=144, n_layers=7, n_heads=2, d_ff=288 (ppl=155.5)
+# Scaled 2×:  d_model=240, n_layers=9, n_heads=3, d_ff=480 ≈ 17.25M params
+model:
+  vocab_size: 50258
+  pad_token_id: 50257
+  bos_token_id: 50256
+  eos_token_id: 50256
+  d_model: 240                    # anchor: scaled from 144 → 240
+  n_layers: 9                     # anchor: scaled from 7 → 9
+  n_heads: 3                      # anchor: d_head=80 (also testing d_head=64 via n_heads=4)
+  d_ff: 480                       # anchor: ratio 2.0 × d_model (matching 8.75M winner)
+  context_length: 256             # shorter ctx for speed (full model uses 1024)
+  bias: false
+  dropout: 0.0
+  rope_theta: 10000.0
+
+training:
+  device: auto
+  train_bin: data/experiment-a/train.bin
+  val_bin: data/experiment-a/val.bin
+  num_workers: 4
+  batch_size: 32
+  gradient_accumulation_steps: 1
+  learning_rate: 8.0e-4
+  min_lr: 8.0e-5
+  weight_decay: 0.1
+  beta1: 0.9
+  beta2: 0.95
+  grad_clip: 1.0
+  warmup_steps: 100
+  compile: true                   # via WSL2 Ubuntu + Triton
+  max_steps: 3000                 # same proxy length as 8.75M study
+  lr_schedule: wsd
+  lr_decay_ratio: 0.1
+  z_loss_coeff: 1.0e-4
+  save_every: 50000               # disable periodic saves during tuning
+  eval_every: 750                 # eval 4 times per trial
+  checkpoint_dir: checkpoints/17_5mio_model_tuning
+  keep_last_checkpoints: 10
+  keep_best_checkpoints: 10
+  runs_dir: runs/tuning/17_5mio_model_tuning
+  log_every: 200
+
+logging:
+  console_level: INFO
+  file_level: INFO
+  components:
+    data_preprocessing: WARNING
+    model_initialization: INFO
+    training: INFO
+
+# ── Optuna study settings ─────────────────────────────────────────────────────
+tune:
+  name: parrotllm-17_5mio-architecture
+  storage: optuna_studies/parrotllm-17_5mio-architecture.db
+  n_trials: 40                    # narrower space → fewer trials needed
+  timeout: null
+  sampler: tpe
+  pruner: hyperband
+  param_budget_min: 17000000
+  param_budget_max: 17500000
+  pruner_kwargs:
+    min_resource: 750
+    max_resource: 3000
+    reduction_factor: 3
+
+  # ── Narrowed search space from 8.75M results ───────────────────────────────
+  # Key findings at 8.75M: wide & shallow wins, 2 heads, d_ff/d_model ≈ 2.0
+  # Ranges are tighter than the 8.75M study — this is a validation pass.
+  # Also includes d_head=64 options (best practice) to test against the
+  # 8.75M winner's d_head=72.
+  search_space:
+    d_model:
+      type: int
+      low: 208                    # narrowed from 104-144 → 208-256 (scaled 2×)
+      high: 256
+      step: 8
+    n_layers:
+      type: int
+      low: 6                      # shallow end (matching 8.75M signal)
+      high: 14                    # moderate depth ceiling
+      step: 1
+    n_heads:
+      type: categorical
+      choices: [2, 3, 4, 6]       # narrowed from [2,4,6,8,12,16] — 8.75M strongly favours few heads
+    d_ff:
+      type: int
+      low: 384                    # d_ff/d_model ≈ 1.8 at d_model=208
+      high: 576                   # d_ff/d_model ≈ 2.5 at d_model=240
+      step: 32

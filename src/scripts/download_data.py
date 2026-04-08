@@ -397,6 +397,14 @@ def download_exp_c():
     )
 
 
+def download_exp_c_800m():
+    """Download the 800M-token ExperimentC dataset to the final-training path."""
+    _download_preprocessed_subset(
+        subset="ExperimentC-800MioTokens",
+        out_dir=DATA_DIR / "exp_c",
+    )
+
+
 def download_exp_d():
     """Download the ExperimentD dataset to the final-training path."""
     _download_preprocessed_subset(
@@ -434,6 +442,7 @@ DOWNLOAD_TARGETS = {
     "exp-a": download_exp_a,
     "exp-b": download_exp_b,
     "exp-c": download_exp_c,
+    "exp-c-800m": download_exp_c_800m,
     "exp-d": download_exp_d,
     "exp-e": download_exp_e,
     "exp-f": download_exp_f,

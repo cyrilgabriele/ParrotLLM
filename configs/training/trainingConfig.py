@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from typing import Literal
 
-from pydantic import BaseModel, ConfigDict, Field, model_validator
+from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
 
 class ModelConfig(BaseModel):
@@ -23,6 +23,37 @@ class ModelConfig(BaseModel):
     dropout: float = Field(...)
     rope_theta: float = Field(...)
     gradient_checkpointing: bool = Field(False)
+
+
+class HfUploadConfig(BaseModel):
+    model_config = ConfigDict(extra="ignore")
+
+    repo_id: str = Field(..., description="Target Hugging Face repo in owner/name form.")
+    repo_type: Literal["model", "dataset", "space"] = Field(default="model")
+    path_in_repo: str = Field(
+        default="",
+        description=(
+            "Optional prefix inside the Hub repo. The local run path relative to the "
+            "project root is appended under this prefix."
+        ),
+    )
+    private: bool | None = Field(
+        default=None,
+        description="Privacy used only when auto-creating the target repo.",
+    )
+
+    @field_validator("repo_id")
+    @classmethod
+    def _validate_repo_id(cls, value: str) -> str:
+        repo_id = value.strip()
+        if not repo_id:
+            raise ValueError("training.hf_upload.repo_id must not be empty.")
+        return repo_id
+
+    @field_validator("path_in_repo")
+    @classmethod
+    def _normalise_path_in_repo(cls, value: str) -> str:
+        return str(value).strip().replace("\\", "/").strip("/")
 
 
 class TrainingConfig(BaseModel):
@@ -74,6 +105,13 @@ class TrainingConfig(BaseModel):
     # logging
     runs_dir: str = Field(...)
     log_every: int = Field(...)
+    hf_upload: HfUploadConfig | None = Field(
+        default=None,
+        description=(
+            "Optional Hugging Face upload target. When set, the finished run "
+            "directory is mirrored to the Hub once at the end of training."
+        ),
+    )
 
     # torch.compile toggle (disable for short HP tuning trials)
     compile: bool = Field(True)

@@ -9,7 +9,7 @@ import yaml
 from pydantic import BaseModel, ConfigDict, Field, PositiveInt, field_validator
 
 from .preprocessing.preprocessConfig import PreprocessConfig
-from .training.trainingConfig import ModelConfig, TrainingConfig
+from .training.trainingConfig import HfUploadConfig, ModelConfig, TrainingConfig
 from .tuning.tuneConfig import TuneConfig
 from .loggingConfig import LoggingConfig
 
@@ -120,6 +120,7 @@ __all__ = [
     "ChatConfig",
     "EvalConfig",
     "EvalDatasetConfig",
+    "HfUploadConfig",
     "InferenceConfig",
     "ProjectConfig",
     "load_project_config",

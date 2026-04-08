@@ -41,13 +41,19 @@ training:
   z_loss_coeff: 1.0e-4
   compile: false
 
-  save_every: 50
-  eval_every: 25
+  save_every: 1
+  eval_every: 1
   checkpoint_dir: checkpoints
   keep_last_checkpoints: 5
   keep_best_checkpoints: 5
   early_stopping_patience: 3
   early_stopping_min_delta: 0.0
+
+  hf_upload:
+    repo_id: ParrotLabs/Preprocessed
+    repo_type: dataset
+    # path_in_repo: ""
+    # private: true
 
   runs_dir: runs/fast_learn
   log_every: 10

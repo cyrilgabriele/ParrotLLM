@@ -199,7 +199,24 @@ uv run python main.py --stage chat --config configs/default.yaml
 
 Use `--mock-testing` during `--stage inference` to skip checkpoints entirely; it loads the standard Hugging Face `openai-community/gpt2` weights so you can validate the CLI without training first (the model is downloaded on demand).
 
-If you place `HF_TOKEN=...` inside `.env` (or export `HF_TOKEN`), ParrotLLM picks it up automatically to unlock faster authenticated downloads.
+If you place `HF_TOKEN=...` inside `.env` (or export `HF_TOKEN`), ParrotLLM picks it up automatically for authenticated Hugging Face downloads and end-of-training run uploads.
+
+To push completed training runs to the Hugging Face Hub as well, add an optional
+`training.hf_upload` block to your YAML:
+
+```yaml
+training:
+  runs_dir: runs
+  hf_upload:
+    repo_id: your-org/parrotllm-runs
+    repo_type: dataset
+    path_in_repo: ""
+    private: true
+```
+
+When configured, ParrotLLM still writes the run locally under `runs/.../run_*`
+and then uploads that finished run directory once at the end of training,
+preserving its relative local path inside the target Hub repo.
 
 All hyperparameters—including dataset selection, topic filtering, optimizer, inference sampling, and chat settings—live in the YAML config. The CLI only exposes the runtime knobs that make sense to change per command (prompt text, leaderboard/mocking flags, checkpoint path).
 

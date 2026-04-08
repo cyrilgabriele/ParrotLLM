@@ -76,6 +76,13 @@ training:
   # logging
   runs_dir: runs             # base directory for run outputs
   log_every: 10              # log to console every N steps
+  # Optional: mirror the finished local run folder to the Hugging Face Hub once,
+  # after training completes and all local artifacts are written.
+  # hf_upload:
+  #   repo_id: your-org/your-parrotllm-runs
+  #   repo_type: dataset
+  #   path_in_repo: ""
+  #   private: true
 
 logging:
   console_level: INFO

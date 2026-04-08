@@ -10,7 +10,8 @@ import random
 import time
 from contextlib import nullcontext
 from dataclasses import dataclass
-from typing import TYPE_CHECKING, Iterator
+from pathlib import Path, PurePosixPath
+from typing import TYPE_CHECKING, Any, Iterator, Mapping
 
 if TYPE_CHECKING:
     import optuna
@@ -24,11 +25,13 @@ from torch.nn.parallel import DistributedDataParallel as DDP
 from torch.utils.data.distributed import DistributedSampler
 
 from configs import ProjectConfig
+from configs.training.trainingConfig import HfUploadConfig
 from src.logging_utils import (
     JSONLLogger, TorchProfiler, fmt_model_summary, fmt_training_complete,
     fmt_training_start, make_run_dir, render_ascii_loss_curve, setup_logger,
 )
 from src.model import ParrotLLM
+from src.utils import maybe_load_hf_token
 
 
 # ── Dataset ──────────────────────────────────────────────────────────────────
@@ -228,6 +231,80 @@ def _unwrap_model(model: nn.Module) -> nn.Module:
     if hasattr(raw_model, "_orig_mod"):
         raw_model = raw_model._orig_mod
     return raw_model
+
+
+def resolve_hf_repo_run_path(
+    run_dir: str,
+    *,
+    repo_prefix: str = "",
+    project_root: str | Path | None = None,
+) -> str:
+    """Mirror the local run path inside the Hub repo using POSIX separators."""
+    run_path = Path(run_dir).resolve()
+    root = Path.cwd().resolve() if project_root is None else Path(project_root).resolve()
+
+    try:
+        relative_path = run_path.relative_to(root)
+    except ValueError:
+        relative_path = Path(run_path.name)
+
+    repo_parts = []
+    if repo_prefix:
+        repo_parts.append(repo_prefix.strip("/"))
+    repo_parts.extend(relative_path.parts)
+    return str(PurePosixPath(*repo_parts))
+
+
+def upload_run_dir_to_hub(
+    run_dir: str,
+    upload_config: HfUploadConfig | Mapping[str, Any],
+    *,
+    token: str | None = None,
+    project_root: str | Path | None = None,
+) -> dict[str, str | None]:
+    """Upload a completed run directory to the configured Hugging Face repo."""
+    try:
+        from huggingface_hub import HfApi, upload_folder
+    except ImportError as exc:  # pragma: no cover - dependency is present in the runtime
+        raise RuntimeError(
+            "training.hf_upload requires the `huggingface_hub` package."
+        ) from exc
+
+    cfg = (
+        upload_config
+        if isinstance(upload_config, HfUploadConfig)
+        else HfUploadConfig.model_validate(upload_config)
+    )
+    path_in_repo = resolve_hf_repo_run_path(
+        run_dir,
+        repo_prefix=cfg.path_in_repo,
+        project_root=project_root,
+    )
+    run_name = Path(run_dir).name
+    api = HfApi()
+    api.create_repo(
+        cfg.repo_id,
+        token=token,
+        private=cfg.private,
+        repo_type=cfg.repo_type,
+        exist_ok=True,
+    )
+    commit_info = upload_folder(
+        repo_id=cfg.repo_id,
+        folder_path=run_dir,
+        path_in_repo=path_in_repo,
+        commit_message=f"Upload training run {run_name}",
+        commit_description=f"ParrotLLM end-of-training sync for local run {run_dir}.",
+        token=token,
+        repo_type=cfg.repo_type,
+    )
+    return {
+        "repo_id": cfg.repo_id,
+        "repo_type": cfg.repo_type,
+        "path_in_repo": path_in_repo,
+        "commit_url": getattr(commit_info, "commit_url", None),
+        "commit_oid": getattr(commit_info, "oid", None),
+    }
 
 
 # ── Mixed Precision helpers ──────────────────────────────────────────────────
@@ -1387,6 +1464,39 @@ def run_train(
         jlog.close()
 
     if is_master:
+        hf_upload_cfg = tc_model.hf_upload
+        if hf_upload_cfg is not None:
+            log.info(
+                "Uploading completed run directory to Hugging Face: repo=%s",
+                hf_upload_cfg.repo_id,
+            )
+            try:
+                upload_result = upload_run_dir_to_hub(
+                    run_dir,
+                    hf_upload_cfg,
+                    token=maybe_load_hf_token(),
+                )
+                commit_url = upload_result.get("commit_url")
+                if commit_url:
+                    log.info(
+                        "Hugging Face upload complete: %s -> %s (%s)",
+                        upload_result["path_in_repo"],
+                        upload_result["repo_id"],
+                        commit_url,
+                    )
+                else:
+                    log.info(
+                        "Hugging Face upload complete: %s -> %s",
+                        upload_result["path_in_repo"],
+                        upload_result["repo_id"],
+                    )
+            except Exception:
+                log.exception(
+                    "Failed to upload run directory %s to Hugging Face repo %s.",
+                    run_dir,
+                    hf_upload_cfg.repo_id,
+                )
+                raise
         log.info("done")
 
     if distributed:

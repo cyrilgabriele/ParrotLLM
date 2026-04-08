@@ -1,13 +1,14 @@
-"""Generate matplotlib figures for the dashboard (light theme)."""
+"""Generate matplotlib figures for the dashboard."""
 from __future__ import annotations
 
 import matplotlib
 matplotlib.use("Agg")
 import matplotlib.pyplot as plt
 import matplotlib.gridspec as gridspec
+from pathlib import Path
 from typing import Optional
 
-from src.dashboard.metrics_reader import TrainingMetrics
+from src.dashboard.metrics_reader import TrainingMetrics, read_metrics
 
 TRAIN_COLOR = "#2563EB"   # blue
 VAL_COLOR   = "#EA580C"   # orange
@@ -132,4 +133,80 @@ def build_training_figure(metrics: TrainingMetrics) -> Optional[plt.Figure]:
     else:
         ax6.set_visible(False)
 
+    return fig
+
+
+# ── Compare overlay plot ──────────────────────────────────────────────────────
+
+_COMPARE_COLORS = [
+    "#2563EB", "#EA580C", "#16A34A", "#D97706", "#7C3AED",
+    "#DC2626", "#0891B2", "#4F46E5", "#059669", "#E11D48",
+]
+
+
+def build_compare_figure(
+    run_dirs: list[Path],
+    dark: bool = False,
+) -> Optional[plt.Figure]:
+    """Overlay train+val loss curves from multiple runs on a single figure."""
+    if not run_dirs:
+        return None
+
+    bg = "#1e1e2e" if dark else "white"
+    fg = "#cdd6f4" if dark else "#111"
+    grid_color = "#45475a" if dark else "#e0e0e0"
+
+    fig, (ax_train, ax_val) = plt.subplots(1, 2, figsize=(18, 6))
+    fig.patch.set_facecolor(bg)
+    fig.suptitle("Run Comparison", fontweight="bold", color=fg, fontsize=14)
+
+    for ax in (ax_train, ax_val):
+        ax.set_facecolor(bg)
+        ax.tick_params(colors=fg)
+        ax.xaxis.label.set_color(fg)
+        ax.yaxis.label.set_color(fg)
+        ax.title.set_color(fg)
+        ax.spines["top"].set_visible(False)
+        ax.spines["right"].set_visible(False)
+        for spine in ax.spines.values():
+            spine.set_color(fg)
+        ax.grid(axis="y", color=grid_color, linewidth=0.8, alpha=0.6)
+        ax.set_axisbelow(True)
+
+    has_train = False
+    has_val = False
+
+    for i, run_dir in enumerate(run_dirs):
+        m = read_metrics(run_dir)
+        color = _COMPARE_COLORS[i % len(_COMPARE_COLORS)]
+        label = run_dir.name
+
+        if m.steps and m.train_losses:
+            ax_train.plot(m.steps, m.train_losses, color=color, linewidth=1.5,
+                          label=label, alpha=0.85)
+            has_train = True
+
+        if m.eval_steps and m.val_losses:
+            n = min(len(m.eval_steps), len(m.val_losses))
+            ax_val.plot(m.eval_steps[:n], m.val_losses[:n], color=color,
+                        linewidth=1.5, label=label, alpha=0.85)
+            has_val = True
+
+    ax_train.set_title("Train Loss", fontweight="bold")
+    ax_train.set_xlabel("Step")
+    ax_train.set_ylabel("Loss")
+    if has_train:
+        ax_train.legend(fontsize=7, frameon=False, labelcolor=fg)
+
+    ax_val.set_title("Validation Loss", fontweight="bold")
+    ax_val.set_xlabel("Step")
+    ax_val.set_ylabel("Loss")
+    if has_val:
+        ax_val.legend(fontsize=7, frameon=False, labelcolor=fg)
+
+    if not has_train and not has_val:
+        plt.close(fig)
+        return None
+
+    fig.tight_layout()
     return fig

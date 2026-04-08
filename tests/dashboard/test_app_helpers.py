@@ -107,31 +107,31 @@ def _metrics_with_history():
 
 def test_progress_detail_shows_step():
     m = _metrics_with_history()
-    html = _fmt_progress_detail(m, m_run_dir=None)
+    html = _fmt_progress_detail(m, run_dir=None)
     assert "500" in html
 
 
 def test_progress_detail_shows_loss_delta():
     m = _metrics_with_history()
-    html = _fmt_progress_detail(m, m_run_dir=None)
+    html = _fmt_progress_detail(m, run_dir=None)
     assert "Δ" in html or "delta" in html.lower() or "-0." in html
 
 
 def test_progress_detail_shows_progress_bar():
     m = _metrics_with_history()
-    html = _fmt_progress_detail(m, m_run_dir=None)
+    html = _fmt_progress_detail(m, run_dir=None)
     assert "50" in html or "50.0" in html
 
 
 def test_progress_detail_shows_val_loss():
     m = _metrics_with_history()
-    html = _fmt_progress_detail(m, m_run_dir=None)
+    html = _fmt_progress_detail(m, run_dir=None)
     assert "3.95" in html or "3.9500" in html
 
 
 def test_progress_detail_empty_state():
     m = TrainingMetrics()
-    html = _fmt_progress_detail(m, m_run_dir=None)
+    html = _fmt_progress_detail(m, run_dir=None)
     assert "No runs found" in html
 
 

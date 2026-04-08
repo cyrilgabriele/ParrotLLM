@@ -439,7 +439,7 @@ def download_exp_c_800m():
     """Download the 800M-token ExperimentC dataset to the final-training path."""
     _download_preprocessed_subset(
         subset="ExperimentC-800MioTokens",
-        out_dir=DATA_DIR / "exp_c",
+        out_dir=DATA_DIR / "exp_c_800m",
     )
 
 

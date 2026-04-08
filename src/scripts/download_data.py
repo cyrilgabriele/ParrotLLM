@@ -312,8 +312,12 @@ def download_parrotlabs_preprocessed():
     print(f"[done] Dataset available at {out_dir}")
 
 
-def _download_preprocessed_subset(*, subset: str, out_dir: Path) -> None:
-    """Download a preprocessed subset from the ParrotLabs HF dataset repo."""
+def _download_preprocessed_subset(*, subset: str | None, out_dir: Path) -> None:
+    """Download train.bin/val.bin from the ParrotLabs HF dataset repo.
+
+    When ``subset`` is provided, files are downloaded from that subfolder.
+    When ``subset`` is ``None``, files are downloaded from the repo root.
+    """
     import requests
 
     out_dir.mkdir(parents=True, exist_ok=True)
@@ -324,7 +328,8 @@ def _download_preprocessed_subset(*, subset: str, out_dir: Path) -> None:
     token = _maybe_load_hf_token()
     headers = {"Authorization": f"Bearer {token}"} if token else {}
 
-    print(f"[download] ParrotLabs/Preprocessed ({subset}) to {out_dir}...")
+    location = f"{repo_id}/{subset}" if subset else repo_id
+    print(f"[download] {location} to {out_dir}...")
 
     for f_name in files:
         target_path = out_dir / f_name
@@ -332,7 +337,10 @@ def _download_preprocessed_subset(*, subset: str, out_dir: Path) -> None:
             print(f"  [skip] {f_name} already exists")
             continue
 
-        url = f"https://huggingface.co/datasets/{repo_id}/resolve/main/{subset}/{f_name}"
+        if subset:
+            url = f"https://huggingface.co/datasets/{repo_id}/resolve/main/{subset}/{f_name}"
+        else:
+            url = f"https://huggingface.co/datasets/{repo_id}/resolve/main/{f_name}"
 
         print(f"  Downloading {f_name}...")
         try:
@@ -467,6 +475,14 @@ def download_exp_f():
     )
 
 
+def download_preprocessed_root():
+    """Download root-level train.bin/val.bin from ParrotLabs/Preprocessed."""
+    _download_preprocessed_subset(
+        subset=None,
+        out_dir=DATA_DIR / "full_Dataset",
+    )
+
+
 def download_smoke_test():
     """Download the SmokeTest folder from the ParrotLabs HF dataset repo."""
     _download_hf_dataset_folder(
@@ -493,6 +509,7 @@ DOWNLOAD_TARGETS = {
     "exp-d": download_exp_d,
     "exp-e": download_exp_e,
     "exp-f": download_exp_f,
+    "preprocessed-root": download_preprocessed_root,
     "smoke-test": download_smoke_test,
     "smoketest": download_smoke_test,
 }

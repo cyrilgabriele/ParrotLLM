@@ -1,67 +1,72 @@
-# Fast-learning sanity-check training config.
-# Purpose: reveal quickly whether optimization and train/val curves behave
-# sensibly on a tiny, easy dataset.
-
+# Exp C-style smoke test on the small SmokeTest dataset.
+# Purpose: exercise torch.compile + DDP with the same architecture/runtime
+# settings as the main Exp C run, while keeping the dataset tiny and the run
+# short.
+ 
 model:
   vocab_size: 50258
   pad_token_id: 50257
   bos_token_id: 50256
   eos_token_id: 50256
-  d_model: 256
-  n_layers: 4
-  n_heads: 8
-  d_ff: 682
-  context_length: 256
+  d_model: 384
+  n_layers: 14
+  n_heads: 6
+  d_ff: 768
+  context_length: 1024
   bias: false
-  dropout: 0.0
+  dropout: 0.0050
   rope_theta: 10000.0
   gradient_checkpointing: false
-
+ 
 training:
   device: auto
   train_bin: data/SmokeTest/train.bin
   val_bin: data/SmokeTest/val.bin
-  num_workers: 0
+  num_workers: 4
   pin_memory: true
-
-  batch_size: 16
+ 
+  # Match Exp C per-rank batching so compile/DDP run through the same path.
+  batch_size: 32
   gradient_accumulation_steps: 1
-
-  learning_rate: 1.0e-3
-  min_lr: 1.0e-4
-  weight_decay: 0.1
+ 
+  # Keep the smoke test short; everything else mirrors Exp C.
+  max_steps: 12
+ 
+  learning_rate: 1.305e-3
+  min_lr: 1.305e-4
+  weight_decay: 0.0630
   beta1: 0.9
-  beta2: 0.95
-  grad_clip: 1.0
-
-  warmup_steps: 20
-  max_steps: 300
+  beta2: 0.9978
+  grad_clip: 1.786
+ 
+  warmup_steps: 4
   lr_schedule: wsd
-  lr_decay_ratio: 0.2
-  z_loss_coeff: 1.0e-4
-  compile: false
-
-  save_every: 1
-  eval_every: 1
+  lr_decay_ratio: 0.179
+  z_loss_coeff: 2.75e-4
+ 
+  compile: true
+  save_every: 100
+  eval_every: 100
   checkpoint_dir: checkpoints
-  keep_last_checkpoints: 5
-  keep_best_checkpoints: 5
-  early_stopping_patience: 3
-  early_stopping_min_delta: 0.0
-  
-  runs_dir: runs/fast_learn
-  log_every: 10
-
+  keep_last_checkpoints: 10
+  keep_best_checkpoints: 10
+  early_stopping_patience: 0
+  early_stopping_min_delta: 0.001
+ 
+  runs_dir: runs/smoketest/exp_c
+  log_every: 1
+ 
   hf_upload:
     repo_id: ParrotLabs/Preprocessed
     repo_type: dataset
     # path_in_repo: ""
     # private: true
-
+ 
 logging:
   console_level: INFO
   file_level: DEBUG
   components:
-    data_preprocessing: INFO
+    data_preprocessing: DEBUG
     model_initialization: INFO
     training: INFO
+ 

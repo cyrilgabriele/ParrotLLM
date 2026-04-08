@@ -24,6 +24,32 @@ Track what was changed, why it was changed, and any important notes.
 ### [2026-04-08] - Cyril Gabriele
 
 #### What
+- Fixed the model architecture logger in `src/training/trainer.py` so it unwraps `torch.compile` and DDP wrappers before counting parameters or calling `torchinfo.summary()`
+- Reused the existing `_unwrap_model()` helper inside `_log_model_architecture()` so compiled `ParrotLLM` runs no longer pass the wrapper object into `torchinfo`
+- Reworked `src/model/transformer.py` so training/eval can compute CE loss and optional z-loss without returning full logits, using chunked `F.linear` + `F.cross_entropy(..., reduction="sum")` over flattened token rows
+- Extended `ParrotLLM.forward()` with an internal loss-only path via `return_logits=False`, plus `z_loss_coeff` and `loss_chunk_rows` parameters for chunked training/evaluation
+- Updated `src/training/trainer.py` and `src/eval/perplexity.py` to use the loss-only forward path wherever logits are not needed
+- Added a transformer test that checks chunked loss equivalence against the original full-logits path, including z-loss
+
+#### Why
+- Distributed training with `compile: true` in `configs/big_run/exp_c.yaml` was crashing before training started because `torchinfo.summary()` was receiving the compiled wrapper, which raised `TypeError: ParrotLLM does not support len()`
+- After that was fixed, the first backward pass still OOMed on every V100 because the training loss path still required full vocabulary logits at shape `[32, 1024, 50258]`; under CUDA AMP, `cross_entropy` is computed in float32, so that loss path can demand an additional `6.14 GiB` logits-sized fp32 allocation per rank
+- Computing the LM head and loss in chunks removes the dominant logits-shaped peak allocation while preserving the same objective, which is a stronger fix than only chunking z-loss
+- The remote cluster traces still pointing at the pre-change line numbers indicated the cluster copy had not yet picked up the earlier local patch, so the durable solution also requires syncing the updated trainer/model code to the training machine
+
+#### Remarks
+- Verified syntax with `.venv/bin/python -m py_compile src/training/trainer.py`
+- Verified behavior manually through two training reruns of `uv run torchrun --standalone --nproc_per_node=8 main.py --stage train --config configs/big_run/exp_c.yaml`
+- The first rerun confirmed the architecture logging fix by reaching initial evaluation and the start of training
+- The second observed issue was a real CUDA OOM in backward from full-logits loss memory pressure, not another `torchrun` or NCCL failure
+- Verified locally with `.venv/bin/python -m py_compile src/model/transformer.py src/training/trainer.py src/eval/perplexity.py tests/model/test_transformer.py`
+- Verified locally with `.venv/bin/pytest tests/model/test_transformer.py -q`
+
+---
+
+### [2026-04-08] - Cyril Gabriele
+
+#### What
 - Added an optional `training.hf_upload` config block in `configs/training/trainingConfig.py` so training runs can target a defined Hugging Face repo via `repo_id`, `repo_type`, `path_in_repo`, and `private`
 - Extended `src/training/trainer.py` with a Hugging Face upload helper that mirrors the finished local run directory into the Hub repo while preserving its relative local path (for example `runs/.../run_*`)
 - Hooked the upload into the master-rank end-of-training finalization path so the run is pushed exactly once, after all local checkpoints, logs, metrics, and config artifacts have already been written

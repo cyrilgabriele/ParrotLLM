@@ -39,6 +39,25 @@ def test_model_forward_with_targets(small_config):
     assert isinstance(loss, torch.Tensor)
     assert loss.dim() == 0 # scalar
 
+def test_chunked_loss_matches_full_loss(small_config):
+    model = ParrotLLM(small_config)
+    B, T = 4, 16
+    idx = torch.randint(0, small_config["model"]["vocab_size"], (B, T))
+    targets = torch.randint(0, small_config["model"]["vocab_size"], (B, T))
+
+    logits, full_loss = model(idx, targets, z_loss_coeff=1e-4)
+    chunked_logits, chunked_loss = model(
+        idx,
+        targets,
+        return_logits=False,
+        z_loss_coeff=1e-4,
+        loss_chunk_rows=7,
+    )
+
+    assert logits.shape == (B, T, small_config["model"]["vocab_size"])
+    assert chunked_logits is None
+    assert torch.allclose(chunked_loss, full_loss, atol=1e-6, rtol=1e-5)
+
 def test_weight_tying(small_config):
     model = ParrotLLM(small_config)
     assert model.tok_emb.weight is model.lm_head.weight

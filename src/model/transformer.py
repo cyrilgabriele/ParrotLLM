@@ -203,8 +203,50 @@ class ParrotLLM(nn.Module):
             elif name.endswith("bias"):
                 nn.init.zeros_(p)
 
+    def _compute_loss_in_chunks(
+        self,
+        hidden: torch.Tensor,
+        targets: torch.Tensor,
+        *,
+        z_loss_coeff: float = 0.0,
+        loss_chunk_rows: int = 2048,
+    ) -> torch.Tensor:
+        """Compute CE (+ optional z-loss) without materializing full-sequence logits."""
+        flat_hidden = hidden.reshape(-1, hidden.size(-1))
+        flat_targets = targets.reshape(-1)
+
+        total_ce = torch.zeros((), device=hidden.device, dtype=torch.float32)
+        total_z = torch.zeros((), device=hidden.device, dtype=torch.float32)
+
+        for start in range(0, flat_hidden.size(0), loss_chunk_rows):
+            stop = start + loss_chunk_rows
+            hidden_chunk = flat_hidden[start:stop]
+            target_chunk = flat_targets[start:stop]
+            logits_chunk = F.linear(hidden_chunk, self.lm_head.weight, self.lm_head.bias)
+
+            total_ce = total_ce + F.cross_entropy(
+                logits_chunk,
+                target_chunk,
+                reduction="sum",
+            )
+            if z_loss_coeff > 0.0:
+                total_z = total_z + torch.logsumexp(
+                    logits_chunk.float(), dim=-1
+                ).pow(2).sum()
+
+        loss = total_ce / flat_targets.numel()
+        if z_loss_coeff > 0.0:
+            loss = loss + z_loss_coeff * (total_z / flat_targets.numel())
+        return loss
+
     def forward(
-        self, idx: torch.Tensor, targets: torch.Tensor | None = None,
+        self,
+        idx: torch.Tensor,
+        targets: torch.Tensor | None = None,
+        *,
+        return_logits: bool = True,
+        z_loss_coeff: float = 0.0,
+        loss_chunk_rows: int = 2048,
     ) -> tuple[torch.Tensor, torch.Tensor | None]:
         _, T = idx.shape
 
@@ -222,13 +264,25 @@ class ParrotLLM(nn.Module):
 
         if hasattr(self, "ln_f"):
             x = self.ln_f(x)
-        logits = self.lm_head(x)
 
+        logits = self.lm_head(x) if (targets is None or return_logits) else None
         loss = None
         if targets is not None:
-            loss = F.cross_entropy(
-                logits.view(-1, logits.size(-1)), targets.view(-1)
-            )
+            if logits is None:
+                loss = self._compute_loss_in_chunks(
+                    x,
+                    targets,
+                    z_loss_coeff=z_loss_coeff,
+                    loss_chunk_rows=loss_chunk_rows,
+                )
+            else:
+                loss = F.cross_entropy(
+                    logits.view(-1, logits.size(-1)), targets.view(-1)
+                )
+                if z_loss_coeff > 0.0:
+                    loss = loss + z_loss_coeff * torch.logsumexp(
+                        logits.float(), dim=-1
+                    ).pow(2).mean()
         return logits, loss
 
     def count_parameters(self) -> int:

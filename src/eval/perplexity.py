@@ -42,7 +42,7 @@ def compute_perplexity(
         y = torch.stack(ys).to(device)
 
         with torch.no_grad():
-            _, loss = model(x, targets=y)
+            _, loss = model(x, targets=y, return_logits=False)
         losses.append(loss.item())
 
     avg_loss = sum(losses) / len(losses)

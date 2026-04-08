@@ -777,11 +777,13 @@ def _log_model_architecture(log: logging.Logger, jlog: JSONLLogger,
                             model: nn.Module, mc: dict,
                             device: torch.device, batch_size: int) -> None:
     """Log model architecture summary."""
+    raw_model = _unwrap_model(model)
+
     # Deduplicate by data_ptr to handle weight tying (tok_emb == lm_head)
     seen = set()
     n_total = 0
     n_trainable = 0
-    for p in model.parameters():
+    for p in raw_model.parameters():
         if p.data_ptr() not in seen:
             seen.add(p.data_ptr())
             n_total += p.numel()
@@ -800,7 +802,7 @@ def _log_model_architecture(log: logging.Logger, jlog: JSONLLogger,
             0, mc["vocab_size"], (batch_size, mc["context_length"]), device=device,
         )
         stats = summary(
-            model, input_data=(dummy_input,),
+            raw_model, input_data=(dummy_input,),
             col_names=("input_size", "output_size", "num_params", "trainable"),
             depth=3, verbose=0,
         )

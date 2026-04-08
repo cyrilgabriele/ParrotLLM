@@ -1,0 +1,61 @@
+# Full training on Experiment C with the best near-40M Optuna trial.
+# Best trial source: results/parrotllm-40mio-hp.db (Trial 10, val ppl ~= 51.38)
+# Run with: python main.py --stage train --config configs/training/train_exp_c_40m.yaml
+
+model:
+  vocab_size: 50258
+  pad_token_id: 50257
+  bos_token_id: 50256
+  eos_token_id: 50256
+  d_model: 384
+  n_layers: 14
+  n_heads: 6
+  d_ff: 768
+  context_length: 1024
+  bias: false
+  dropout: 0.05907333047599156
+  rope_theta: 10000.0
+  gradient_checkpointing: false
+
+training:
+  device: auto
+  train_bin: data/exp_c/train.bin
+  val_bin: data/exp_c/val.bin
+  num_workers: 4
+  pin_memory: true
+
+  batch_size: 64
+  gradient_accumulation_steps: 4
+
+  learning_rate: 8.671641902052599e-4
+  min_lr: 8.671641902052599e-5
+  weight_decay: 0.05437007402622742
+  beta1: 0.9
+  beta2: 0.9943152258897952
+  grad_clip: 1.685833540749385
+
+  warmup_steps: 450
+  max_steps: 100000
+  lr_schedule: wsd
+  lr_decay_ratio: 0.17582282033955543
+  z_loss_coeff: 3.8205137184905524e-4
+
+  compile: true
+  save_every: 5000
+  eval_every: 500
+  checkpoint_dir: checkpoints
+  keep_last_checkpoints: 10
+  keep_best_checkpoints: 10
+  early_stopping_patience: 8
+  early_stopping_min_delta: 0.001
+
+  runs_dir: runs/exp_c_40m
+  log_every: 10
+
+logging:
+  console_level: INFO
+  file_level: DEBUG
+  components:
+    data_preprocessing: DEBUG
+    model_initialization: INFO
+    training: INFO

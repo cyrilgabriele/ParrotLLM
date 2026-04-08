@@ -23,7 +23,7 @@ model:
 training:
   device: auto
   train_bin: data/exp_c/train.bin
-  val_bin: data/exp_c/val.bin
+  val_bin: data/exp_a/val.bin
   num_workers: 4
   pin_memory: true
 

@@ -608,7 +608,11 @@ def estimate_loss(model: nn.Module, dataset: PretrainingDataset,
                   device: torch.device, autocast_ctx, batch_size: int,
                   max_batches: int = 20, *, num_workers: int = 0,
                   pin_memory: bool = False) -> dict:
-    model.eval()
+    # Validation runs only on rank 0 under DDP. Use the unwrapped module so the
+    # forward pass does not trigger DDP buffer broadcasts that other ranks are
+    # not participating in.
+    eval_model = _unwrap_model(model)
+    eval_model.eval()
     losses = []
     loader = torch.utils.data.DataLoader(
         dataset,
@@ -624,9 +628,9 @@ def estimate_loss(model: nn.Module, dataset: PretrainingDataset,
             break
         x, y = x.to(device), y.to(device)
         with autocast_ctx:
-            _, loss = model(x, targets=y, return_logits=False)
+            _, loss = eval_model(x, targets=y, return_logits=False)
         losses.append(loss.item())
-    model.train()
+    eval_model.train()
     avg = sum(losses) / len(losses) if losses else float("nan")
     return {"loss": avg, "perplexity": math.exp(avg) if avg == avg else float("nan")}
 

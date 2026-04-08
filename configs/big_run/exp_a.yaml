@@ -1,0 +1,81 @@
+# Full pretraining run on Dataset A — 8 GPU cluster, 800M token budget
+# Architecture: locked from staged 8.75M → 17.5M → 40M architecture search
+# HPs: from Exp A HP tuning Trial #10 (study: parrotllm-40mio-hp, val ppl=51.38)
+# Run with: torchrun --nproc_per_node=8 main.py --stage train --config configs/big_run/exp_a.yaml
+
+model:
+  vocab_size: 50258
+  pad_token_id: 50257
+  bos_token_id: 50256
+  eos_token_id: 50256
+  d_model: 384
+  n_layers: 14
+  n_heads: 6
+  d_ff: 768
+  context_length: 1024
+  bias: false
+  dropout: 0.0591
+  rope_theta: 10000.0
+  gradient_checkpointing: false
+
+training:
+  device: auto
+  train_bin: data/exp_a/train.bin
+  val_bin: data/exp_a/val.bin
+  num_workers: 4
+  pin_memory: true
+
+  # ── Cluster batching ──────────────────────────────────────────────────────
+  # 8 GPUs × bs=64 × ga=1 × ctx=1024 = 524,288 tokens / optimizer step
+  # Effective global batch = 64 × 8 × 1 = 512 sequences
+  batch_size: 64
+  gradient_accumulation_steps: 1
+
+  # ── 800M token budget ─────────────────────────────────────────────────────
+  # 800,000,000 tokens / 524,288 tokens-per-step ≈ 1526 steps
+  max_steps: 1526
+
+  # ── Hyperparameters (best from exp_a tuning Trial #10, val ppl=51.38) ─────
+  learning_rate: 8.672e-4
+  min_lr: 8.672e-5
+  weight_decay: 0.0544
+  beta1: 0.9
+  beta2: 0.9943
+  grad_clip: 1.686
+
+  warmup_steps: 229               # ~15% of total (scaled from tuned 450 @ 3000 steps)
+  lr_schedule: wsd
+  lr_decay_ratio: 0.1758           # WSD decay phase = last ~18% of steps
+  z_loss_coeff: 3.821e-4
+
+  compile: true
+  save_every: 250
+  eval_every: 100
+  checkpoint_dir: checkpoints
+  keep_last_checkpoints: 5
+  keep_best_checkpoints: 3
+  early_stopping_patience: 0       # disabled — fixed token budget
+  early_stopping_min_delta: 0.001
+
+  runs_dir: runs/big_run/exp_a
+  log_every: 10
+
+logging:
+  console_level: INFO
+  file_level: DEBUG
+  components:
+    data_preprocessing: DEBUG
+    model_initialization: INFO
+    training: INFO
+
+eval:
+  device: auto
+  batch_size: 32
+  max_sequences: 512
+  datasets:
+    - name: wikitext
+      path: wikitext
+      subset: wikitext-103-raw-v1
+      split: test
+    - name: exp_a_val
+      path: data/exp_a/val.bin

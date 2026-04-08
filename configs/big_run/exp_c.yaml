@@ -1,0 +1,81 @@
+# Full pretraining run on Dataset C — 8 GPU cluster, 800M token budget
+# Architecture: locked from staged 8.75M → 17.5M → 40M architecture search
+# HPs: from Exp C HP tuning Trial #4 (best so far) — UPDATE once tuning finishes
+# Run with: torchrun --nproc_per_node=8 main.py --stage train --config configs/big_run/exp_c.yaml
+
+model:
+  vocab_size: 50258
+  pad_token_id: 50257
+  bos_token_id: 50256
+  eos_token_id: 50256
+  d_model: 384
+  n_layers: 14
+  n_heads: 6
+  d_ff: 768
+  context_length: 1024
+  bias: false
+  dropout: 0.0050
+  rope_theta: 10000.0
+  gradient_checkpointing: false
+
+training:
+  device: auto
+  train_bin: data/exp_c/train.bin
+  val_bin: data/exp_c/val.bin
+  num_workers: 4
+  pin_memory: true
+
+  # ── Cluster batching ──────────────────────────────────────────────────────
+  # 8 GPUs × bs=64 × ga=1 × ctx=1024 = 524,288 tokens / optimizer step
+  # Effective global batch = 64 × 8 × 1 = 512 sequences
+  batch_size: 64
+  gradient_accumulation_steps: 1
+
+  # ── 800M token budget ─────────────────────────────────────────────────────
+  # 800,000,000 tokens / 524,288 tokens-per-step ≈ 1526 steps
+  max_steps: 1526
+
+  # ── Hyperparameters (best from exp_c tuning Trial #4) ─────────────────────
+  learning_rate: 1.305e-3
+  min_lr: 1.305e-4
+  weight_decay: 0.0630
+  beta1: 0.9
+  beta2: 0.9978
+  grad_clip: 1.786
+
+  warmup_steps: 150               # ~10% of total
+  lr_schedule: wsd
+  lr_decay_ratio: 0.179            # WSD decay phase = last ~18% of steps
+  z_loss_coeff: 2.75e-4
+
+  compile: true
+  save_every: 250
+  eval_every: 100
+  checkpoint_dir: checkpoints
+  keep_last_checkpoints: 5
+  keep_best_checkpoints: 3
+  early_stopping_patience: 0       # disabled — fixed token budget
+  early_stopping_min_delta: 0.001
+
+  runs_dir: runs/big_run/exp_c
+  log_every: 10
+
+logging:
+  console_level: INFO
+  file_level: DEBUG
+  components:
+    data_preprocessing: DEBUG
+    model_initialization: INFO
+    training: INFO
+
+eval:
+  device: auto
+  batch_size: 32
+  max_sequences: 512
+  datasets:
+    - name: wikitext
+      path: wikitext
+      subset: wikitext-103-raw-v1
+      split: test
+    - name: exp_c_val
+      path: data/exp_c/val.bin

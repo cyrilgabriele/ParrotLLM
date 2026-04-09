@@ -433,16 +433,42 @@ def run_tune(
     timeout_override: int | None = None,
     export_only: bool = False,
 ) -> None:
-    """Run Optuna HP tuning using the project configuration."""
-    tune_cfg = project_config.tune
-    study = create_study(tune_cfg)
+    """Run Optuna HP tuning using the project configuration.
 
-    if export_only:
+    When launched via ``torchrun --nproc_per_node=N``, only rank 0 drives the
+    Optuna study.  Non-zero ranks wait in a loop for rank 0 to broadcast trial
+    configs, then participate in DDP training and report back the result.
+    """
+    import torch
+    import torch.distributed as dist
+
+    rank = int(os.environ.get("RANK", 0))
+    world_size = int(os.environ.get("WORLD_SIZE", 1))
+    use_ddp = world_size > 1
+
+    # Initialise the process group once so all ranks can communicate.
+    if use_ddp and not dist.is_initialized():
+        backend = "nccl" if torch.cuda.is_available() else "gloo"
+        dist.init_process_group(backend=backend)
+
+    tune_cfg = project_config.tune
+
+    if rank == 0:
+        study = create_study(tune_cfg)
+
+    if export_only and rank == 0:
         if len(study.trials) == 0:
             print("No trials found. Run tuning first.")
-            return
-        print_summary(study)
-        export_best_params(study)
+        else:
+            print_summary(study)
+            export_best_params(study)
+        if use_ddp:
+            # Signal workers to exit by broadcasting an empty config.
+            dist.barrier()
+        return
+    elif export_only:
+        if use_ddp:
+            dist.barrier()
         return
 
     n_trials = n_trials_override or tune_cfg.n_trials
@@ -457,16 +483,84 @@ def run_tune(
     if project_config.logging:
         base_config["logging"] = project_config.logging.model_dump(mode="python")
 
-    log.info(f"Starting Optuna study '{tune_cfg.name}' with {n_trials} trials")
+    if not use_ddp:
+        # Single-process path: run Optuna normally.
+        log.info(f"Starting Optuna study '{tune_cfg.name}' with {n_trials} trials")
+        objective = _make_objective(tune_cfg, base_config)
+        study.optimize(
+            objective,
+            n_trials=n_trials,
+            timeout=timeout,
+            gc_after_trial=True,
+            show_progress_bar=True,
+        )
+        print_summary(study)
+        export_best_params(study)
+        return
 
-    objective = _make_objective(tune_cfg, base_config)
-    study.optimize(
-        objective,
-        n_trials=n_trials,
-        timeout=timeout,
-        gc_after_trial=True,
-        show_progress_bar=True,
-    )
+    # ── DDP path: rank 0 orchestrates, all ranks train together ──────────
+    search_space = {
+        name: spec.model_dump() for name, spec in tune_cfg.search_space.items()
+    }
 
-    print_summary(study)
-    export_best_params(study)
+    if rank == 0:
+        log.info(f"Starting Optuna study '{tune_cfg.name}' with {n_trials} trials (DDP, {world_size} GPUs)")
+
+    for trial_idx in range(n_trials):
+        # Rank 0 samples HPs via Optuna, then broadcasts them to all ranks.
+        if rank == 0:
+            trial = study.ask()
+            hp = sample_hyperparams(
+                trial,
+                search_space,
+                model_defaults=base_config.get("model"),
+                param_budget_min=tune_cfg.param_budget_min,
+                param_budget_max=tune_cfg.param_budget_max,
+            )
+            trial_config = build_trial_config(base_config, hp)
+
+            mc = trial_config.model
+            lr = hp.get("learning_rate")
+            lr_str = f"{lr:.2e}" if lr is not None else "?"
+            estimated_params = hp.get("estimated_params")
+            params_str = f"{estimated_params:,}" if estimated_params is not None else "?"
+            log.info(
+                f"Trial {trial.number}: lr={lr_str}, d_model={mc.d_model}, "
+                f"n_layers={mc.n_layers}, n_heads={mc.n_heads}, params={params_str}, "
+                f"dropout={hp.get('dropout', '?')}"
+            )
+            broadcast_obj = trial_config.model_dump(mode="python")
+        else:
+            broadcast_obj = None
+
+        # Broadcast trial config from rank 0 to all ranks.
+        obj_list = [broadcast_obj]
+        dist.broadcast_object_list(obj_list, src=0)
+        trial_config_dict = obj_list[0]
+
+        trial_config = ProjectConfig(**trial_config_dict)
+        device = get_device(trial_config.training.device)
+
+        from src.training.trainer import run_train
+
+        try:
+            best_ppl = run_train(trial_config, device=device, trial=None)
+        except (RuntimeError, torch.OutOfMemoryError) as e:
+            if "out of memory" in str(e).lower():
+                log.warning(f"Trial {trial_idx} OOM — skipping.")
+                torch.cuda.empty_cache()
+                best_ppl = float("inf")
+            else:
+                raise
+
+        # Rank 0 reports back to Optuna.
+        if rank == 0:
+            if best_ppl == float("inf"):
+                study.tell(trial, state=optuna.trial.TrialState.PRUNED)
+            else:
+                study.tell(trial, best_ppl)
+                log.info(f"Trial {trial.number} finished: ppl={best_ppl:.2f}")
+
+    if rank == 0:
+        print_summary(study)
+        export_best_params(study)

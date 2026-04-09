@@ -1,0 +1,115 @@
+# Optuna Hyperparameter Tuning — 40M Model on Dataset C (800M tokens)
+# 8x V100 cluster, architecture locked from 8.75M→17.5M→40M search
+# Run with: torchrun --nproc_per_node=8 main.py --stage tune --config configs/tuning/40mio_hp_tuning_c.yaml
+
+# ── Fixed architecture ──────────────────────────────────────────────────────────
+model:
+  vocab_size: 50258
+  pad_token_id: 50257
+  bos_token_id: 50256
+  eos_token_id: 50256
+  d_model: 384                    # locked: tuned via architecture search
+  n_layers: 14                    # locked: wide & shallow, scaled from 7L@17.5M
+  n_heads: 6                     # locked: d_head=64 (best practice)
+  d_ff: 768                      # locked: d_ff/d_model=2.0 (tuned optimal)
+  context_length: 256             # shorter ctx for speed (full model uses 1024)
+  bias: false
+  dropout: 0.0
+  rope_theta: 10000.0
+
+training:
+  device: auto
+  train_bin: data/exp_c/train.bin
+  val_bin: data/exp_c/val.bin
+  num_workers: 4
+
+  # ── Cluster batching ──────────────────────────────────────────────────────
+  # 8 GPUs × bs=32 × ga=1 × ctx=256 = 65,536 tokens / optimizer step
+  # Effective global batch = 32 × 8 = 256 sequences
+  batch_size: 32
+  gradient_accumulation_steps: 1
+
+  learning_rate: 8.0e-4
+  min_lr: 8.0e-5
+  weight_decay: 0.1
+  beta1: 0.9
+  beta2: 0.95
+  grad_clip: 1.0
+  warmup_steps: 100
+  compile: true
+  max_steps: 750                  # proxy length for HP signal (~49M tokens, matches original single-GPU budget)
+  lr_schedule: wsd
+  lr_decay_ratio: 0.1
+  z_loss_coeff: 1.0e-4
+  save_every: 50000               # disable checkpointing during tuning
+  eval_every: 188                 # eval 4 times per trial
+  checkpoint_dir: checkpoints/40mio_hp_tuning_c
+  keep_last_checkpoints: 10
+  keep_best_checkpoints: 10
+  runs_dir: runs/tuning/40mio_hp_tuning_c
+  log_every: 200
+
+logging:
+  console_level: INFO
+  file_level: INFO
+  components:
+    data_preprocessing: WARNING
+    model_initialization: INFO
+    training: INFO
+
+# ── Optuna study settings ─────────────────────────────────────────────────────
+tune:
+  name: parrotllm-40mio-hp-c
+  storage: optuna_studies/parrotllm-40mio-hp-c.db
+  n_trials: 80
+  timeout: null
+  sampler: tpe
+  pruner: hyperband
+  pruner_kwargs:
+    min_resource: 188
+    max_resource: 750
+    reduction_factor: 3
+
+  # ── 11-dimensional HP search (architecture fixed) ───────────────────────────
+  search_space:
+    # Optimizer
+    learning_rate:
+      type: log_uniform
+      low: 1.0e-4
+      high: 3.0e-3
+    weight_decay:
+      type: log_uniform
+      low: 0.01
+      high: 0.3
+    beta2:
+      type: uniform
+      low: 0.93
+      high: 0.999
+    warmup_steps:
+      type: int
+      low: 50
+      high: 500
+      step: 50
+    grad_clip:
+      type: uniform
+      low: 0.5
+      high: 2.0
+
+    # LR schedule
+    lr_schedule:
+      type: categorical
+      choices: [wsd, cosine]
+    lr_decay_ratio:
+      type: uniform
+      low: 0.05
+      high: 0.3
+
+    # Regularization
+    dropout:
+      type: uniform
+      low: 0.0
+      high: 0.15
+    z_loss_coeff:
+      type: log_uniform
+      low: 1.0e-5
+      high: 1.0e-3

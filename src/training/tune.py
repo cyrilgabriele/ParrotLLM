@@ -448,6 +448,9 @@ def run_tune(
 
     # Initialise the process group once so all ranks can communicate.
     if use_ddp and not dist.is_initialized():
+        local_rank = int(os.environ.get("LOCAL_RANK", 0))
+        if torch.cuda.is_available():
+            torch.cuda.set_device(local_rank)
         backend = "nccl" if torch.cuda.is_available() else "gloo"
         dist.init_process_group(backend=backend)
 

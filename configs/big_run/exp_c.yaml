@@ -54,7 +54,7 @@ training:
   lr_decay_ratio: 0.25826046407623926
   z_loss_coeff: 1.3887413811122497e-4
 
-  compile: false
+  compile: true
   save_every: 250
   eval_every: 100
   checkpoint_dir: checkpoints

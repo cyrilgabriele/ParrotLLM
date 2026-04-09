@@ -1,6 +1,7 @@
 # Optuna Hyperparameter Tuning — 40M Model on Dataset C (800M tokens)
 # 8x V100 cluster, architecture locked from 8.75M→17.5M→40M search
-# Run with: torchrun --nproc_per_node=8 main.py --stage tune --config configs/tuning/40mio_hp_tuning_c.yaml
+# Run with: python main.py --stage tune --config configs/tuning/40mio_hp_tuning_c.yaml
+# On a multi-GPU node, the tuner will relaunch itself under torchrun so each trial uses all visible GPUs.
 
 # ── Fixed architecture ──────────────────────────────────────────────────────────
 model:

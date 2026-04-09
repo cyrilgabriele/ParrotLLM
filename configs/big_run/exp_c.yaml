@@ -22,8 +22,8 @@ model:
 
 training:
   device: auto
-  train_bin: data/filter_c/train.bin
-  val_bin: data/filter_c/val.bin
+  train_bin: data/exp_c/train.bin
+  val_bin: data/exp_c/val.bin
   num_workers: 2
   pin_memory: true
 
@@ -90,4 +90,4 @@ eval:
       subset: wikitext-103-raw-v1
       split: test
     - name: exp_c_val
-      path: data/filter_c/val.bin
+      path: data/exp_c/val.bin

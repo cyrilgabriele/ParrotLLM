@@ -51,7 +51,7 @@ training:
   grad_clip: 0.9147944011374611
 
   warmup_steps: 1500              # ~5% of first epoch
-  lr_schedule: cosine
+  lr_schedule: wsd
   lr_decay_ratio: 0.25826046407623926
   z_loss_coeff: 1.3887413811122497e-4
 

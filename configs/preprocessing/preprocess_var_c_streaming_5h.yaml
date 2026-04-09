@@ -1,0 +1,44 @@
+# Variant C (streaming): Knowledge-focused (no Sports) — 5-hour time-bounded
+# Streams from HF OpenWebText, filters inline, stops when time runs out.
+# Dedup + tokenize + write happen after streaming finishes.
+#
+# Run with:
+#   uv run python main.py --stage preprocess-streaming \
+#       --config configs/preprocessing/preprocess_var_c_streaming_5h.yaml
+
+streaming_preprocess:
+  max_time_seconds: 18000          # 5 hours of streaming + filtering
+  lang: en
+  data_dir: data
+  output_dir: data/processed/filter_c
+  seed: 42
+  shuffle_buffer_size: 100000
+  stream_batch_size: 5000
+
+  # ── Filters ──────────────────────────────────────────────────────────
+  filter_mode: heuristic
+  skip_dedup: false
+  skip_decontam: false
+  skip_code_filter: false
+  skip_quality_filter: false
+  skip_ellipsis_filter: false
+  skip_topic_filter: false
+  append_eos_token: true
+  token_dtype: uint16
+  context_length: 1024
+  minimum_tokens_per_doc: 64
+  validation_split_ratio: 0.01
+
+  # ── Topic: drop Sports, uniform factual ──────────────────────────────
+  topic_classes:
+    - World
+    - Business
+    - Sci/Tech
+  topic_distribution:
+    World: 0.34
+    Business: 0.33
+    Sci/Tech: 0.33
+
+logging:
+  console_level: INFO
+  file_level: DEBUG

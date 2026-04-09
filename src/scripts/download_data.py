@@ -492,6 +492,15 @@ def download_smoke_test():
     )
 
 
+def download_filter_c():
+    """Download the filter_c folder from the ParrotLabs HF dataset repo."""
+    _download_hf_dataset_folder(
+        repo_id="ParrotLabs/Preprocessed",
+        folder="filter_c",
+        out_dir=DATA_DIR / "filter_c",
+    )
+
+
 DOWNLOAD_TARGETS = {
     "openwebtext-100": download_openwebtext_100,
     "openwebtext-1k": download_openwebtext_1k,
@@ -510,6 +519,7 @@ DOWNLOAD_TARGETS = {
     "exp-e": download_exp_e,
     "exp-f": download_exp_f,
     "preprocessed-root": download_preprocessed_root,
+    "filter_c": download_filter_c,
     "smoke-test": download_smoke_test,
     "smoketest": download_smoke_test,
 }

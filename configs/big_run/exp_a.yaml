@@ -16,7 +16,7 @@ model:
   d_ff: 768
   context_length: 1024
   bias: false
-  dropout: 0.0591
+  dropout: 0.05907333047599156
   rope_theta: 10000.0
   gradient_checkpointing: false
 
@@ -42,17 +42,17 @@ training:
   max_steps: 3052
 
   # ── Hyperparameters (best from exp_a tuning Trial #10, val ppl=51.38) ─────
-  learning_rate: 8.672e-4
-  min_lr: 8.672e-5
-  weight_decay: 0.0544
+  learning_rate: 8.671641902052599e-4
+  min_lr: 8.671641902052599e-5
+  weight_decay: 0.05437007402622742
   beta1: 0.9
-  beta2: 0.9943
-  grad_clip: 1.686
+  beta2: 0.9943152258897952
+  grad_clip: 1.685833540749385
 
-  warmup_steps: 450               # ~15% of total; matches tuned 450 @ 3000-step proxy
+  warmup_steps: 400
   lr_schedule: wsd
-  lr_decay_ratio: 0.1758           # WSD decay phase = last ~18% of steps
-  z_loss_coeff: 3.821e-4
+  lr_decay_ratio: 0.17582282033955543
+  z_loss_coeff: 3.8205137184905524e-4
 
   compile: true
   save_every: 250

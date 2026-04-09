@@ -24,7 +24,7 @@ training:
   device: auto
   train_bin: data/filter_c/train.bin
   val_bin: data/filter_c/val.bin
-  num_workers: 4
+  num_workers: 2
   pin_memory: true
 
   # ── Cluster batching ──────────────────────────────────────────────────────

@@ -36,7 +36,7 @@ training:
   beta2: 0.95
   grad_clip: 1.0
   warmup_steps: 100
-  compile: false
+  compile: true
   max_steps: 750                  # proxy length for HP signal (~49M tokens, matches original single-GPU budget)
   lr_schedule: wsd
   lr_decay_ratio: 0.1

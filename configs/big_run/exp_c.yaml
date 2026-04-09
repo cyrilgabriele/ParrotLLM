@@ -24,7 +24,7 @@ training:
   device: auto
   train_bin: data/filter_c/train.bin
   val_bin: data/filter_c/val.bin
-  num_workers: 4
+  num_workers: 2
   pin_memory: true
 
   # ── Cluster batching ──────────────────────────────────────────────────────
@@ -54,7 +54,7 @@ training:
   lr_decay_ratio: 0.25826046407623926
   z_loss_coeff: 1.3887413811122497e-4
 
-  compile: true
+  compile: false
   save_every: 250
   eval_every: 100
   checkpoint_dir: checkpoints

@@ -1,9 +1,9 @@
 # Full pretraining run on Dataset C — 8 GPU cluster, 800M token budget
 # Architecture: locked from staged 8.75M → 17.5M → 40M architecture search
-# HPs: from 40M Optuna HP Tuning C, Trial #70 (val ppl ~97.76 on dataset C)
+# HPs: from 40M Optuna Run 2, Trial #10 (val ppl ~51.38 on dataset A)
 # Batch remapped for 8x V100: bs=32, ga=1 preserves the Optuna winner's
 # effective batch of 256 sequences/update (single-GPU proxy used bs=64, ga=4).
-# Run with: torchrun --nproc_per_node=8 main.py --stage train --config configs/big_run/exp_c.yaml
+# Run with: torchrun --nproc_per_node=8 main.py --stage train --config configs/big_run/exp_c_old_hp.yaml
 
 model:
   vocab_size: 50258
@@ -16,7 +16,7 @@ model:
   d_ff: 768
   context_length: 1024
   bias: false
-  dropout: 0.01287921140461293
+  dropout: 0.05907333047599156
   rope_theta: 10000.0
   gradient_checkpointing: false
 
@@ -41,18 +41,18 @@ training:
   # 800,000,000 tokens / 262,144 tokens-per-step ≈ 3052 steps
   max_steps: 3052
 
-  # ── Hyperparameters (40M Optuna HP Tuning C, Trial #70) ────────────────────
-  learning_rate: 2.6291804804649314e-3
-  min_lr: 2.6291804804649314e-4
-  weight_decay: 0.13113982116099054
+  # ── Hyperparameters (40M Optuna Run 2, Trial #10 — dataset A) ─────────────
+  learning_rate: 8.671641902052599e-4
+  min_lr: 8.671641902052599e-5
+  weight_decay: 0.05437007402622742
   beta1: 0.9
-  beta2: 0.9606057712410854
-  grad_clip: 0.9147944011374611
+  beta2: 0.9943152258897952
+  grad_clip: 1.685833540749385
 
   warmup_steps: 400
-  lr_schedule: cosine
-  lr_decay_ratio: 0.25826046407623926
-  z_loss_coeff: 1.3887413811122497e-4
+  lr_schedule: wsd
+  lr_decay_ratio: 0.17582282033955543
+  z_loss_coeff: 3.8205137184905524e-4
 
   compile: true
   save_every: 250
@@ -63,7 +63,7 @@ training:
   early_stopping_patience: 0       # disabled — fixed token budget
   early_stopping_min_delta: 0.001
 
-  runs_dir: runs/big_run/exp_c
+  runs_dir: runs/big_run/exp_c_old_hp
   log_every: 10
 
   hf_upload:

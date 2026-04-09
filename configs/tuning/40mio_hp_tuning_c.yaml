@@ -22,7 +22,11 @@ training:
   device: auto
   train_bin: data/filter_c/train.bin
   val_bin: data/filter_c/val.bin
-  num_workers: 4
+  # DDP Optuna on Python 3.14 uses forkserver for worker processes. Keeping
+  # workers at 0 avoids 8 ranks × 4 workers fan-out and the forkserver crashes
+  # / host-RAM spikes we observed on the cluster.
+  num_workers: 0
+  pin_memory: false
 
   # ── Cluster batching ──────────────────────────────────────────────────────
   # 8 GPUs × bs=32 × ga=1 × ctx=256 = 65,536 tokens / optimizer step
@@ -37,7 +41,9 @@ training:
   beta2: 0.95
   grad_clip: 1.0
   warmup_steps: 100
-  compile: true
+  # Short DDP tuning trials do not usually amortize torch.compile, and 8 ranks
+  # compiling at once can blow up host RAM on the cluster.
+  compile: false
   max_steps: 750                  # proxy length for HP signal (~49M tokens, matches original single-GPU budget)
   lr_schedule: wsd
   lr_decay_ratio: 0.1

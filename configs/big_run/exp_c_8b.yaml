@@ -1,6 +1,7 @@
 # Full pretraining run on Dataset C — 8 GPU cluster, 8B token budget, 4 epochs max
 # Architecture: locked from staged 8.75M → 17.5M → 40M architecture search
-# HPs: from 40M Optuna HP Tuning C, Trial #70 (val ppl ~97.76 on dataset C)
+# HPs: adjusted from Trial #70 after stagnation at step 24.5k (best loss 3.4510)
+# Changes: lower LR (2.63e-3→1.5e-3), more patience (5→15), cosine schedule (was wsd), more dropout (0.013→0.03)
 # Batch remapped for 8x V100: bs=32, ga=1 preserves the Optuna winner's
 # effective batch of 256 sequences/update (single-GPU proxy used bs=64, ga=4).
 # Run with: torchrun --nproc_per_node=8 main.py --stage train --config configs/big_run/exp_c_8b.yaml
@@ -16,7 +17,7 @@ model:
   d_ff: 768
   context_length: 1024
   bias: false
-  dropout: 0.01287921140461293
+  dropout: 0.03
   rope_theta: 10000.0
   gradient_checkpointing: false
 
@@ -43,16 +44,15 @@ training:
   max_steps: 122070
 
   # ── Hyperparameters (40M Optuna HP Tuning C, Trial #70) ────────────────────
-  learning_rate: 2.6291804804649314e-3
-  min_lr: 2.6291804804649314e-4
+  learning_rate: 1.5e-3
+  min_lr: 1.5e-4
   weight_decay: 0.13113982116099054
   beta1: 0.9
   beta2: 0.9606057712410854
   grad_clip: 0.9147944011374611
 
   warmup_steps: 1500              # ~5% of first epoch
-  lr_schedule: wsd
-  lr_decay_ratio: 0.25826046407623926
+  lr_schedule: cosine
   z_loss_coeff: 1.3887413811122497e-4
 
   compile: true
@@ -61,7 +61,7 @@ training:
   checkpoint_dir: checkpoints
   keep_last_checkpoints: 10
   keep_best_checkpoints: 10
-  early_stopping_patience: 5      # stop after 5 evals without improvement
+  early_stopping_patience: 15     # stop after 15 evals (7500 steps) without improvement
   early_stopping_min_delta: 0.001
 
   runs_dir: runs/big_run/exp_c_8b

@@ -93,3 +93,10 @@ eval:
       split: test
     - name: exp_c_val
       path: data/filter_c/val.bin
+
+inference:
+  device: auto
+  max_tokens: 128
+  temperature: 0.2
+  top_k: 50
+  top_p: 0.9

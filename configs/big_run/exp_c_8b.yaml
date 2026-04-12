@@ -91,6 +91,8 @@ eval:
       path: wikitext
       subset: wikitext-103-raw-v1
       split: test
+    - name: owt_val
+      path: data/processed/val.bin
     - name: exp_c_val
       path: data/filter_c/val.bin
 
@@ -100,3 +102,12 @@ inference:
   temperature: 0.2
   top_k: 50
   top_p: 0.9
+
+chat:
+  device: auto
+  max_tokens: 200
+  temperature: 0.8
+  top_k: 40
+  top_p: 0.92
+  system_prompt: "You are a helpful assistant."
+  checkpoint_dir: runs/big_run/exp_c_8b/run_20260410_044337/checkpoints

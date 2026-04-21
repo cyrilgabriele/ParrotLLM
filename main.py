@@ -15,7 +15,7 @@ def main() -> None:
     parser.add_argument(
         "--stage",
         required=True,
-        choices=["preprocess", "train", "tune", "eval", "inference", "chat", "dashboard"],
+        choices=["preprocess", "train", "tune", "eval", "inference", "chat", "dashboard", "sft"],
     )
     parser.add_argument("--config", type=Path, default=Path("configs/default.yaml"))
     parser.add_argument("--checkpoint", default=None)
@@ -133,6 +133,20 @@ def main() -> None:
             mock_testing=args.mock_testing,
             hf_token=HF_TOKEN
         )
+        return
+
+    if args.stage == "sft":
+        # VL07 — Supervised Fine-Tuning stage. Requires:
+        #   (i)   an `sft:` block in the YAML config (see configs/default.yaml),
+        #   (ii)  a base pretraining checkpoint passed via --checkpoint
+        #         (SFT on random weights makes no sense; VL07 slide 12).
+        sft_cfg = _require_section(project_config.sft, "sft")
+        _require_section(project_config.model, "model")
+        checkpoint_path = _require_checkpoint(args.checkpoint, stage="sft")
+        device = get_device(sft_cfg.device)
+        from src.post_training.sft.trainer import run_sft
+
+        run_sft(project_config, checkpoint=checkpoint_path, device=device)
         return
 
     if args.stage == "chat":

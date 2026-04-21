@@ -244,10 +244,31 @@ class ParrotLLM(nn.Module):
         idx: torch.Tensor,
         targets: torch.Tensor | None = None,
         *,
+        labels: torch.Tensor | None = None,
         return_logits: bool = True,
         z_loss_coeff: float = 0.0,
         loss_chunk_rows: int = 2048,
-    ) -> tuple[torch.Tensor, torch.Tensor | None]:
+    ) -> tuple[torch.Tensor, torch.Tensor | None] | torch.Tensor:
+        """Forward pass.
+
+        Two calling conventions are supported so a single forward serves both
+        pretraining and SFT:
+
+        - ``targets``: pre-shifted labels the same length as ``idx``, no
+          masking. Used by the pretraining trainer which pre-shifts windows
+          inside the DataLoader (``chunk[:-1], chunk[1:]``).
+
+        - ``labels``: HuggingFace convention — ``labels[t] == idx[t]`` on
+          positions that contribute to the loss, ``labels[t] == -100`` on
+          positions to ignore (``F.cross_entropy(ignore_index=-100)``). The
+          shift between predictions and labels is performed here. This is
+          what the SFT collator produces (VL07 slide 15 masked loss).
+
+        When ``labels`` is given, the function returns **the loss tensor only**
+        so the SFT trainer can call ``model(ids, labels=labels)`` ergonomically.
+        When ``targets`` is given (legacy pretraining path), it returns
+        ``(logits, loss)`` as before.
+        """
         _, T = idx.shape
 
         x = self.dropout(self.tok_emb(idx))
@@ -265,6 +286,24 @@ class ParrotLLM(nn.Module):
         if hasattr(self, "ln_f"):
             x = self.ln_f(x)
 
+        # ── SFT path (HuggingFace labels convention, VL07 slide 15) ─────────
+        if labels is not None:
+            # Shift so position t predicts token at t+1, matching the
+            # next-token objective. Positions with label=-100 are skipped
+            # via `ignore_index=-100` in F.cross_entropy, which is the
+            # exact mechanism VL07 slide 15 prescribes ("Instruction tokens
+            # are masked with label = −100").
+            logits = self.lm_head(x)
+            shift_logits = logits[:, :-1, :].contiguous()
+            shift_labels = labels[:, 1:].contiguous()
+            loss = F.cross_entropy(
+                shift_logits.view(-1, shift_logits.size(-1)),
+                shift_labels.view(-1),
+                ignore_index=-100,
+            )
+            return loss
+
+        # ── Pretraining path (pre-shifted targets) ──────────────────────────
         logits = self.lm_head(x) if (targets is None or return_logits) else None
         loss = None
         if targets is not None:

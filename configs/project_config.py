@@ -12,6 +12,7 @@ from .preprocessing.preprocessConfig import PreprocessConfig
 from .training.trainingConfig import HfUploadConfig, ModelConfig, TrainingConfig
 from .tuning.tuneConfig import TuneConfig
 from .loggingConfig import LoggingConfig
+from .post_training.sftConfig import SFTConfig
 
 
 class EvalDatasetConfig(BaseModel):
@@ -74,6 +75,7 @@ class ProjectConfig(BaseModel):
     eval: EvalConfig | None = None
     inference: InferenceConfig | None = None
     chat: ChatConfig | None = None
+    sft: SFTConfig | None = None  # VL07 post-training stage (see configs/post_training/sftConfig.py)
 
 
 def load_project_config(config_path: str | Path) -> ProjectConfig:
@@ -123,6 +125,7 @@ __all__ = [
     "HfUploadConfig",
     "InferenceConfig",
     "ProjectConfig",
+    "SFTConfig",
     "load_project_config",
     "load_project_config_from_checkpoint",
 ]

@@ -131,3 +131,55 @@ chat:
   top_p: 0.9
   system_prompt: "You are ParrotLLM, a helpful assistant."
   checkpoint_dir: runs
+
+# ── Post-training: Supervised Fine-Tuning (VL07) ────────────────────────────
+# Recommended by VL07 slide 48 for PikoGPT: Alpaca dataset + small LR to
+# avoid catastrophic forgetting. See docs/post_training/SFT.md for full
+# rationale per hyperparameter.
+sft:
+  # Data (VL07 §2 + slide 48)
+  hf_dataset_name: tatsu-lab/alpaca
+  hf_split: train
+  max_examples: null              # null = full; set e.g. 1000 for smoke test
+  val_fraction: 0.05
+  decontam_benchmarks: []         # populate with benchmark test splits
+
+  # Tokenisation / template (VL07 slide 32 "Alpaca — simplest choice")
+  max_length: 1024                # ≤ model.context_length (hard constraint)
+  append_eos: true
+  mask_instruction_loss: true     # VL07 slide 15: REQUIRED for SFT
+
+  # Optimiser (VL07 slide 25 + SFT.md §5)
+  learning_rate: 2.0e-5           # ≈1/10 of pretraining peak
+  min_lr: 2.0e-6                  # 10% floor
+  weight_decay: 0.1
+  beta1: 0.9
+  beta2: 0.95
+  grad_clip: 1.0                  # VL04 "Gradient Clipping"
+
+  # Schedule
+  warmup_steps: 100               # short: not starting from random weights
+  epochs: 2
+  lr_schedule: cosine             # matches Stanford Alpaca
+
+  # Batching
+  batch_size: 8                   # adjust to VRAM; 5090 fits 16 comfortably
+  gradient_accumulation_steps: 8  # effective batch = 64
+  num_workers: 2
+  pin_memory: true
+
+  # Catastrophic-forgetting mitigations (VL07 slide 25)
+  pretraining_mix_ratio: 0.0      # 0 = pure SFT; 0.05-0.10 for OLMo-style mix
+  pretraining_bin_path: null
+
+  # Logging / checkpointing
+  runs_dir: runs
+  eval_every: 200
+  save_every: 500
+  log_every: 10
+  early_stopping_patience: 5
+
+  # Base checkpoint — override on the CLI with --checkpoint
+  base_checkpoint: null
+
+  device: auto

@@ -21,6 +21,106 @@ Track what was changed, why it was changed, and any important notes.
 
 ## Unreleased
 
+### [2026-04-22] - Tilman
+
+#### What
+- Added a complete posttraining package under `src/posttraining/` with:
+  - shared SFT/chat prompt templating,
+  - public dataset download + validation,
+  - SFT data preparation,
+  - prompt-suite evaluation,
+  - and the supervised fine-tuning trainer
+- Added typed posttraining config support in `configs/posttraining/`, including:
+  - the main `sft.yaml`,
+  - a full `SFTConfig` schema,
+  - a dev prompt suite,
+  - and two smoke-test configs for very small end-to-end runs
+- Extended `main.py` with new CLI stages:
+  - `sft-download`
+  - `sft-prepare`
+  - `sft`
+- Updated `src/chat/app.py` to use the same frozen plain-text chat template as SFT so chat behavior and posttraining formatting stay aligned
+- Created the checkpoint import path under `runs/posttraining/base_import/.../checkpoints/` and standardized the SFT workflow around run-local checkpoints and run-local outputs
+- Implemented `sft-download` so it:
+  - bootstraps public decontamination references,
+  - downloads all required public Hugging Face datasets,
+  - saves stable local snapshots under `data/posttraining/raw/`,
+  - validates source usability,
+  - writes `data/posttraining/sft_mix/download_manifest.json`,
+  - and deletes the temporary HF cache afterward
+- Implemented `sft-prepare` so it:
+  - reads from the saved raw snapshots instead of the HF cache,
+  - normalizes all sources into one common `messages` schema,
+  - applies cleaning, filtering, trimming, deduplication, decontamination, splitting, and packing,
+  - writes prepared train/dev/test JSONL artifacts,
+  - and emits `data/posttraining/sft_mix/manifest.json`
+- Implemented the SFT trainer so it:
+  - loads the native Parrot checkpoint,
+  - performs assistant-only-loss fine-tuning,
+  - runs multiple learning-rate sweeps,
+  - evaluates against a held-out prompt suite and replay perplexity,
+  - saves best/last checkpoints,
+  - and runs a final polish pass on a high-quality subset
+- Finalized the public-only SFT dataset mix in `configs/posttraining/sft.yaml`:
+  - `WildChat`
+  - `OpenAssistant/oasst1`
+  - selected `Tulu-3` slices
+  - `PKU-SafeRLHF-QA`
+- Replaced the originally planned `allenai/wildguardmix` source because it is gated on the Hub and therefore incompatible with the fully public-only workflow
+- Hardened source loading and normalization for the real upstream dataset schemas that were found during implementation, especially:
+  - current `Tulu-3` source names,
+  - punctuation-tolerant Tulu source matching,
+  - and the safe-row handling needed for `PKU-SafeRLHF-QA`
+- Added posttraining test coverage for:
+  - download behavior,
+  - preparation behavior,
+  - template rendering,
+  - source normalization edge cases,
+  - and smoke-path assumptions
+- Added Apple Silicon branch-local setup support for faster local iteration by:
+  - relaxing the project Python range to `>=3.13,<3.15`,
+  - adding `.python-version`,
+  - and documenting the recommended `Python 3.13` path for MPS-friendly local training
+- Ran and verified a tiny end-to-end SFT smoke test using:
+  - `configs/posttraining/sft_smoke_fast.yaml`
+  - `configs/posttraining/dev_prompt_suite_smoke.jsonl`
+  - and a local base checkpoint under `runs/posttraining/base_import/run_20260410_044337/checkpoints/`
+
+#### Why
+- We chose `Base -> SFT` as the first posttraining stage because this project uses a small custom decoder-only model (~35.8M parameters) and the highest-ROI first move is to produce one strong instruction-following checkpoint before branching into DPO or RLHF. For a model of this size, clean supervised data is more valuable than jumping immediately into more complex preference optimization
+- We chose full fine-tuning instead of LoRA because the model is small enough that full SFT is practical, and for this scale it offers the best chance of getting the largest behavior shift from a compact, curated posttraining set
+- We chose a curated target of `20k` examples because this sits in the middle of the `~5k-30k` range recommended in the local posttraining plan, while staying small enough to preserve quality, limit forgetting risk, and keep compute manageable on local hardware. For this model, data quality matters more than blindly using every available row from the downloaded corpora
+- We intentionally download the full raw source datasets first and only select the final mix during preparation. This gives us headroom for filtering, deduplication, decontamination, and source-specific quality controls without being bottlenecked by an artificially tiny raw download
+- We chose the current dataset composition to cover the exact behavior axes that matter for the project:
+  - `WildChat` for realistic user-prompt distribution and chat-style interactions
+  - `OASST1` for human-reviewed multi-turn assistant quality
+  - `Tulu FLAN` for short exact-answer and benchmark-shaped tasks
+  - `Tulu Persona IF` for instruction following and constraint obedience
+  - `Tulu Persona Reasoning` for lightweight reasoning without encouraging long chain-of-thought traces
+  - `Tulu Structured Outputs` for JSON validity, extraction, and strict formatting
+  - `PKU-SafeRLHF-QA` for concise safe refusals and harmful-request handling
+- We kept the mix English-only because the public evaluation constraints and benchmark expectations for this project are English-centric
+- We added decontamination against Wikitext-103, the provided OWT eval split, HellaSwag, WinoGrande, OpenBookQA, and LAMBADA because posttraining should improve instruction behavior without contaminating evaluation-style prompts
+- We switched from an HF-cache-only download approach to stable repo-local raw snapshots because the workflow needs durable local data artifacts that remain usable after the transient HF cache is removed
+- We added smoke-test configs because the full SFT recipe is intentionally non-trivial. A tiny, fast end-to-end path makes it possible to validate the full training pipeline before committing to a long overnight run
+- We adjusted the branch-local Python recommendation toward `3.13` because the original local `3.14` environment did not expose Apple `MPS` correctly, while a more stable stack is a practical way to save time on local development and SFT experimentation
+
+#### Remarks
+- A full real `sft-download` and `sft-prepare` run completed successfully with the new raw-snapshot workflow
+- The first real full prepare pass finished successfully and wrote the prepared artifacts to `data/posttraining/sft_mix/`
+- The resulting prepared pool came out to `18,775` total selected examples instead of the full `20,000`, mainly because the `oasst1_ready` slice underfilled relative to its `4,500` target after filtering and branch selection
+- The current pipeline therefore works end to end, but a future improvement would be an iterative retry/resampling loop in `sft-prepare` so the system can try to fill remaining gaps when one source underfills
+- The fastText language detector currently falls back gracefully because of a NumPy 2 compatibility issue in the local runtime; this warning is non-fatal and does not block the SFT workflow
+- A tiny end-to-end smoke run was completed successfully, including:
+  - smoke preparation
+  - smoke SFT sweep
+  - smoke polish run
+  - checkpoint creation
+  - and summary writing
+- Relevant smoke outputs were written under:
+  - `data/posttraining/sft_mix_smoke_fast/`
+  - `runs/posttraining/sft_smoke_fast/`
+
 ### [2026-04-08] - Cyril Gabriele
 
 #### What

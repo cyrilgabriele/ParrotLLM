@@ -5,7 +5,7 @@
 ## Quick Start
 
 ```bash
-# 1. Clone and install (requires Python 3.14+ and uv)
+# 1. Clone and install (recommended: Python 3.13 and uv)
 git clone <repo-url> && cd ParrotLLM
 uv sync
 
@@ -33,13 +33,21 @@ uv run python main.py --stage inference --mock-testing \
 
 # 7. Chat UI
 uv run python main.py --stage chat --config configs/default.yaml
+
+# 8. Prepare SFT posttraining data
+uv run python main.py --stage sft-download --config configs/posttraining/sft.yaml
+uv run python main.py --stage sft-prepare --config configs/posttraining/sft.yaml
+
+# 9. Run SFT posttraining
+uv run python main.py --stage sft --config configs/posttraining/sft.yaml \
+    --checkpoint runs/posttraining/base_import/run_20260422_manual/checkpoints/base_pretrain.pt
 ```
 
 ## Setup for New Team Members
 
 ### Prerequisites
 
-- **Python 3.14+**
+- **Python 3.13 or 3.14**
 - **uv** (dependency manager) — install with `curl -LsSf https://astral.sh/uv/install.sh | sh`
 
 ### Step-by-Step
@@ -48,6 +56,10 @@ uv run python main.py --stage chat --config configs/default.yaml
 # Clone
 git clone <repo-url>
 cd ParrotLLM
+
+# Recommended on Apple Silicon for MPS/GPU training:
+uv python install 3.13
+uv venv --python 3.13
 
 # Install all dependencies (torch, transformers, datasets, wandb, gradio, etc.)
 uv sync
@@ -72,6 +84,37 @@ uv run python src/scripts/download_data.py
 ```
 
 That's it. No conda, no pip, no Docker. `uv sync` handles everything.
+
+On Apple Silicon, Python `3.13` is the recommended training stack for this branch because the
+current `3.14` environment can leave `torch.backends.mps.is_available()` disabled even though
+the hardware supports Metal.
+
+## SFT Posttraining
+
+Place your native Parrot checkpoint here before starting SFT:
+
+```text
+runs/posttraining/base_import/run_20260422_manual/checkpoints/base_pretrain.pt
+```
+
+Then prepare the curated SFT mix and launch training:
+
+```bash
+uv run python main.py --stage sft-download --config configs/posttraining/sft.yaml
+uv run python main.py --stage sft-prepare --config configs/posttraining/sft.yaml
+uv run python main.py --stage sft --config configs/posttraining/sft.yaml
+```
+
+The SFT config is already set up for the repo's recommended 20k-example mix:
+
+- `allenai/WildChat` GPT-4 conversations for realistic chat prompts
+- `OpenAssistant/oasst1` best English branches for human-reviewed dialogue quality
+- `allenai/tulu-3-sft-mixture` slices for FLAN-style exact answers, persona instruction following, lightweight reasoning, and structured outputs
+- `PKU-Alignment/PKU-SafeRLHF-QA` refusal-style safety examples for concise safe behavior
+
+The `sft-download` stage downloads all public SFT/decontam datasets, saves stable local snapshots under `data/posttraining/raw/`, validates that each source yields usable examples, and then removes the temporary HF cache at `data/posttraining/hf_cache/`.
+The `sft-prepare` stage reads from those saved snapshots, writes prepared artifacts to `data/posttraining/sft_mix/`, and does not need the HF cache anymore.
+SFT run outputs land under `runs/posttraining/sft/run_*/checkpoints/`.
 
 ## Project Structure
 
@@ -195,6 +238,14 @@ uv run python main.py --stage inference --config configs/default.yaml --checkpoi
 
 # Chat UI
 uv run python main.py --stage chat --config configs/default.yaml
+
+# Prepare SFT posttraining data
+uv run python main.py --stage sft-download --config configs/posttraining/sft.yaml
+uv run python main.py --stage sft-prepare --config configs/posttraining/sft.yaml
+
+# Run SFT posttraining
+uv run python main.py --stage sft --config configs/posttraining/sft.yaml \
+    [--checkpoint runs/posttraining/base_import/run_20260422_manual/checkpoints/base_pretrain.pt]
 ```
 
 Use `--mock-testing` during `--stage inference` to skip checkpoints entirely; it loads the standard Hugging Face `openai-community/gpt2` weights so you can validate the CLI without training first (the model is downloaded on demand).

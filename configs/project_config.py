@@ -9,6 +9,7 @@ import yaml
 from pydantic import BaseModel, ConfigDict, Field, PositiveInt, field_validator
 
 from .preprocessing.preprocessConfig import PreprocessConfig, StreamingPreprocessConfig
+from .posttraining.sftConfig import SFTConfig
 from .training.trainingConfig import HfUploadConfig, ModelConfig, TrainingConfig
 from .tuning.tuneConfig import TuneConfig
 from .loggingConfig import LoggingConfig
@@ -76,6 +77,7 @@ class ProjectConfig(BaseModel):
     eval: EvalConfig | None = None
     inference: InferenceConfig | None = None
     chat: ChatConfig | None = None
+    sft: SFTConfig | None = None
 
 
 def load_project_config(config_path: str | Path) -> ProjectConfig:
@@ -125,6 +127,7 @@ __all__ = [
     "HfUploadConfig",
     "InferenceConfig",
     "ProjectConfig",
+    "SFTConfig",
     "load_project_config",
     "load_project_config_from_checkpoint",
 ]

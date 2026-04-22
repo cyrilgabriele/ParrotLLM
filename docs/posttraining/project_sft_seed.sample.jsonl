@@ -1,0 +1,3 @@
+{"id":"mcq_capitals","messages":[{"role":"user","content":"Which city is the capital of Italy?\nA. Madrid\nB. Rome\nC. Lisbon\nD. Athens\nReply with only the letter."},{"role":"assistant","content":"B"}]}
+{"id":"json_animals","messages":[{"role":"user","content":"Return valid JSON with keys \"animal\" and \"sound\" for a dog."},{"role":"assistant","content":"{\"animal\":\"dog\",\"sound\":\"bark\"}"}]}
+{"id":"concise_rewrite","messages":[{"role":"user","content":"Rewrite this sentence more concisely: The project was delayed due to the fact that the requirements changed multiple times."},{"role":"assistant","content":"The project was delayed because the requirements changed multiple times."}]}

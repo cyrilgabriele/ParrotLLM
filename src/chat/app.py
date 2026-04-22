@@ -10,6 +10,7 @@ log = logging.getLogger("parrotllm.chat")
 
 from configs import ProjectConfig
 from src.eval.inference import generate, load_model_from_checkpoint
+from src.posttraining.templates import build_generation_prompt, strip_generated_assistant_text
 from src.utils import build_tokenizer
 
 
@@ -52,11 +53,13 @@ def run_chat(project_config: ProjectConfig, *, device: torch.device) -> None:
 
         mc = state["config"]["model"]
 
-        # build context from history
-        context = ""
+        messages = []
         for user_msg, bot_msg in history:
-            context += f"User: {user_msg}\nAssistant: {bot_msg}\n"
-        context += f"User: {message}\nAssistant:"
+            messages.append({"role": "user", "content": user_msg})
+            messages.append({"role": "assistant", "content": bot_msg})
+        messages.append({"role": "user", "content": message})
+
+        context = build_generation_prompt(messages, system_prompt=chat_cfg.system_prompt)
 
         input_ids = tokenizer.encode(context)
         # truncate to fit context window
@@ -73,10 +76,7 @@ def run_chat(project_config: ProjectConfig, *, device: torch.device) -> None:
             context_length=mc["context_length"],
         )
         generated = tokenizer.decode(output[0, len(input_ids):].tolist())
-        # stop at next "User:" turn
-        if "User:" in generated:
-            generated = generated[:generated.index("User:")]
-        return generated.strip()
+        return strip_generated_assistant_text(generated)
 
     with gr.Blocks(title="ParrotLLM Chat") as demo:
         gr.Markdown("# ParrotLLM Chat")

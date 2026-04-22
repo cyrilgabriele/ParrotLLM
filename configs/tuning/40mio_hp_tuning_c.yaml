@@ -22,7 +22,7 @@ training:
   device: auto
   train_bin: data/filter_c/train.bin
   val_bin: data/filter_c/val.bin
-  # DDP Optuna on Python 3.14 uses forkserver for worker processes. Keeping
+  # DDP Optuna on recent Python versions uses forkserver for worker processes. Keeping
   # workers at 0 avoids 8 ranks × 4 workers fan-out and the forkserver crashes
   # / host-RAM spikes we observed on the cluster.
   num_workers: 0

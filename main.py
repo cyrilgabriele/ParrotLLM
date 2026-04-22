@@ -15,7 +15,19 @@ def main() -> None:
     parser.add_argument(
         "--stage",
         required=True,
-        choices=["preprocess", "preprocess-streaming", "train", "tune", "eval", "inference", "chat", "dashboard"],
+        choices=[
+            "preprocess",
+            "preprocess-streaming",
+            "train",
+            "tune",
+            "eval",
+            "inference",
+            "chat",
+            "dashboard",
+            "sft-download",
+            "sft-prepare",
+            "sft",
+        ],
     )
     parser.add_argument("--config", type=Path, default=Path("configs/default.yaml"))
     parser.add_argument("--checkpoint", default=None)
@@ -29,6 +41,7 @@ def main() -> None:
     parser.add_argument("--temperature", type=float, default=None)
     parser.add_argument("--leaderboard", action="store_true")
     parser.add_argument("--mock-testing", action="store_true", default=None)
+    parser.add_argument("--seed", type=int, default=42)
     # dashboard-specific
     parser.add_argument("--open", action="store_true",
                         help="Open browser automatically when starting the dashboard")
@@ -65,7 +78,7 @@ def main() -> None:
     project_config_payload = project_config.model_dump(mode="python")
     HF_TOKEN = maybe_load_hf_token()
 
-    SEED = 42
+    SEED = int(args.seed)
     set_seed(SEED)
 
     if args.stage == "preprocess":
@@ -150,6 +163,34 @@ def main() -> None:
         from src.chat.app import run_chat
 
         run_chat(project_config, device=device)
+        return
+
+    if args.stage == "sft-download":
+        _require_section(project_config.sft, "sft")
+        from src.posttraining.download import run_download_sft
+
+        run_download_sft(project_config, hf_token=HF_TOKEN)
+        return
+
+    if args.stage == "sft-prepare":
+        _require_section(project_config.sft, "sft")
+        from src.posttraining.prepare import run_prepare_sft
+
+        run_prepare_sft(project_config, seed=SEED, hf_token=HF_TOKEN)
+        return
+
+    if args.stage == "sft":
+        sft_cfg = _require_section(project_config.sft, "sft")
+        _require_section(project_config.model, "model")
+        device = get_device(sft_cfg.device)
+        from src.posttraining.trainer import run_sft
+
+        run_sft(
+            project_config,
+            device=device,
+            checkpoint=args.checkpoint,
+        )
+        return
 
     if args.stage == "dashboard":
         from pathlib import Path as _Path

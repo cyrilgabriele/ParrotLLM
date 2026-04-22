@@ -1,6 +1,7 @@
 """Expose shared configuration models and defaults."""
 
 from .preprocessing.preprocessConfig import DEFAULT_LANG, PreprocessConfig, StreamingPreprocessConfig
+from .posttraining.sftConfig import SFTConfig, SFTDecontamConfig, SFTSourceConfig
 from .project_config import (
     ChatConfig,
     EvalConfig,
@@ -26,6 +27,9 @@ __all__ = [
     "ModelConfig",
     "PreprocessConfig",
     "ProjectConfig",
+    "SFTConfig",
+    "SFTDecontamConfig",
+    "SFTSourceConfig",
     "StreamingPreprocessConfig",
     "TrainingConfig",
     "TuneConfig",

@@ -1,0 +1,1007 @@
+"""Dataset preparation pipeline for SFT posttraining."""
+
+from __future__ import annotations
+
+import hashlib
+import json
+import logging
+import math
+import os
+import re
+import shutil
+from collections import defaultdict
+from dataclasses import asdict, dataclass
+from pathlib import Path
+from typing import Any, Iterable, Iterator, Mapping
+
+import numpy as np
+from datasets import load_dataset, load_from_disk
+
+from configs import ProjectConfig, SFTDecontamConfig, SFTSourceConfig
+from .templates import TokenizedConversation, clean_message_content, trim_messages_to_token_limit
+from src.utils import build_tokenizer
+
+
+log = logging.getLogger("parrotllm.posttraining")
+
+_LANG_MODEL_PATH = Path("data/lid.176.ftz")
+_WORD_RE = re.compile(r"\w+")
+_PLACEHOLDER_RE = re.compile(r"(?:\[\s*(?:insert|todo|placeholder)[^\]]*\]|<\s*(?:insert|todo|placeholder)[^>]*>)", re.IGNORECASE)
+_REDaction_RE = re.compile(r"\[(?:redacted|removed)\]", re.IGNORECASE)
+_CHAIN_OF_THOUGHT_RE = re.compile(
+    r"(?:let'?s think step by step|chain of thought|step 1[:.]|first,|second,|therefore,)",
+    re.IGNORECASE,
+)
+_NON_ALNUM_RE = re.compile(r"[^a-z0-9]+")
+
+
+@dataclass(slots=True)
+class PreparedExample:
+    source: str
+    tags: list[str]
+    quality_score: float
+    prompt_hash: str
+    prompt_text: str
+    full_text_hash: str
+    tokens: list[int]
+    loss_mask: list[int]
+    messages: list[dict[str, str]]
+    metadata: dict[str, Any]
+
+
+class OptionalLanguageFilter:
+    def __init__(self, target_language: str = "en", model_path: Path = _LANG_MODEL_PATH):
+        self.target_language = target_language.lower()
+        self._model = None
+        self.available = False
+        if model_path.exists():
+            try:
+                import fasttext
+
+                self._model = fasttext.load_model(str(model_path))
+                self.available = True
+            except Exception as exc:  # pragma: no cover - depends on local setup
+                log.warning("Failed to load language detector from %s: %s", model_path, exc)
+
+    def matches(self, text: str, expected: str | None) -> bool:
+        if expected is None:
+            return True
+        expected = expected.lower()
+        if not self.available or self._model is None:
+            return True
+        snippet = text.replace("\n", " ").strip()
+        if not snippet:
+            return False
+        try:
+            label, confidence = self._model.predict(snippet[:1000], k=1)
+        except Exception as exc:  # pragma: no cover - depends on fasttext/numpy runtime
+            log.warning("Language detector failed during SFT prepare; disabling filter: %s", exc)
+            self.available = False
+            self._model = None
+            return True
+        lang = label[0].replace("__label__", "").lower()
+        return lang == expected and float(confidence[0]) >= 0.70
+
+
+class PromptContaminationIndex:
+    def __init__(self, *, threshold: float = 0.8, num_perm: int = 16, bands: int = 4):
+        self.threshold = threshold
+        self.num_perm = num_perm
+        self.bands = bands
+        self.rows = max(1, num_perm // bands)
+        self._prime = (1 << 61) - 1
+        self._a = [1_000_003 + i * 1_009 for i in range(num_perm)]
+        self._b = [7_919 + i * 37 for i in range(num_perm)]
+        self._bucket_to_indices: dict[tuple[int, tuple[int, ...]], list[int]] = defaultdict(list)
+        self._shingles: list[set[int]] = []
+        self._exact_hashes: set[str] = set()
+
+    def add(self, text: str) -> None:
+        normalized = _normalize_text(text)
+        if not normalized:
+            return
+        self._exact_hashes.add(_stable_hash(normalized))
+        shingles = _shingle_hashes(normalized)
+        index = len(self._shingles)
+        self._shingles.append(shingles)
+        signature = self._signature(shingles)
+        for band_idx in range(self.bands):
+            start = band_idx * self.rows
+            band = tuple(signature[start : start + self.rows])
+            self._bucket_to_indices[(band_idx, band)].append(index)
+
+    def contains(self, text: str) -> bool:
+        normalized = _normalize_text(text)
+        if not normalized:
+            return False
+        if _stable_hash(normalized) in self._exact_hashes:
+            return True
+        shingles = _shingle_hashes(normalized)
+        signature = self._signature(shingles)
+        candidates: set[int] = set()
+        for band_idx in range(self.bands):
+            start = band_idx * self.rows
+            band = tuple(signature[start : start + self.rows])
+            candidates.update(self._bucket_to_indices.get((band_idx, band), ()))
+        for idx in candidates:
+            if _jaccard(shingles, self._shingles[idx]) >= self.threshold:
+                return True
+        return False
+
+    def _signature(self, shingles: set[int]) -> list[int]:
+        if not shingles:
+            return [self._prime - 1] * self.num_perm
+        signature: list[int] = []
+        for a, b in zip(self._a, self._b):
+            signature.append(min((a * value + b) % self._prime for value in shingles))
+        return signature
+
+
+def _stable_hash(text: str) -> str:
+    return hashlib.sha1(text.encode("utf-8")).hexdigest()
+
+
+def _normalize_text(text: str) -> str:
+    cleaned = clean_message_content(text).lower()
+    cleaned = re.sub(r"\s+", " ", cleaned)
+    return cleaned.strip()
+
+
+def _shingle_hashes(text: str, size: int = 5) -> set[int]:
+    words = _WORD_RE.findall(text.lower())
+    if len(words) < size:
+        return set()
+    values: set[int] = set()
+    for idx in range(len(words) - size + 1):
+        shingle = " ".join(words[idx : idx + size]).encode("utf-8")
+        digest = hashlib.blake2b(shingle, digest_size=8).digest()
+        values.add(int.from_bytes(digest, "big"))
+    return values
+
+
+def _jaccard(left: set[int], right: set[int]) -> float:
+    if not left or not right:
+        return 0.0
+    return len(left & right) / len(left | right)
+
+
+def _sanitize_messages(messages: list[dict[str, str]]) -> list[dict[str, str]]:
+    sanitized: list[dict[str, str]] = []
+    for message in messages:
+        content = clean_message_content(message.get("content"))
+        content = _PLACEHOLDER_RE.sub("", content)
+        content = _REDaction_RE.sub("", content)
+        if not content:
+            continue
+        sanitized.append({"role": message["role"], "content": content})
+    return sanitized
+
+
+def _normalize_source_key(value: str | None) -> str:
+    if value is None:
+        return ""
+    return _NON_ALNUM_RE.sub("", str(value).lower())
+
+
+def _source_prompt_text(messages: list[dict[str, str]]) -> str:
+    parts = [m["content"] for m in messages if m["role"] != "assistant"]
+    return "\n".join(parts).strip()
+
+
+def _quality_score(messages: list[dict[str, str]], *, source_cfg: SFTSourceConfig) -> float:
+    assistants = [m["content"] for m in messages if m["role"] == "assistant"]
+    answer_words = sum(len(text.split()) for text in assistants)
+    score = float(source_cfg.quality_weight)
+    if 6 <= answer_words <= 180:
+        score += 0.05
+    if len(messages) >= 4:
+        score += 0.03
+    if any(tag in {"json", "extraction"} for tag in source_cfg.tags):
+        score += 0.02
+    if any(_CHAIN_OF_THOUGHT_RE.search(text) for text in assistants):
+        score -= 0.15
+    return score
+
+
+def _looks_like_chain_of_thought(text: str) -> bool:
+    return bool(_CHAIN_OF_THOUGHT_RE.search(text))
+
+
+def _boolish(value: Any) -> bool:
+    if isinstance(value, bool):
+        return value
+    if isinstance(value, (int, float)):
+        return bool(value)
+    if isinstance(value, str):
+        return value.strip().lower() in {"1", "true", "yes", "toxic", "harmful", "unsafe"}
+    return False
+
+
+def _iter_local_jsonl(path: Path) -> Iterator[dict[str, Any]]:
+    if not path.exists():
+        return
+    with path.open("r", encoding="utf-8") as handle:
+        for line in handle:
+            line = line.strip()
+            if not line:
+                continue
+            yield json.loads(line)
+
+
+def _snapshot_component(value: str | None) -> str:
+    normalized = _NON_ALNUM_RE.sub("_", str(value or "").lower()).strip("_")
+    return normalized or "default"
+
+
+def _hf_snapshot_stem(path: str, subset: str | None, split: str) -> str:
+    return "__".join(
+        [
+            _snapshot_component(path),
+            _snapshot_component(subset),
+            _snapshot_component(split),
+        ]
+    )
+
+
+def get_source_snapshot_path(raw_dir: Path, source_cfg: SFTSourceConfig) -> Path | None:
+    if source_cfg.loader == "local_jsonl":
+        return None
+    return raw_dir / "sources" / _hf_snapshot_stem(
+        source_cfg.path,
+        source_cfg.subset,
+        source_cfg.split,
+    )
+
+
+def get_decontam_snapshot_path(raw_dir: Path, cfg: SFTDecontamConfig) -> Path | None:
+    if cfg.loader != "huggingface":
+        return None
+    return raw_dir / "decontam" / _hf_snapshot_stem(
+        cfg.path,
+        cfg.subset,
+        cfg.split,
+    )
+
+
+def _load_records(
+    source_cfg: SFTSourceConfig,
+    *,
+    snapshot_path: Path | None = None,
+    cache_dir: Path | None = None,
+    hf_token: str | None = None,
+) -> Iterable[Mapping[str, Any]]:
+    if source_cfg.loader == "local_jsonl":
+        path = Path(source_cfg.path)
+        if not path.exists():
+            log.warning("Custom SFT file missing: %s", path)
+            return []
+        return list(_iter_local_jsonl(path))
+    if snapshot_path is not None:
+        if not snapshot_path.exists():
+            raise FileNotFoundError(
+                f"SFT dataset snapshot missing for source '{source_cfg.name}' at {snapshot_path}. "
+                "Run `--stage sft-download` first."
+            )
+        return load_from_disk(str(snapshot_path))
+    load_kwargs: dict[str, Any] = {"split": source_cfg.split}
+    if cache_dir is not None:
+        load_kwargs["cache_dir"] = str(cache_dir)
+    if hf_token is not None:
+        load_kwargs["token"] = hf_token
+    return load_dataset(
+        source_cfg.path,
+        source_cfg.subset,
+        **load_kwargs,
+    )
+
+
+def _normalize_local_jsonl_record(record: Mapping[str, Any], source_cfg: SFTSourceConfig) -> tuple[list[dict[str, str]], dict[str, Any]] | None:
+    if "messages" in record:
+        messages = [
+            {"role": str(message.get("role", "")), "content": str(message.get("content", ""))}
+            for message in record.get("messages", [])
+            if isinstance(message, Mapping)
+        ]
+    else:
+        prompt = str(record.get("prompt", "")).strip()
+        completion = str(record.get("completion", "") or record.get("response", "")).strip()
+        if not prompt or not completion:
+            return None
+        messages = [
+            {"role": "user", "content": prompt},
+            {"role": "assistant", "content": completion},
+        ]
+    metadata = {
+        "record_id": record.get("id"),
+        "rationale": source_cfg.rationale,
+    }
+    return messages, metadata
+
+
+def _normalize_wildchat_record(record: Mapping[str, Any], source_cfg: SFTSourceConfig) -> tuple[list[dict[str, str]], dict[str, Any]] | None:
+    model_name = str(record.get("model") or record.get("model_name") or "").lower()
+    if source_cfg.require_model_substring and source_cfg.require_model_substring.lower() not in model_name:
+        return None
+    if source_cfg.exclude_toxic and (
+        _boolish(record.get("toxic"))
+        or _boolish(record.get("toxicity"))
+        or _boolish(record.get("flagged"))
+    ):
+        return None
+    if source_cfg.exclude_redacted and (
+        _boolish(record.get("redacted"))
+        or _boolish(record.get("is_redacted"))
+    ):
+        return None
+    language = str(record.get("language") or record.get("lang") or "").lower()
+    if source_cfg.language and language and not language.startswith(source_cfg.language.lower()):
+        return None
+    raw_conversation = record.get("conversation") or record.get("messages") or record.get("turns") or []
+    if not isinstance(raw_conversation, list):
+        return None
+    messages: list[dict[str, str]] = []
+    for turn in raw_conversation:
+        if not isinstance(turn, Mapping):
+            continue
+        role = str(turn.get("role") or turn.get("from") or turn.get("speaker") or "")
+        content = str(turn.get("content") or turn.get("text") or turn.get("message") or "")
+        messages.append({"role": role, "content": content})
+    metadata = {
+        "conversation_id": record.get("conversation_id") or record.get("id"),
+        "model": record.get("model") or record.get("model_name"),
+    }
+    return messages, metadata
+
+
+def _oasst_rank_key(record: Mapping[str, Any]) -> tuple[float, float, str]:
+    rank = record.get("rank")
+    review_count = record.get("review_count")
+    score = record.get("score")
+    try:
+        rank_value = float(rank)
+    except Exception:
+        rank_value = math.inf
+    try:
+        review_value = -float(review_count)
+    except Exception:
+        review_value = 0.0
+    try:
+        score_value = -float(score)
+    except Exception:
+        score_value = 0.0
+    return rank_value, review_value + score_value, str(record.get("message_id", ""))
+
+
+def _collect_oasst_branches(
+    source_cfg: SFTSourceConfig,
+    *,
+    snapshot_path: Path | None = None,
+    cache_dir: Path | None = None,
+    hf_token: str | None = None,
+) -> list[tuple[list[dict[str, str]], dict[str, Any]]]:
+    rows = list(
+        _load_records(
+            source_cfg,
+            snapshot_path=snapshot_path,
+            cache_dir=cache_dir,
+            hf_token=hf_token,
+        )
+    )
+    by_parent: dict[str | None, list[Mapping[str, Any]]] = defaultdict(list)
+    candidates: dict[str, Mapping[str, Any]] = {}
+    for row in rows:
+        lang = str(row.get("lang") or row.get("language") or "").lower()
+        if source_cfg.language and lang and lang != source_cfg.language.lower():
+            continue
+        tree_state = row.get("tree_state")
+        if source_cfg.require_tree_state and tree_state != source_cfg.require_tree_state:
+            continue
+        if _boolish(row.get("deleted")):
+            continue
+        message_id = row.get("message_id")
+        if not message_id:
+            continue
+        candidates[str(message_id)] = row
+        parent_id = row.get("parent_id")
+        by_parent[str(parent_id) if parent_id is not None else None].append(row)
+
+    roots = sorted(
+        by_parent.get(None, []),
+        key=lambda item: str(item.get("message_id", "")),
+    )
+    branches: list[tuple[list[dict[str, str]], dict[str, Any]]] = []
+    for root in roots:
+        role = str(root.get("role") or "")
+        if role.lower() not in {"prompter", "user", "human"}:
+            continue
+        branch = [root]
+        current = root
+        while len(branch) < source_cfg.max_turns:
+            children = by_parent.get(str(current.get("message_id")), [])
+            if not children:
+                break
+            if source_cfg.use_best_branch:
+                child = sorted(children, key=_oasst_rank_key)[0]
+            else:
+                child = sorted(children, key=lambda item: str(item.get("message_id", "")))[0]
+            branch.append(child)
+            current = child
+        messages = [
+            {
+                "role": str(item.get("role") or ""),
+                "content": str(item.get("text") or item.get("content") or ""),
+            }
+            for item in branch
+        ]
+        metadata = {
+            "message_tree_id": root.get("message_tree_id"),
+            "root_id": root.get("message_id"),
+        }
+        branches.append((messages, metadata))
+    return branches
+
+
+def _normalize_tulu_record(record: Mapping[str, Any], source_cfg: SFTSourceConfig) -> tuple[list[dict[str, str]], dict[str, Any]] | None:
+    source_name = str(record.get("source") or record.get("dataset") or "").lower()
+    if source_cfg.source_matches:
+        normalized_source_name = _normalize_source_key(source_name)
+        if not any(
+            match.lower() in source_name
+            or _normalize_source_key(match) in normalized_source_name
+            for match in source_cfg.source_matches
+        ):
+            return None
+    raw_messages = record.get("messages") or record.get("conversation") or []
+    if not isinstance(raw_messages, list):
+        return None
+    messages = []
+    for item in raw_messages:
+        if not isinstance(item, Mapping):
+            continue
+        role = str(item.get("role") or item.get("from") or "")
+        content = str(item.get("content") or item.get("text") or "")
+        messages.append({"role": role, "content": content})
+    metadata = {"source_name": source_name}
+    return messages, metadata
+
+
+def _normalize_wildguardmix_record(record: Mapping[str, Any], source_cfg: SFTSourceConfig) -> tuple[list[dict[str, str]], dict[str, Any]] | None:
+    if source_cfg.keep_harmful_only:
+        harmful = (
+            _boolish(record.get("harmful"))
+            or str(record.get("prompt_harm_label") or record.get("prompt_label") or "").lower()
+            in {"harmful", "unsafe", "toxic"}
+        )
+        refusal = (
+            _boolish(record.get("refusal"))
+            or str(record.get("response_refusal_label") or record.get("response_label") or "").lower()
+            in {"refusal", "safe_refusal", "refuse"}
+        )
+        if not harmful or not refusal:
+            return None
+    prompt = str(record.get("prompt") or record.get("instruction") or "").strip()
+    response = str(
+        record.get("response")
+        or record.get("chosen")
+        or record.get("assistant_response")
+        or record.get("safe_response")
+        or ""
+    ).strip()
+    if not prompt or not response:
+        return None
+    messages = [
+        {"role": "user", "content": prompt},
+        {"role": "assistant", "content": response},
+    ]
+    metadata = {"source_row_id": record.get("id")}
+    return messages, metadata
+
+
+def _normalize_pku_safe_rlhf_qa_record(
+    record: Mapping[str, Any],
+    source_cfg: SFTSourceConfig,
+) -> tuple[list[dict[str, str]], dict[str, Any]] | None:
+    del source_cfg  # PKU-SafeRLHF-QA is already a safety-focused dataset; keep safe rows directly.
+    prompt = str(record.get("prompt") or "").strip()
+    response = str(record.get("response") or "").strip()
+    if not prompt or not response:
+        return None
+
+    is_safe = _boolish(record.get("is_safe"))
+    if not is_safe:
+        return None
+
+    messages = [
+        {"role": "user", "content": prompt},
+        {"role": "assistant", "content": response},
+    ]
+    metadata = {
+        "source_row_id": record.get("sha256"),
+        "prompt_source": record.get("prompt_source"),
+        "response_source": record.get("response_source"),
+        "severity_level": record.get("severity_level"),
+    }
+    return messages, metadata
+
+
+def _normalize_source_record(
+    record: Mapping[str, Any],
+    *,
+    source_cfg: SFTSourceConfig,
+) -> tuple[list[dict[str, str]], dict[str, Any]] | None:
+    if source_cfg.loader == "local_jsonl":
+        return _normalize_local_jsonl_record(record, source_cfg)
+    if source_cfg.loader == "wildchat":
+        return _normalize_wildchat_record(record, source_cfg)
+    if source_cfg.loader == "tulu":
+        return _normalize_tulu_record(record, source_cfg)
+    if source_cfg.loader == "wildguardmix":
+        return _normalize_wildguardmix_record(record, source_cfg)
+    if source_cfg.loader == "pku_safe_rlhf_qa":
+        return _normalize_pku_safe_rlhf_qa_record(record, source_cfg)
+    raise ValueError(f"Unsupported loader for record-level normalization: {source_cfg.loader}")
+
+
+def _prepare_message_example(
+    messages: list[dict[str, str]],
+    *,
+    source_cfg: SFTSourceConfig,
+    tokenizer,
+    system_prompt: str,
+    max_seq_length: int,
+    lang_filter: OptionalLanguageFilter,
+    metadata: dict[str, Any],
+) -> PreparedExample | None:
+    messages = _sanitize_messages(messages)
+    if not messages:
+        return None
+    if source_cfg.drop_chain_of_thought and any(
+        _looks_like_chain_of_thought(message["content"])
+        for message in messages
+        if message["role"] == "assistant"
+    ):
+        return None
+    prompt_text = _source_prompt_text(messages)
+    if not prompt_text:
+        return None
+    if not lang_filter.matches(prompt_text, source_cfg.language):
+        return None
+    tokenized = trim_messages_to_token_limit(
+        tokenizer,
+        messages,
+        system_prompt=system_prompt,
+        max_tokens=max_seq_length + 1,
+        append_eos=True,
+    )
+    if tokenized is None:
+        return None
+    if len(tokenized.messages) < source_cfg.min_turns:
+        return None
+    if len(tokenized.messages) > source_cfg.max_turns + 1:
+        return None
+    if sum(tokenized.token_loss_mask) == 0:
+        return None
+    quality = _quality_score(tokenized.messages, source_cfg=source_cfg)
+    rendered_text = "\n\n".join(
+        f"{item['role']}: {item['content']}" for item in tokenized.messages
+    )
+    return PreparedExample(
+        source=source_cfg.name,
+        tags=list(source_cfg.tags),
+        quality_score=quality,
+        prompt_hash=_stable_hash(_normalize_text(prompt_text)),
+        prompt_text=prompt_text,
+        full_text_hash=_stable_hash(_normalize_text(rendered_text)),
+        tokens=list(tokenized.tokens),
+        loss_mask=list(tokenized.token_loss_mask),
+        messages=tokenized.messages,
+        metadata=metadata,
+    )
+
+
+def _collect_candidates_for_source(
+    source_cfg: SFTSourceConfig,
+    *,
+    tokenizer,
+    system_prompt: str,
+    max_seq_length: int,
+    lang_filter: OptionalLanguageFilter,
+    snapshot_path: Path | None = None,
+    cache_dir: Path | None = None,
+    hf_token: str | None = None,
+) -> list[PreparedExample]:
+    target_candidates = source_cfg.target_examples * source_cfg.candidate_multiplier
+    prepared: list[PreparedExample] = []
+    if source_cfg.loader == "oasst1":
+        branches = _collect_oasst_branches(
+            source_cfg,
+            snapshot_path=snapshot_path,
+            cache_dir=cache_dir,
+            hf_token=hf_token,
+        )
+        iterable: Iterable[tuple[list[dict[str, str]], dict[str, Any]]] = branches
+    else:
+        iterable = []
+        raw_records = _load_records(
+            source_cfg,
+            snapshot_path=snapshot_path,
+            cache_dir=cache_dir,
+            hf_token=hf_token,
+        )
+        iterable = []
+        for record in raw_records:
+            normalized = _normalize_source_record(record, source_cfg=source_cfg)
+            if normalized is not None:
+                iterable.append(normalized)
+
+    seen_full_hashes: set[str] = set()
+    for messages, metadata in iterable:
+        item = _prepare_message_example(
+            messages,
+            source_cfg=source_cfg,
+            tokenizer=tokenizer,
+            system_prompt=system_prompt,
+            max_seq_length=max_seq_length,
+            lang_filter=lang_filter,
+            metadata=metadata,
+        )
+        if item is None:
+            continue
+        if item.full_text_hash in seen_full_hashes:
+            continue
+        seen_full_hashes.add(item.full_text_hash)
+        prepared.append(item)
+        if len(prepared) >= target_candidates:
+            break
+
+    prepared.sort(key=lambda item: (-item.quality_score, item.prompt_hash))
+    return prepared
+
+
+def _iter_local_disk_texts(path: Path, field: str | None) -> Iterator[str]:
+    if path.is_file():
+        if path.suffix == ".jsonl":
+            for row in _iter_local_jsonl(path):
+                value = row.get(field) if field else row.get("text")
+                if value:
+                    yield str(value)
+        else:
+            yield path.read_text(encoding="utf-8", errors="ignore")
+        return
+
+    try:
+        ds = load_from_disk(str(path))
+        for row in ds:
+            value = row.get(field) if field else row.get("text")
+            if value:
+                yield str(value)
+        return
+    except Exception:
+        pass
+
+    for candidate in sorted(path.rglob("*")):
+        if not candidate.is_file():
+            continue
+        if candidate.suffix == ".jsonl":
+            yield from _iter_local_disk_texts(candidate, field)
+            continue
+        if candidate.suffix in {".txt", ".md"}:
+            yield candidate.read_text(encoding="utf-8", errors="ignore")
+
+
+def _extract_hf_prompt(record: Mapping[str, Any], dataset_name: str, field: str | None) -> str | None:
+    if field and record.get(field):
+        return str(record[field])
+    if dataset_name == "hellaswag":
+        if record.get("ctx"):
+            return str(record["ctx"])
+        ctx_a = record.get("ctx_a")
+        ctx_b = record.get("ctx_b")
+        if ctx_a or ctx_b:
+            return " ".join(part for part in [ctx_a, ctx_b] if part)
+    if dataset_name == "winogrande":
+        return str(record.get("sentence") or "")
+    if dataset_name == "openbookqa":
+        return str(record.get("question_stem") or "")
+    if dataset_name == "lambada":
+        return str(record.get("text") or "")
+    return None
+
+
+def _build_decontam_index(
+    configs: list[SFTDecontamConfig],
+    *,
+    snapshot_paths: Mapping[str, Path] | None = None,
+    cache_dir: Path | None = None,
+    hf_token: str | None = None,
+) -> PromptContaminationIndex:
+    index = PromptContaminationIndex()
+    snapshot_paths = snapshot_paths or {}
+    for cfg in configs:
+        if not cfg.enabled:
+            continue
+        try:
+            snapshot_path = snapshot_paths.get(cfg.name)
+            if snapshot_path is not None:
+                if not snapshot_path.exists():
+                    raise FileNotFoundError(
+                        f"HF decontamination snapshot for '{cfg.name}' is missing at {snapshot_path}. "
+                        "Run `--stage sft-download` first."
+                    )
+                for text in _iter_local_disk_texts(snapshot_path, cfg.field):
+                    if text:
+                        index.add(text)
+                continue
+            if cfg.loader == "local_disk":
+                for text in _iter_local_disk_texts(Path(cfg.path), cfg.field):
+                    if text:
+                        index.add(text)
+            else:
+                load_kwargs: dict[str, Any] = {"split": cfg.split}
+                if cache_dir is not None:
+                    load_kwargs["cache_dir"] = str(cache_dir)
+                if hf_token is not None:
+                    load_kwargs["token"] = hf_token
+                dataset = load_dataset(cfg.path, cfg.subset, **load_kwargs)
+                for row in dataset:
+                    text = _extract_hf_prompt(row, cfg.name, cfg.field)
+                    if text:
+                        index.add(text)
+        except FileNotFoundError:
+            raise
+        except Exception as exc:  # pragma: no cover - depends on network/local files
+            log.warning("Skipping decontamination source %s: %s", cfg.name, exc)
+    return index
+
+
+def _select_final_examples(
+    source_candidates: dict[str, list[PreparedExample]],
+    *,
+    source_cfgs: list[SFTSourceConfig],
+    decontam_index: PromptContaminationIndex,
+) -> tuple[list[PreparedExample], dict[str, dict[str, int]]]:
+    selected: list[PreparedExample] = []
+    stats: dict[str, dict[str, int]] = {}
+    seen_prompts: set[str] = set()
+    accepted_index = PromptContaminationIndex()
+
+    for cfg in source_cfgs:
+        kept = 0
+        dropped_exact = 0
+        dropped_fuzzy = 0
+        dropped_contam = 0
+        for candidate in source_candidates.get(cfg.name, []):
+            if kept >= cfg.target_examples:
+                break
+            if candidate.prompt_hash in seen_prompts:
+                dropped_exact += 1
+                continue
+            if decontam_index.contains(candidate.prompt_text):
+                dropped_contam += 1
+                continue
+            if accepted_index.contains(candidate.prompt_text):
+                dropped_fuzzy += 1
+                continue
+            accepted_index.add(candidate.prompt_text)
+            seen_prompts.add(candidate.prompt_hash)
+            selected.append(candidate)
+            kept += 1
+        stats[cfg.name] = {
+            "target": cfg.target_examples,
+            "kept": kept,
+            "dropped_exact": dropped_exact,
+            "dropped_fuzzy": dropped_fuzzy,
+            "dropped_contam": dropped_contam,
+            "available_candidates": len(source_candidates.get(cfg.name, [])),
+        }
+    return selected, stats
+
+
+def _split_examples(examples: list[PreparedExample]) -> dict[str, list[PreparedExample]]:
+    by_source: dict[str, list[PreparedExample]] = defaultdict(list)
+    for example in examples:
+        by_source[example.source].append(example)
+
+    splits = {"train": [], "dev": [], "test": []}
+    for source, items in by_source.items():
+        del source  # source kept only for grouping clarity
+        ordered = sorted(items, key=lambda item: item.prompt_hash)
+        total = len(ordered)
+        dev_n = max(1, round(total * 0.05)) if total >= 20 else max(1, total // 10) if total >= 3 else 0
+        test_n = max(1, round(total * 0.05)) if total >= 20 else max(1, total // 10) if total >= 3 else 0
+        train_n = max(0, total - dev_n - test_n)
+        splits["train"].extend(ordered[:train_n])
+        splits["dev"].extend(ordered[train_n : train_n + dev_n])
+        splits["test"].extend(ordered[train_n + dev_n :])
+    for name in splits:
+        splits[name].sort(key=lambda item: (item.source, item.prompt_hash))
+    return splits
+
+
+def _pack_examples(examples: list[PreparedExample], *, max_seq_length: int) -> list[dict[str, Any]]:
+    packed: list[dict[str, Any]] = []
+    current_tokens: list[int] = []
+    current_mask: list[int] = []
+    source_counts: dict[str, int] = defaultdict(int)
+    quality_sum = 0.0
+    for example in examples:
+        if len(example.tokens) > max_seq_length + 1:
+            continue
+        if current_tokens and len(current_tokens) + len(example.tokens) > max_seq_length + 1:
+            packed.append(
+                {
+                    "tokens": current_tokens,
+                    "loss_mask": current_mask,
+                    "quality_score": quality_sum / max(1, sum(source_counts.values())),
+                    "source_counts": dict(source_counts),
+                    "num_examples": sum(source_counts.values()),
+                }
+            )
+            current_tokens = []
+            current_mask = []
+            source_counts = defaultdict(int)
+            quality_sum = 0.0
+        current_tokens.extend(example.tokens)
+        current_mask.extend(example.loss_mask)
+        source_counts[example.source] += 1
+        quality_sum += example.quality_score
+
+    if current_tokens:
+        packed.append(
+            {
+                "tokens": current_tokens,
+                "loss_mask": current_mask,
+                "quality_score": quality_sum / max(1, sum(source_counts.values())),
+                "source_counts": dict(source_counts),
+                "num_examples": sum(source_counts.values()),
+            }
+        )
+    return packed
+
+
+def _write_jsonl(path: Path, records: Iterable[dict[str, Any]]) -> int:
+    count = 0
+    with path.open("w", encoding="utf-8") as handle:
+        for record in records:
+            handle.write(json.dumps(record, ensure_ascii=True) + "\n")
+            count += 1
+    return count
+
+
+def _cleanup_cache_dir(cache_dir: Path | None, *, protected_paths: list[Path]) -> bool:
+    if cache_dir is None or not cache_dir.exists():
+        return False
+
+    resolved_cache = cache_dir.resolve()
+    for protected_path in protected_paths:
+        resolved_protected = protected_path.resolve()
+        if resolved_protected == resolved_cache:
+            log.warning(
+                "Skipping SFT cache cleanup because protected path %s equals cache dir %s",
+                resolved_protected,
+                resolved_cache,
+            )
+            return False
+        if os.path.commonpath([str(resolved_cache), str(resolved_protected)]) == str(resolved_cache):
+            log.warning(
+                "Skipping SFT cache cleanup because protected path %s lives inside cache dir %s",
+                resolved_protected,
+                resolved_cache,
+            )
+            return False
+
+    shutil.rmtree(resolved_cache)
+    log.info("Removed SFT cache directory: %s", resolved_cache)
+    return True
+
+
+def _serialize_example(example: PreparedExample) -> dict[str, Any]:
+    payload = asdict(example)
+    return payload
+
+
+def run_prepare_sft(
+    project_config: ProjectConfig,
+    *,
+    seed: int | None = None,
+    hf_token: str | None = None,
+) -> dict[str, str]:
+    sft_cfg = project_config.sft
+    if sft_cfg is None:
+        raise ValueError("SFT configuration missing; cannot prepare posttraining data.")
+
+    effective_seed = int(sft_cfg.seed if seed is None else seed)
+    np.random.seed(effective_seed)
+    prepared_dir = Path(sft_cfg.prepared_dir)
+    prepared_dir.mkdir(parents=True, exist_ok=True)
+    raw_dir = Path(sft_cfg.raw_dir)
+
+    tokenizer = build_tokenizer()
+    lang_filter = OptionalLanguageFilter()
+    log.info("Preparing SFT data into %s", prepared_dir)
+
+    source_candidates: dict[str, list[PreparedExample]] = {}
+    for source_cfg in sft_cfg.sources:
+        snapshot_path = get_source_snapshot_path(raw_dir, source_cfg)
+        candidates = _collect_candidates_for_source(
+            source_cfg,
+            tokenizer=tokenizer,
+            system_prompt=sft_cfg.system_prompt,
+            max_seq_length=sft_cfg.max_seq_length,
+            lang_filter=lang_filter,
+            snapshot_path=snapshot_path,
+        )
+        source_candidates[source_cfg.name] = candidates
+        log.info("Collected %d candidates for %s", len(candidates), source_cfg.name)
+
+    decontam_snapshot_paths = {
+        cfg.name: snapshot_path
+        for cfg in sft_cfg.decontam_datasets
+        if (snapshot_path := get_decontam_snapshot_path(raw_dir, cfg)) is not None
+    }
+    decontam_index = _build_decontam_index(
+        sft_cfg.decontam_datasets,
+        snapshot_paths=decontam_snapshot_paths,
+    )
+    selected, source_stats = _select_final_examples(
+        source_candidates,
+        source_cfgs=sft_cfg.sources,
+        decontam_index=decontam_index,
+    )
+    splits = _split_examples(selected)
+
+    train_examples_path = prepared_dir / "train_examples.jsonl"
+    dev_examples_path = prepared_dir / "dev_examples.jsonl"
+    test_examples_path = prepared_dir / "test_examples.jsonl"
+    train_packed_path = prepared_dir / "train_packed.jsonl"
+    dev_packed_path = prepared_dir / "dev_packed.jsonl"
+    test_packed_path = prepared_dir / "test_packed.jsonl"
+
+    _write_jsonl(train_examples_path, (_serialize_example(item) for item in splits["train"]))
+    _write_jsonl(dev_examples_path, (_serialize_example(item) for item in splits["dev"]))
+    _write_jsonl(test_examples_path, (_serialize_example(item) for item in splits["test"]))
+
+    train_packed = _pack_examples(splits["train"], max_seq_length=sft_cfg.max_seq_length)
+    dev_packed = _pack_examples(splits["dev"], max_seq_length=sft_cfg.max_seq_length)
+    test_packed = _pack_examples(splits["test"], max_seq_length=sft_cfg.max_seq_length)
+    _write_jsonl(train_packed_path, train_packed)
+    _write_jsonl(dev_packed_path, dev_packed)
+    _write_jsonl(test_packed_path, test_packed)
+
+    manifest = {
+        "seed": effective_seed,
+        "system_prompt": sft_cfg.system_prompt,
+        "max_seq_length": sft_cfg.max_seq_length,
+        "raw_dir": str(raw_dir),
+        "split_counts": {name: len(items) for name, items in splits.items()},
+        "packed_counts": {
+            "train": len(train_packed),
+            "dev": len(dev_packed),
+            "test": len(test_packed),
+        },
+        "source_stats": source_stats,
+        "train_examples_path": str(train_examples_path),
+        "dev_examples_path": str(dev_examples_path),
+        "test_examples_path": str(test_examples_path),
+        "train_packed_path": str(train_packed_path),
+        "dev_packed_path": str(dev_packed_path),
+        "test_packed_path": str(test_packed_path),
+        "sources": [
+            {
+                "name": cfg.name,
+                "target_examples": cfg.target_examples,
+                "tags": cfg.tags,
+                "rationale": cfg.rationale,
+            }
+            for cfg in sft_cfg.sources
+        ],
+    }
+    manifest_path = prepared_dir / "manifest.json"
+    manifest_path.write_text(json.dumps(manifest, indent=2), encoding="utf-8")
+    log.info("Prepared SFT dataset manifest -> %s", manifest_path)
+    return {
+        "manifest": str(manifest_path),
+        "train_packed": str(train_packed_path),
+        "dev_packed": str(dev_packed_path),
+        "test_packed": str(test_packed_path),
+    }

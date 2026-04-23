@@ -74,7 +74,7 @@ class SFTConfig(BaseModel):
     replay_train_bin: Path = Field(default=Path("data/processed/train.bin"))
     replay_val_bin: Path = Field(default=Path("data/processed/val.bin"))
     num_epochs: float = Field(default=1.0, gt=0.0)
-    polish_epochs: float = Field(default=0.25, gt=0.0)
+    polish_epochs: float = Field(default=0.25, ge=0.0)
     polish_subset_size: int = Field(default=4000, ge=1)
     save_every: int = Field(default=250, ge=1)
     eval_every: int = Field(default=100, ge=1)

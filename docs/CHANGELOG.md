@@ -21,6 +21,33 @@ Track what was changed, why it was changed, and any important notes.
 
 ## Unreleased
 
+### [2026-04-23] - Tilman
+
+#### What
+- Finalized and verified the complete Supervised Fine-Tuning (SFT) pipeline, enabling the transition from base pretraining to an instruction-following model
+- Key technical enhancements for SFT and Apple Silicon training:
+  - Added **loss masking support** to `ParrotLLM.forward()` and chunked loss computation, allowing loss to be calculated exclusively on assistant response tokens while ignoring user prompts
+  - Implemented **OOM-resilient chunked loss** for the MPS backend; the trainer now automatically splits loss chunks and clears the cache (`gc.collect()`, `torch.mps.empty_cache()`) when encountering Apple Silicon memory pressure during backward passes
+  - Enabled **MPS Autocast** (`float16`) for faster and more memory-efficient training on Mac hardware
+- Established a **local feasibility configuration** in `configs/posttraining/sft.yaml` used for the current training runs:
+  - **Learning Rate:** `1e-4` (single sweep)
+  - **Batch Size:** 64 (effective, via `8` micro-batches and `8` accumulation steps)
+  - **Dataset Mix:** ~18,775 curated examples from public-only sources (`WildChat`, `OASST1`, `Tulu-3`, `PKU-SafeRLHF`)
+  - **Context Length:** 1024 tokens
+  - **Features:** Assistant-only loss enabled, replay/polish disabled for maximum local throughput
+- Updated the Chat application to use the shared frozen prompt template, ensuring perfectly aligned behavior between posttraining and production inference
+
+#### Why
+- Loss masking is critical for SFT to ensure the model learns to *generate* the assistant response rather than simply predicting the user's prompt
+- Memory resilience and Autocast support for MPS make SFT practical on consumer Mac hardware, which previously suffered from frequent OOM crashes during the dense LM-head loss computation
+- The single-sweep `1e-4` profile was adopted as the default to ensure full training runs can complete in a reasonable timeframe on user hardware while still providing a significant instruction-following behavioral shift
+- Aligning the chat template with the SFT formatting is critical to avoid "training-inference skew," where the model fails to follow instructions because of subtle differences in prompt structure
+
+#### Remarks
+- Successfully executed multiple SFT training runs on Apple Silicon (MPS), reaching a stable final loss on the assistant-only objective
+- Verified the end-to-end stability of the pipeline from raw snapshot download through to final checkpoint creation
+- The higher-quality 3-sweep + replay recipe remains preserved in `configs/posttraining/sft_full_recipe.yaml` for use on high-compute environments
+
 ### [2026-04-22] - Tilman
 
 #### What
@@ -81,6 +108,12 @@ Track what was changed, why it was changed, and any important notes.
   - relaxing the project Python range to `>=3.13,<3.15`,
   - adding `.python-version`,
   - and documenting the recommended `Python 3.13` path for MPS-friendly local training
+- Added a practical low-compute local SFT profile by:
+  - making the default `configs/posttraining/sft.yaml` use a single `1e-4` sweep,
+  - disabling replay in that default profile,
+  - disabling polish via config,
+  - and increasing checkpoint/log frequency so long local runs expose more progress
+- Preserved the original 3-sweep + replay + polish recipe as `configs/posttraining/sft_full_recipe.yaml`
 - Ran and verified a tiny end-to-end SFT smoke test using:
   - `configs/posttraining/sft_smoke_fast.yaml`
   - `configs/posttraining/dev_prompt_suite_smoke.jsonl`
@@ -104,6 +137,7 @@ Track what was changed, why it was changed, and any important notes.
 - We switched from an HF-cache-only download approach to stable repo-local raw snapshots because the workflow needs durable local data artifacts that remain usable after the transient HF cache is removed
 - We added smoke-test configs because the full SFT recipe is intentionally non-trivial. A tiny, fast end-to-end path makes it possible to validate the full training pipeline before committing to a long overnight run
 - We adjusted the branch-local Python recommendation toward `3.13` because the original local `3.14` environment did not expose Apple `MPS` correctly, while a more stable stack is a practical way to save time on local development and SFT experimentation
+- We added a practical local default SFT profile because the full quality-maximizing recipe turned out to be too slow on the user’s Apple Silicon setup once MPS-safe fallbacks forced `batch_size=1`, heavy gradient accumulation, gradient checkpointing, and tiny loss chunks. The new default therefore optimizes for getting one real full run done on local hardware, while the original full recipe remains available separately
 
 #### Remarks
 - A full real `sft-download` and `sft-prepare` run completed successfully with the new raw-snapshot workflow
@@ -120,6 +154,7 @@ Track what was changed, why it was changed, and any important notes.
 - Relevant smoke outputs were written under:
   - `data/posttraining/sft_mix_smoke_fast/`
   - `runs/posttraining/sft_smoke_fast/`
+- The default `configs/posttraining/sft.yaml` now targets local feasibility rather than maximum quality; use `configs/posttraining/sft_full_recipe.yaml` if you explicitly want the original 3-sweep recipe again
 
 ### [2026-04-08] - Cyril Gabriele
 

@@ -43,7 +43,9 @@ sft:
   eval_batch_size: 8
   gradient_accumulation_steps: 8
   learning_rates:
+    - 5.0e-5
     - 1.0e-4
+    - 2.0e-4
   min_lr_ratio: 0.1
   warmup_ratio: 0.03
   weight_decay: 0.01
@@ -51,17 +53,17 @@ sft:
   beta2: 0.95
   grad_clip: 1.0
   z_loss_coeff: 0.0
-  replay_ratio: 0.0
+  replay_ratio: 0.1
   replay_train_bin: data/processed/train.bin
   replay_val_bin: data/processed/val.bin
   num_epochs: 1.0
-  polish_epochs: 0.0
+  polish_epochs: 0.25
   polish_subset_size: 4000
-  save_every: 10
+  save_every: 250
   eval_every: 100
   keep_last_checkpoints: 3
   keep_best_checkpoints: 2
-  log_every: 1
+  log_every: 10
   seed: 42
   compile: false
   format_score_weight: 0.1

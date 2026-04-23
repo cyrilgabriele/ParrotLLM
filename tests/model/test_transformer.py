@@ -1,5 +1,6 @@
 import torch
 import pytest
+import torch.nn.functional as F
 from src.model.transformer import ParrotLLM
 
 @pytest.fixture
@@ -57,6 +58,69 @@ def test_chunked_loss_matches_full_loss(small_config):
     assert logits.shape == (B, T, small_config["model"]["vocab_size"])
     assert chunked_logits is None
     assert torch.allclose(chunked_loss, full_loss, atol=1e-6, rtol=1e-5)
+
+
+def test_chunked_masked_loss_matches_full_masked_loss(small_config):
+    model = ParrotLLM(small_config)
+    B, T = 4, 16
+    idx = torch.randint(0, small_config["model"]["vocab_size"], (B, T))
+    targets = torch.randint(0, small_config["model"]["vocab_size"], (B, T))
+    loss_mask = torch.randint(0, 2, (B, T), dtype=torch.int64).to(torch.float32)
+    loss_mask[0, 0] = 1.0
+
+    logits, full_loss = model(
+        idx,
+        targets,
+        loss_mask=loss_mask,
+        z_loss_coeff=1e-4,
+    )
+    chunked_logits, chunked_loss = model(
+        idx,
+        targets,
+        loss_mask=loss_mask,
+        return_logits=False,
+        z_loss_coeff=1e-4,
+        loss_chunk_rows=7,
+    )
+
+    assert logits.shape == (B, T, small_config["model"]["vocab_size"])
+    assert chunked_logits is None
+    assert torch.allclose(chunked_loss, full_loss, atol=1e-6, rtol=1e-5)
+
+
+def test_chunked_loss_recovers_from_simulated_mps_oom(small_config, monkeypatch):
+    model = ParrotLLM(small_config)
+    B, T = 4, 16
+    idx = torch.randint(0, small_config["model"]["vocab_size"], (B, T))
+    targets = torch.randint(0, small_config["model"]["vocab_size"], (B, T))
+
+    _, baseline_loss = model(
+        idx,
+        targets,
+        return_logits=False,
+        loss_chunk_rows=2,
+    )
+
+    original_linear = F.linear
+
+    def flaky_linear(input, weight, bias=None):
+        if (
+            input.dim() == 2
+            and weight.data_ptr() == model.lm_head.weight.data_ptr()
+            and input.size(0) > 1
+        ):
+            raise RuntimeError("MPS backend out of memory")
+        return original_linear(input, weight, bias)
+
+    monkeypatch.setattr(F, "linear", flaky_linear)
+    _, recovered_loss = model(
+        idx,
+        targets,
+        return_logits=False,
+        loss_chunk_rows=8,
+    )
+
+    assert torch.allclose(recovered_loss, baseline_loss, atol=1e-6, rtol=1e-5)
 
 def test_weight_tying(small_config):
     model = ParrotLLM(small_config)

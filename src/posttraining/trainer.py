@@ -3,11 +3,13 @@
 from __future__ import annotations
 
 import copy
+import gc
 import json
 import logging
 import math
 import os
 import random
+import sys
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
@@ -15,6 +17,7 @@ from typing import Any
 import torch
 import torch.nn.functional as F
 from torch.utils.data import DataLoader, Dataset
+from tqdm.auto import tqdm
 
 from configs import ProjectConfig
 from src.logging_utils import JSONLLogger, make_run_dir, setup_logger
@@ -23,6 +26,7 @@ from src.posttraining.eval import evaluate_prompt_suite
 from src.training.trainer import (
     CheckpointManager,
     WindowDataset,
+    _empty_device_cache,
     build_optimizer,
     build_scheduler,
     estimate_loss,
@@ -112,6 +116,38 @@ def _masked_cross_entropy(
     return loss
 
 
+def _loss_chunk_rows_for_device(device: torch.device) -> int:
+    if device.type == "mps":
+        return 16
+    return 2048
+
+
+def _resolve_runtime_batching(
+    *,
+    device: torch.device,
+    train_batch_size: int,
+    eval_batch_size: int,
+    gradient_accumulation_steps: int,
+) -> tuple[int, int, int]:
+    if device.type != "mps":
+        return train_batch_size, eval_batch_size, gradient_accumulation_steps
+
+    # On Apple MPS, memory drift is a real issue. Batch 1 is the most stable.
+    # We compensate for the small batch size by increasing gradient accumulation.
+    safe_train_batch_size = min(train_batch_size, 1)
+    safe_eval_batch_size = min(eval_batch_size, 2)
+
+    if safe_train_batch_size == train_batch_size:
+        return train_batch_size, safe_eval_batch_size, gradient_accumulation_steps
+
+    effective_sequences = train_batch_size * gradient_accumulation_steps
+    safe_gradient_accumulation_steps = max(
+        gradient_accumulation_steps,
+        math.ceil(effective_sequences / safe_train_batch_size),
+    )
+    return safe_train_batch_size, safe_eval_batch_size, safe_gradient_accumulation_steps
+
+
 def _make_replay_loader(
     path: Path,
     *,
@@ -164,8 +200,14 @@ def _evaluate_sft_loss(
         y = batch["y"].to(device)
         loss_mask = batch["loss_mask"].to(device)
         with autocast_ctx:
-            logits, _ = model(x)
-            loss = _masked_cross_entropy(logits, y, loss_mask, z_loss_coeff=z_loss_coeff)
+            _, loss = model(
+                x,
+                targets=y,
+                loss_mask=loss_mask,
+                return_logits=False,
+                z_loss_coeff=z_loss_coeff,
+                loss_chunk_rows=_loss_chunk_rows_for_device(device),
+            )
         total += float(loss.detach().item()) * float(loss_mask.sum().item())
         denom += float(loss_mask.sum().item())
     model.train()
@@ -181,6 +223,16 @@ def _load_manifest(prepared_dir: Path) -> dict[str, Any]:
             f"Prepared SFT manifest not found at {manifest_path}. Run --stage sft-prepare first."
         )
     return json.loads(manifest_path.read_text(encoding="utf-8"))
+
+
+def _count_jsonl_records(path: str | Path | None) -> int:
+    if path is None:
+        return 0
+    record_path = Path(path)
+    if not record_path.exists():
+        return 0
+    with record_path.open("r", encoding="utf-8") as handle:
+        return sum(1 for line in handle if line.strip())
 
 
 def _merge_model_config(project_config: ProjectConfig, checkpoint_config: dict[str, Any] | None) -> dict[str, Any]:
@@ -201,6 +253,8 @@ def _load_base_model(
     merged_config = _merge_model_config(project_config, ckpt_config)
     model = ParrotLLM(merged_config).to(device)
     model.load_state_dict(checkpoint["model"])
+    del checkpoint  # Explicitly release checkpoint memory
+    gc.collect()
     model.train()
     return model, merged_config
 
@@ -246,6 +300,9 @@ def _evaluate_checkpoint(
         top_p=1.0,
     )
     metrics["format_score"] = float(suite.get("format_score", 0.0))
+    if device.type == "mps":
+        gc.collect()
+        _empty_device_cache(device)
     return metrics
 
 
@@ -275,6 +332,10 @@ def _run_single_sweep(
     dev_dataset_path: Path,
     tag: str,
 ) -> SweepResult:
+    # Disable MPS allocation cap to utilize more shared memory if available
+    if device.type == "mps":
+        os.environ["PYTORCH_MPS_HIGH_WATERMARK_RATIO"] = "0.0"
+
     sft_cfg = project_config.sft
     assert sft_cfg is not None
 
@@ -284,6 +345,29 @@ def _run_single_sweep(
     if pad_token_id is None:
         raise ValueError("Tokenizer must define a pad token for SFT batching.")
 
+    train_batch_size, eval_batch_size, gradient_accumulation_steps = _resolve_runtime_batching(
+        device=device,
+        train_batch_size=int(sft_cfg.train_batch_size),
+        eval_batch_size=int(sft_cfg.eval_batch_size),
+        gradient_accumulation_steps=int(sft_cfg.gradient_accumulation_steps),
+    )
+    if (
+        train_batch_size != int(sft_cfg.train_batch_size)
+        or eval_batch_size != int(sft_cfg.eval_batch_size)
+        or gradient_accumulation_steps != int(sft_cfg.gradient_accumulation_steps)
+    ):
+        log.warning(
+            "MPS runtime batching override for %s: train_batch_size %d -> %d, "
+            "eval_batch_size %d -> %d, gradient_accumulation_steps %d -> %d",
+            tag,
+            int(sft_cfg.train_batch_size),
+            train_batch_size,
+            int(sft_cfg.eval_batch_size),
+            eval_batch_size,
+            int(sft_cfg.gradient_accumulation_steps),
+            gradient_accumulation_steps,
+        )
+
     train_ds = PackedConversationDataset(train_dataset_path)
     dev_ds = PackedConversationDataset(dev_dataset_path)
     collate_fn = build_sft_collator(pad_token_id)
@@ -292,7 +376,7 @@ def _run_single_sweep(
     generator.manual_seed(int(sft_cfg.seed))
     train_loader = DataLoader(
         train_ds,
-        batch_size=sft_cfg.train_batch_size,
+        batch_size=train_batch_size,
         shuffle=True,
         generator=generator,
         num_workers=0,
@@ -300,7 +384,7 @@ def _run_single_sweep(
     )
     dev_loader = DataLoader(
         dev_ds,
-        batch_size=sft_cfg.eval_batch_size,
+        batch_size=eval_batch_size,
         shuffle=False,
         num_workers=0,
         collate_fn=collate_fn,
@@ -311,6 +395,7 @@ def _run_single_sweep(
         checkpoint_path=base_checkpoint,
         device=device,
     )
+    _empty_device_cache(device)
     context_length = int(effective_config["model"]["context_length"])
 
     if device.type == "cuda" and sft_cfg.compile:
@@ -329,7 +414,7 @@ def _run_single_sweep(
     }
 
     micro_batches = max(1, math.ceil(len(train_loader) * sft_cfg.num_epochs))
-    optimizer_steps = max(1, math.ceil(micro_batches / sft_cfg.gradient_accumulation_steps))
+    optimizer_steps = max(1, math.ceil(micro_batches / gradient_accumulation_steps))
     tc["max_steps"] = optimizer_steps
     tc["warmup_steps"] = int(round(optimizer_steps * sft_cfg.warmup_ratio))
 
@@ -337,15 +422,17 @@ def _run_single_sweep(
     scheduler = build_scheduler(optimizer, tc)
     autocast_ctx, scaler = get_autocast_context(device)
 
-    replay_train_loader = _make_replay_loader(
-        Path(sft_cfg.replay_train_bin),
-        context_length=context_length,
-        batch_size=sft_cfg.train_batch_size,
-        seed=int(sft_cfg.seed),
-    )
+    replay_train_loader = None
+    if sft_cfg.replay_ratio > 0.0:
+        replay_train_loader = _make_replay_loader(
+            Path(sft_cfg.replay_train_bin),
+            context_length=context_length,
+            batch_size=train_batch_size,
+            seed=int(sft_cfg.seed),
+        )
     replay_train_iter = _cycle(replay_train_loader)
     replay_val_ds = None
-    if Path(sft_cfg.replay_val_bin).exists():
+    if sft_cfg.replay_ratio > 0.0 and Path(sft_cfg.replay_val_bin).exists():
         from src.training.trainer import StridedWindowDataset
 
         replay_val_ds = StridedWindowDataset(str(sft_cfg.replay_val_bin), context_length, stride=context_length // 2)
@@ -371,6 +458,27 @@ def _run_single_sweep(
         encoding="utf-8",
     )
     (Path(run_dir) / "manifest_snapshot.json").write_text(json.dumps(manifest, indent=2), encoding="utf-8")
+    loss_chunk_rows = _loss_chunk_rows_for_device(device)
+    log.info(
+        "Starting %s on %s with train_batch_size=%d eval_batch_size=%d grad_accum=%d optimizer_steps=%d loss_chunk_rows=%d",
+        tag,
+        device,
+        train_batch_size,
+        eval_batch_size,
+        gradient_accumulation_steps,
+        optimizer_steps,
+        loss_chunk_rows,
+    )
+    prompt_suite_cases = _count_jsonl_records(sft_cfg.prompt_suite_path)
+    log.info(
+        "Initial checkpoint evaluation before optimizer step 1: %d dev batches, up to %d replay batches, %d prompt-suite cases. "
+        "On %s the visible training bar advances per micro-batch, while optimizer steps happen every %d micro-batches.",
+        len(dev_loader),
+        20 if replay_val_ds is not None else 0,
+        prompt_suite_cases,
+        device,
+        gradient_accumulation_steps,
+    )
 
     base_metrics = _evaluate_checkpoint(
         model=model,
@@ -382,6 +490,7 @@ def _run_single_sweep(
         tokenizer=tokenizer,
         context_length=context_length,
     )
+    _empty_device_cache(device)
     base_replay_ppl = base_metrics["replay_ppl"] if math.isfinite(base_metrics["replay_ppl"]) else None
     best_score = _composite_score(
         base_metrics,
@@ -407,6 +516,13 @@ def _run_single_sweep(
     step = 0
     micro_step = 0
     rng = random.Random(int(sft_cfg.seed))
+    progress = tqdm(
+        total=micro_batches,
+        desc=tag,
+        leave=True,
+        dynamic_ncols=True,
+        disable=not sys.stderr.isatty(),
+    )
     while micro_step < micro_batches:
         try:
             batch = next(train_iter)
@@ -420,28 +536,40 @@ def _run_single_sweep(
             x = replay_batch[0].to(device)
             y = replay_batch[1].to(device)
             with autocast_ctx:
-                _, loss = model(x, targets=y, return_logits=False)
+                _, loss = model(
+                    x,
+                    targets=y,
+                    return_logits=False,
+                    loss_chunk_rows=loss_chunk_rows,
+                )
         else:
             x = batch["x"].to(device)
             y = batch["y"].to(device)
             loss_mask = batch["loss_mask"].to(device)
             with autocast_ctx:
-                logits, _ = model(x)
-                loss = _masked_cross_entropy(
-                    logits,
+                _, loss = model(
+                    x,
                     y,
-                    loss_mask,
+                    loss_mask=loss_mask,
+                    return_logits=False,
                     z_loss_coeff=sft_cfg.z_loss_coeff,
+                    loss_chunk_rows=loss_chunk_rows,
                 )
 
-        scaled_loss = loss / sft_cfg.gradient_accumulation_steps
+        scaled_loss = loss / gradient_accumulation_steps
         if scaler is None:
             scaled_loss.backward()
         else:
             scaler.scale(scaled_loss).backward()
 
         micro_step += 1
-        if micro_step % sft_cfg.gradient_accumulation_steps != 0 and micro_step < micro_batches:
+        progress.update(1)
+        progress.set_postfix(
+            loss=f"{float(loss.detach().item()):.3f}",
+            opt=f"{step}/{optimizer_steps}",
+            refresh=False,
+        )
+        if micro_step % gradient_accumulation_steps != 0 and micro_step < micro_batches:
             continue
 
         if scaler is None:
@@ -457,6 +585,18 @@ def _run_single_sweep(
         optimizer.zero_grad(set_to_none=True)
         scheduler.step()
         step += 1
+
+        # Periodic memory cleanup on MPS
+        if device.type == "mps":
+            gc.collect()
+            _empty_device_cache(device)
+
+        progress.set_postfix(
+            loss=f"{float(loss.detach().item()):.3f}",
+            opt=f"{step}/{optimizer_steps}",
+            lr=f"{float(optimizer.param_groups[0]['lr']):.2e}",
+            refresh=False,
+        )
 
         if step % sft_cfg.log_every == 0:
             jlog.log(
@@ -482,6 +622,9 @@ def _run_single_sweep(
 
         should_eval = step % sft_cfg.eval_every == 0 or step == optimizer_steps
         if should_eval:
+            if device.type == "mps":
+                gc.collect()
+                _empty_device_cache(device)
             metrics = _evaluate_checkpoint(
                 model=model,
                 dev_loader=dev_loader,
@@ -492,6 +635,9 @@ def _run_single_sweep(
                 tokenizer=tokenizer,
                 context_length=context_length,
             )
+            if device.type == "mps":
+                gc.collect()
+                _empty_device_cache(device)
             score = _composite_score(
                 metrics,
                 base_replay_ppl=base_replay_ppl,
@@ -506,6 +652,13 @@ def _run_single_sweep(
                 replay_ppl=metrics["replay_ppl"],
                 format_score=metrics["format_score"],
                 composite_score=score,
+            )
+            progress.set_postfix(
+                loss=f"{float(loss.detach().item()):.3f}",
+                opt=f"{step}/{optimizer_steps}",
+                dev=f"{float(metrics['dev_loss']):.3f}",
+                score=f"{float(score):.3f}",
+                refresh=False,
             )
             if score < best_score:
                 best_score = score
@@ -522,6 +675,7 @@ def _run_single_sweep(
                     trainer_state={"selection_metric": "composite_score"},
                 )
 
+    progress.close()
     checkpoint_manager.save_last(
         model,
         optimizer,
@@ -533,6 +687,13 @@ def _run_single_sweep(
         trainer_state={"selection_metric": "composite_score"},
     )
     jlog.close()
+    
+    # Explicitly clear model and optimizer before returning to release memory
+    del model, optimizer, scheduler, train_loader, dev_loader
+    if device.type == "mps":
+        gc.collect()
+        _empty_device_cache(device)
+
     return SweepResult(
         learning_rate=learning_rate,
         run_dir=run_dir,
@@ -619,26 +780,43 @@ def run_sft(
 
     best_sweep = min(sweep_results, key=lambda item: item.best_score)
 
-    polish_source = _select_polish_subset(prepared_dir, sft_cfg.polish_subset_size)
-    polish_packed = _pack_polish_examples(
-        polish_source,
-        prepared_dir / "polish_packed.jsonl",
-        max_seq_length=sft_cfg.max_seq_length,
-    )
-    polish_project_config = project_config.model_copy(deep=True)
-    assert polish_project_config.sft is not None
-    polish_project_config.sft.num_epochs = sft_cfg.polish_epochs
-    polish_project_config.sft.learning_rates = [best_sweep.learning_rate / 2.0]
-    polish_result = _run_single_sweep(
-        polish_project_config,
-        device=device,
-        base_checkpoint=best_sweep.best_checkpoint or base_checkpoint,
-        prepared_dir=prepared_dir,
-        learning_rate=best_sweep.learning_rate / 2.0,
-        train_dataset_path=polish_packed,
-        dev_dataset_path=dev_dataset_path,
-        tag="sft_polish",
-    )
+    polish_summary: dict[str, Any]
+    if sft_cfg.polish_epochs > 0.0:
+        polish_source = _select_polish_subset(prepared_dir, sft_cfg.polish_subset_size)
+        polish_packed = _pack_polish_examples(
+            polish_source,
+            prepared_dir / "polish_packed.jsonl",
+            max_seq_length=sft_cfg.max_seq_length,
+        )
+        polish_project_config = project_config.model_copy(deep=True)
+        assert polish_project_config.sft is not None
+        polish_project_config.sft.num_epochs = sft_cfg.polish_epochs
+        polish_project_config.sft.learning_rates = [best_sweep.learning_rate / 2.0]
+        polish_result = _run_single_sweep(
+            polish_project_config,
+            device=device,
+            base_checkpoint=best_sweep.best_checkpoint or base_checkpoint,
+            prepared_dir=prepared_dir,
+            learning_rate=best_sweep.learning_rate / 2.0,
+            train_dataset_path=polish_packed,
+            dev_dataset_path=dev_dataset_path,
+            tag="sft_polish",
+        )
+        polish_summary = {
+            "learning_rate": polish_result.learning_rate,
+            "run_dir": polish_result.run_dir,
+            "best_checkpoint": polish_result.best_checkpoint,
+            "best_score": polish_result.best_score,
+            "best_dev_loss": polish_result.best_dev_loss,
+            "best_replay_ppl": polish_result.best_replay_ppl,
+            "best_format_score": polish_result.best_format_score,
+        }
+    else:
+        log.info("Skipping polish pass because polish_epochs=%s", sft_cfg.polish_epochs)
+        polish_summary = {
+            "skipped": True,
+            "reason": "polish_epochs <= 0",
+        }
 
     summary = {
         "base_checkpoint": base_checkpoint,
@@ -651,15 +829,7 @@ def run_sft(
             "best_replay_ppl": best_sweep.best_replay_ppl,
             "best_format_score": best_sweep.best_format_score,
         },
-        "polish": {
-            "learning_rate": polish_result.learning_rate,
-            "run_dir": polish_result.run_dir,
-            "best_checkpoint": polish_result.best_checkpoint,
-            "best_score": polish_result.best_score,
-            "best_dev_loss": polish_result.best_dev_loss,
-            "best_replay_ppl": polish_result.best_replay_ppl,
-            "best_format_score": polish_result.best_format_score,
-        },
+        "polish": polish_summary,
         "sweeps": [
             {
                 "learning_rate": result.learning_rate,

@@ -1,5 +1,6 @@
 """ParrotLLM transformer — a decoder-only language model."""
 
+import gc
 import math
 
 import torch
@@ -208,35 +209,73 @@ class ParrotLLM(nn.Module):
         hidden: torch.Tensor,
         targets: torch.Tensor,
         *,
+        loss_mask: torch.Tensor | None = None,
         z_loss_coeff: float = 0.0,
         loss_chunk_rows: int = 2048,
     ) -> torch.Tensor:
         """Compute CE (+ optional z-loss) without materializing full-sequence logits."""
         flat_hidden = hidden.reshape(-1, hidden.size(-1))
         flat_targets = targets.reshape(-1)
+        flat_mask = loss_mask.reshape(-1).to(dtype=torch.float32) if loss_mask is not None else None
 
         total_ce = torch.zeros((), device=hidden.device, dtype=torch.float32)
         total_z = torch.zeros((), device=hidden.device, dtype=torch.float32)
+        denom = flat_mask.sum().clamp_min(1.0) if flat_mask is not None else torch.tensor(
+            float(flat_targets.numel()),
+            device=hidden.device,
+            dtype=torch.float32,
+        )
+
+        def accumulate_chunk(
+            hidden_chunk: torch.Tensor,
+            target_chunk: torch.Tensor,
+            mask_chunk: torch.Tensor | None,
+        ) -> tuple[torch.Tensor, torch.Tensor]:
+            try:
+                logits_chunk = F.linear(hidden_chunk, self.lm_head.weight, self.lm_head.bias)
+                ce_chunk = F.cross_entropy(
+                    logits_chunk,
+                    target_chunk,
+                    reduction="none",
+                )
+                ce_total = (ce_chunk * mask_chunk).sum() if mask_chunk is not None else ce_chunk.sum()
+
+                z_total = torch.zeros((), device=hidden_chunk.device, dtype=torch.float32)
+                if z_loss_coeff > 0.0:
+                    z_chunk = torch.logsumexp(logits_chunk.float(), dim=-1).pow(2)
+                    z_total = (z_chunk * mask_chunk).sum() if mask_chunk is not None else z_chunk.sum()
+                return ce_total, z_total
+            except RuntimeError as exc:
+                if "MPS backend out of memory" not in str(exc) or hidden_chunk.size(0) <= 1:
+                    raise
+                if hidden_chunk.device.type == "mps":
+                    gc.collect()
+                    torch.mps.empty_cache()
+                midpoint = hidden_chunk.size(0) // 2
+                left_ce, left_z = accumulate_chunk(
+                    hidden_chunk[:midpoint],
+                    target_chunk[:midpoint],
+                    mask_chunk[:midpoint] if mask_chunk is not None else None,
+                )
+                right_ce, right_z = accumulate_chunk(
+                    hidden_chunk[midpoint:],
+                    target_chunk[midpoint:],
+                    mask_chunk[midpoint:] if mask_chunk is not None else None,
+                )
+                return left_ce + right_ce, left_z + right_z
 
         for start in range(0, flat_hidden.size(0), loss_chunk_rows):
             stop = start + loss_chunk_rows
             hidden_chunk = flat_hidden[start:stop]
             target_chunk = flat_targets[start:stop]
-            logits_chunk = F.linear(hidden_chunk, self.lm_head.weight, self.lm_head.bias)
+            mask_chunk = flat_mask[start:stop] if flat_mask is not None else None
+            ce_total, z_total = accumulate_chunk(hidden_chunk, target_chunk, mask_chunk)
+            total_ce = total_ce + ce_total
+            total_z = total_z + z_total
 
-            total_ce = total_ce + F.cross_entropy(
-                logits_chunk,
-                target_chunk,
-                reduction="sum",
-            )
-            if z_loss_coeff > 0.0:
-                total_z = total_z + torch.logsumexp(
-                    logits_chunk.float(), dim=-1
-                ).pow(2).sum()
-
-        loss = total_ce / flat_targets.numel()
+        loss = total_ce / denom
         if z_loss_coeff > 0.0:
-            loss = loss + z_loss_coeff * (total_z / flat_targets.numel())
+            loss = loss + z_loss_coeff * (total_z / denom)
         return loss
 
     def forward(
@@ -244,6 +283,7 @@ class ParrotLLM(nn.Module):
         idx: torch.Tensor,
         targets: torch.Tensor | None = None,
         *,
+        loss_mask: torch.Tensor | None = None,
         return_logits: bool = True,
         z_loss_coeff: float = 0.0,
         loss_chunk_rows: int = 2048,
@@ -272,17 +312,28 @@ class ParrotLLM(nn.Module):
                 loss = self._compute_loss_in_chunks(
                     x,
                     targets,
+                    loss_mask=loss_mask,
                     z_loss_coeff=z_loss_coeff,
                     loss_chunk_rows=loss_chunk_rows,
                 )
             else:
-                loss = F.cross_entropy(
-                    logits.view(-1, logits.size(-1)), targets.view(-1)
-                )
+                losses = F.cross_entropy(
+                    logits.view(-1, logits.size(-1)),
+                    targets.view(-1),
+                    reduction="none",
+                ).view_as(targets)
+                if loss_mask is not None:
+                    denom = loss_mask.sum().clamp_min(1.0)
+                    loss = (losses * loss_mask).sum() / denom
+                else:
+                    loss = losses.mean()
                 if z_loss_coeff > 0.0:
-                    loss = loss + z_loss_coeff * torch.logsumexp(
-                        logits.float(), dim=-1
-                    ).pow(2).mean()
+                    z_term = torch.logsumexp(logits.float(), dim=-1).pow(2)
+                    if loss_mask is not None:
+                        denom = loss_mask.sum().clamp_min(1.0)
+                        loss = loss + z_loss_coeff * ((z_term * loss_mask).sum() / denom)
+                    else:
+                        loss = loss + z_loss_coeff * z_term.mean()
         return logits, loss
 
     def count_parameters(self) -> int:

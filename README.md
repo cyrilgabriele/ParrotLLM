@@ -105,6 +105,18 @@ uv run python main.py --stage sft-prepare --config configs/posttraining/sft.yaml
 uv run python main.py --stage sft --config configs/posttraining/sft.yaml
 ```
 
+`configs/posttraining/sft.yaml` is the practical default profile for local Apple Silicon runs:
+- one learning-rate sweep at `1e-4`
+- no replay mixing
+- no polish pass
+- checkpoint/logging every optimizer step for better long-run visibility
+
+If you want the original quality-maximizing recipe instead, use:
+
+```bash
+uv run python main.py --stage sft --config configs/posttraining/sft_full_recipe.yaml
+```
+
 The SFT config is already set up for the repo's recommended 20k-example mix:
 
 - `allenai/WildChat` GPT-4 conversations for realistic chat prompts

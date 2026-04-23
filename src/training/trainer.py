@@ -446,6 +446,8 @@ def get_autocast_context(device: torch.device):
         else:
             scaler = torch.amp.GradScaler("cuda")
             return torch.autocast("cuda", dtype=torch.float16), scaler
+    if device.type == "mps":
+        return torch.autocast("mps", dtype=torch.float16), None
     return torch.autocast(device.type, enabled=False), None
 
 

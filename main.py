@@ -138,11 +138,11 @@ def main() -> None:
     if args.stage == "sft":
         # VL07 — Supervised Fine-Tuning stage. Requires:
         #   (i)   an `sft:` block in the YAML config (see configs/default.yaml),
-        #   (ii)  a base pretraining checkpoint passed via --checkpoint
-        #         (SFT on random weights makes no sense; VL07 slide 12).
+        #   (ii)  a base pretraining checkpoint, sourced from --checkpoint or
+        #         from sft.base_checkpoint in the YAML (CLI takes precedence).
         sft_cfg = _require_section(project_config.sft, "sft")
         _require_section(project_config.model, "model")
-        checkpoint_path = _require_checkpoint(args.checkpoint, stage="sft")
+        checkpoint_path = _resolve_sft_checkpoint(args.checkpoint, sft_cfg.base_checkpoint)
         device = get_device(sft_cfg.device)
         from src.post_training.sft.trainer import run_sft
 
@@ -205,6 +205,21 @@ def _load_effective_project_config(
 def _require_checkpoint(path: str | None, stage: str) -> str:
     if not path:
         raise ValueError(f"--checkpoint is required for stage '{stage}'.")
+    return path
+
+
+def _resolve_sft_checkpoint(cli_path: str | None, yaml_default: str | None) -> str:
+    """Choose the SFT base checkpoint. CLI flag wins; YAML is the fallback.
+
+    SFT on random weights is meaningless (VL07 slide 12), so one of the
+    two sources must be set. Empty strings from argparse fall through.
+    """
+    path = (cli_path or "").strip() or (yaml_default or "").strip()
+    if not path:
+        raise ValueError(
+            "SFT requires a base pretraining checkpoint. Pass --checkpoint "
+            "or set sft.base_checkpoint in the YAML."
+        )
     return path
 
 

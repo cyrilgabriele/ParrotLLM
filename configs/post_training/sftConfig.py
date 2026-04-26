@@ -123,6 +123,35 @@ class SFTConfig(BaseModel):
         ),
     )
 
+    # ── Wikitext-103 CF tripwire (SFT.md §5.2 + §6) ─────────────────────────
+    wt103_eval_every_n_evals: int = Field(
+        default=5,
+        ge=0,
+        description=(
+            "Run a Wikitext-103 PPL check every Nth SFT validation eval. "
+            "0 disables the tripwire. With eval_every=200 and N=5 the check "
+            "runs every 1000 optim steps."
+        ),
+    )
+    wt103_max_sequences: int = Field(
+        default=64,
+        ge=1,
+        description=(
+            "Number of context-length windows over Wikitext-103 to score "
+            "per tripwire eval. 64 × 1024 ≈ 65k tokens is enough for a "
+            "stable PPL estimate and finishes in seconds on a 5090."
+        ),
+    )
+    wt103_hard_stop_pct: float = Field(
+        default=10.0,
+        ge=0.0,
+        description=(
+            "Stop the run when WT-103 PPL has risen this many percent above "
+            "the base-checkpoint baseline. 0 disables the hard stop (still "
+            "logs the delta). SFT.md §6 sets the operating bound at >10%."
+        ),
+    )
+
     # ── Logging / checkpointing ─────────────────────────────────────────────
     runs_dir: str = Field(default="runs")
     eval_every: int = Field(default=200, ge=1)
@@ -142,6 +171,17 @@ class SFTConfig(BaseModel):
 
     # ── Device ──────────────────────────────────────────────────────────────
     device: str = Field(default="auto")
+
+    # ── Performance knobs (5090 / Blackwell defaults) ───────────────────────
+    torch_compile: bool = Field(
+        default=True,
+        description=(
+            "Compile the model with `torch.compile(mode='reduce-overhead')`. "
+            "Typically 1.4–1.8x training throughput on Ampere+ at zero math "
+            "change. Set to false if compile errors on your platform; "
+            "diagnostics first, disable last."
+        ),
+    )
 
     @field_validator("lr_schedule")
     @classmethod

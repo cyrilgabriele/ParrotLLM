@@ -23,6 +23,7 @@ Every submodule corresponds to one mechanical piece of that definition:
 from src.post_training.sft.template import (
     AlpacaTemplate,
     DEFAULT_ALPACA_TEMPLATE,
+    format_sft_prompt,
     render_example,
 )
 from src.post_training.sft.collator import SFTCollator
@@ -31,7 +32,20 @@ from src.post_training.sft.data import build_sft_datasets
 __all__ = [
     "AlpacaTemplate",
     "DEFAULT_ALPACA_TEMPLATE",
+    "format_sft_prompt",
     "render_example",
     "SFTCollator",
     "build_sft_datasets",
 ]
+
+
+# Inference contract (VL07 slide 32, "critical rule"):
+#   from src.post_training.sft import format_sft_prompt
+#   prompt = format_sft_prompt("What is the capital of France?")
+#   ids = tokenizer(prompt, return_tensors="pt").input_ids.to(device)
+#   out = generate(model, ids, max_new_tokens=128, ...)
+#   completion = tokenizer.decode(out[0, ids.size(1):])
+# Any code path that bypasses `format_sft_prompt` for inference against an
+# SFT checkpoint will silently degrade output quality. See
+# `src/post_training/sft/template.py::format_sft_prompt` for full
+# rationale.

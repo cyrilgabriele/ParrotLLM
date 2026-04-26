@@ -173,12 +173,20 @@ sft:
   # Batching
   batch_size: 8                   # adjust to VRAM; 5090 fits 16 comfortably
   gradient_accumulation_steps: 8  # effective batch = 64
-  num_workers: 2
+  num_workers: 0                  # in-RAM dataset → 0 is faster than 2 (no fork/IPC)
   pin_memory: true
 
   # Catastrophic-forgetting mitigations (VL07 slide 25)
   pretraining_mix_ratio: 0.0      # 0 = pure SFT; 0.05-0.10 for OLMo-style mix
   pretraining_bin_path: null
+
+  # Wikitext-103 CF tripwire (SFT.md §6 operating bound: hard-stop >10%)
+  wt103_eval_every_n_evals: 5     # 0 disables; 5 = every 5th SFT eval
+  wt103_max_sequences: 64         # ~65k tokens — finishes in seconds on a 5090
+  wt103_hard_stop_pct: 10.0       # 0 disables hard-stop (still logs delta)
+
+  # Performance knobs (5090/Blackwell defaults)
+  torch_compile: true             # set false only if compile errors on your platform
 
   # Logging / checkpointing
   runs_dir: runs

@@ -54,6 +54,7 @@ from dataclasses import asdict, dataclass
 from pathlib import Path
 from typing import Any
 
+import numpy as np
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
@@ -63,6 +64,7 @@ from configs import ProjectConfig
 from configs.post_training.sftConfig import SFTConfig
 from src.logging_utils import init_logging, make_run_dir
 from src.model import ParrotLLM
+from src.eval.perplexity import compute_perplexity
 from src.post_training.sft.collator import IGNORE_INDEX, SFTCollator, count_supervised_tokens
 from src.post_training.sft.data import build_sft_datasets, load_decontam_texts
 from src.post_training.sft.template import DEFAULT_ALPACA_TEMPLATE
@@ -108,6 +110,38 @@ def _wsd_lr(step: int, warmup: int, total: int, peak: float, floor: float,
 
 # ── Numerical guards ─────────────────────────────────────────────────────────
 
+def _wt103_should_stop(
+    *,
+    baseline_ppl: float,
+    current_ppl: float,
+    threshold_pct: float,
+) -> bool:
+    """Return True when WT-103 perplexity has risen ≥ ``threshold_pct``
+    above the base-checkpoint baseline.
+
+    This implements the catastrophic-forgetting hard-stop described in
+    SFT.md §6: if the model loses world knowledge faster than it acquires
+    instruction-following, kill the run. ``threshold_pct == 0`` disables
+    the tripwire (useful for ablation runs where you want to *measure*
+    CF rather than be protected from it).
+    """
+    if threshold_pct <= 0:
+        return False
+    delta_pct = 100.0 * (current_ppl - baseline_ppl) / baseline_ppl
+    return delta_pct >= threshold_pct
+
+
+def _should_stop_early(bad_evals: int, patience: int) -> bool:
+    """Return True when ``bad_evals`` consecutive non-improving evals
+    have accumulated and early stopping is enabled.
+
+    ``patience == 0`` disables early stopping entirely (treated as
+    "never stop"). Reference: SFT.md §3.4 lists early stopping as
+    catastrophic-forgetting mitigation #2.
+    """
+    return patience > 0 and bad_evals >= patience
+
+
 def _is_nonfinite(loss: torch.Tensor) -> bool:
     """True if the loss is NaN or ±inf.
 
@@ -149,6 +183,64 @@ def _autocast_for(device: torch.device) -> tuple[Any, torch.amp.GradScaler | Non
         scaler = torch.amp.GradScaler("cuda")
         return torch.autocast("cuda", dtype=torch.float16), scaler
     return nullcontext(), None
+
+
+# ── Pretraining-mix window sampler (CF mitigation #1, VL07 slide 25) ────────
+
+def _draw_pretraining_window(
+    memmap: np.ndarray,
+    context_length: int,
+    batch_size: int,
+    rng: np.random.Generator,
+) -> tuple[torch.Tensor, torch.Tensor]:
+    """Sample ``batch_size`` random windows from a uint16 token array.
+
+    Returns ``(inputs, targets)`` shaped ``(B, T)`` where ``targets`` is
+    the next-token shift of ``inputs``. This matches the legacy pretraining
+    forward path (``model(idx, targets=...)``) so the same model serves
+    both the SFT loss (``labels=...``) and the CF-mitigation loss without
+    branching.
+
+    SFT.md §3.4 mitigation #3 / VL07 slide 25 #1: a small fraction of
+    SFT batches are replaced with pretraining batches to keep the base
+    model's distribution within reach.
+    """
+    n_tokens = len(memmap)
+    max_start = n_tokens - context_length - 1
+    if max_start < 0:
+        raise ValueError(
+            f"Pretraining .bin too small for context_length={context_length}: "
+            f"have {n_tokens} tokens, need ≥ {context_length + 1}."
+        )
+    starts = rng.integers(low=0, high=max_start + 1, size=batch_size)
+    inputs = np.empty((batch_size, context_length), dtype=np.int64)
+    targets = np.empty((batch_size, context_length), dtype=np.int64)
+    for i, s in enumerate(starts):
+        s = int(s)
+        chunk = memmap[s : s + context_length + 1].astype(np.int64)
+        inputs[i] = chunk[:-1]
+        targets[i] = chunk[1:]
+    return torch.from_numpy(inputs), torch.from_numpy(targets)
+
+
+# ── Wikitext-103 tokeniser cache for the CF tripwire ────────────────────────
+
+def _load_wt103_tokens(tokenizer, max_tokens: int) -> torch.Tensor:
+    """Load the Wikitext-103 test split, tokenise, slice to ``max_tokens``.
+
+    Cached once at the start of the run; the same tensor is re-used for
+    the baseline PPL on the base model and for every periodic re-eval.
+    Slicing keeps the per-eval cost to seconds — full WT-103 test is
+    ~245 k tokens which is overkill for a regression check.
+    """
+    from datasets import load_dataset  # type: ignore[import]
+
+    ds = load_dataset("wikitext", "wikitext-103-raw-v1", split="test")
+    text = "\n\n".join(ds["text"])
+    ids = tokenizer.encode(text)
+    if len(ids) > max_tokens:
+        ids = ids[:max_tokens]
+    return torch.tensor(ids, dtype=torch.long)
 
 
 # ── Model loading from pretraining checkpoint ────────────────────────────────
@@ -241,6 +333,7 @@ class SFTRunState:
     tokens_seen: int = 0
     best_val_loss: float = float("inf")
     best_checkpoint: str | None = None
+    bad_evals: int = 0  # consecutive non-improving evals (early-stop counter)
 
 
 def run_sft(
@@ -340,6 +433,60 @@ def run_sft(
     model, embedded_config = _load_base_model(checkpoint, device)
     model.train()
 
+    # ── Performance knobs (Blackwell sm_100 / Ada sm_89 / Ampere sm_8x) ────
+    # TF32 matmul fallback gives free perf on FP32 paths (e.g. RoPE freqs
+    # complex math, layer-norm reductions) without changing BF16 results.
+    torch.set_float32_matmul_precision("high")
+    if device.type == "cuda":
+        torch.backends.cuda.matmul.allow_tf32 = True
+        torch.backends.cudnn.allow_tf32 = True
+    # `torch.compile` typically buys 1.4–1.8x on this size model. The
+    # `_orig_mod` strip in _save_checkpoint already handles the wrapper
+    # so checkpoints stay compatible with the un-compiled load path.
+    if sft.torch_compile and device.type == "cuda":
+        log.info("Compiling model (torch.compile, mode='reduce-overhead')...")
+        model = torch.compile(model, mode="reduce-overhead", fullgraph=False)
+
+    # ── Pretraining-mix setup (CF mitigation #1, VL07 slide 25) ────────────
+    pretraining_memmap: np.ndarray | None = None
+    mix_rng = np.random.default_rng(42)
+    if sft.pretraining_mix_ratio > 0:
+        if not sft.pretraining_bin_path:
+            raise ValueError(
+                "sft.pretraining_mix_ratio > 0 requires sft.pretraining_bin_path "
+                "(path to the pretraining train.bin uint16 token array)."
+            )
+        if not Path(sft.pretraining_bin_path).exists():
+            raise FileNotFoundError(
+                f"sft.pretraining_bin_path does not exist: {sft.pretraining_bin_path}"
+            )
+        pretraining_memmap = np.memmap(sft.pretraining_bin_path, dtype=np.uint16, mode="r")
+        log.info(
+            "Pretraining-mix enabled: ratio=%.2f, source=%s (%d tokens)",
+            sft.pretraining_mix_ratio, sft.pretraining_bin_path, len(pretraining_memmap),
+        )
+
+    # ── Wikitext-103 CF tripwire baseline (SFT.md §6) ─────────────────────
+    # Compute PPL on the base checkpoint BEFORE any SFT step. Subsequent
+    # tripwire evals compare against this baseline; if PPL rises >threshold,
+    # the run hard-stops to preserve world knowledge.
+    wt103_tokens: torch.Tensor | None = None
+    wt103_baseline_ppl: float | None = None
+    if sft.wt103_eval_every_n_evals > 0:
+        log.info("Loading Wikitext-103 for catastrophic-forgetting tripwire...")
+        wt103_tokens = _load_wt103_tokens(
+            tokenizer,
+            max_tokens=(sft.wt103_max_sequences + 2) * sft.max_length,
+        )
+        model.eval()
+        wt103_baseline_ppl = compute_perplexity(
+            model, wt103_tokens, sft.max_length, device,
+            batch_size=max(1, sft.batch_size),
+            max_sequences=sft.wt103_max_sequences,
+        )
+        model.train()
+        log.info("WT-103 baseline PPL on base model: %.3f", wt103_baseline_ppl)
+
     # ── Optimiser + schedule ───────────────────────────────────────────────
     optimizer = _build_optimizer(model, sft)
     steps_per_epoch = max(1, len(train_loader) // sft.gradient_accumulation_steps)
@@ -383,16 +530,36 @@ def run_sft(
     accum_counter = 0
     accum_loss_sum = 0.0
     accum_tokens_sum = 0
+    should_stop_early = False
 
     for epoch in range(sft.epochs):
         state.epoch = epoch
         log.info("── Epoch %d/%d ──", epoch + 1, sft.epochs)
         for batch in train_loader:
-            input_ids = batch["input_ids"].to(device, non_blocking=True)
-            labels = batch["labels"].to(device, non_blocking=True)
-
-            with autocast:
-                loss = model(input_ids, labels=labels)
+            # Per-step pretraining-mix decision (VL07 slide 25 #1).
+            # Replace this SFT batch with a pretraining batch with prob=ratio.
+            use_mix = (
+                pretraining_memmap is not None
+                and float(mix_rng.random()) < sft.pretraining_mix_ratio
+            )
+            if use_mix:
+                pre_inputs, pre_targets = _draw_pretraining_window(
+                    pretraining_memmap, sft.max_length,
+                    sft.batch_size, mix_rng,
+                )
+                pre_inputs = pre_inputs.to(device, non_blocking=True)
+                pre_targets = pre_targets.to(device, non_blocking=True)
+                with autocast:
+                    _, loss = model(
+                        pre_inputs, targets=pre_targets, return_logits=False,
+                    )
+                n_tokens = sft.max_length * sft.batch_size
+            else:
+                input_ids = batch["input_ids"].to(device, non_blocking=True)
+                labels = batch["labels"].to(device, non_blocking=True)
+                with autocast:
+                    loss = model(input_ids, labels=labels)
+                n_tokens = count_supervised_tokens(labels)
 
             if _is_nonfinite(loss):
                 # Discard the whole in-flight accumulation window — partial
@@ -423,7 +590,8 @@ def run_sft(
             else:
                 loss_to_back.backward()
 
-            n_tokens = count_supervised_tokens(labels)
+            # n_tokens was already computed above (branch-aware: response
+            # tokens for SFT, full window for pretraining-mix).
             accum_loss_sum += loss_value * n_tokens
             accum_tokens_sum += n_tokens
             accum_counter += 1
@@ -494,6 +662,7 @@ def run_sft(
                 })
                 if val_metrics["val_loss"] < state.best_val_loss:
                     state.best_val_loss = val_metrics["val_loss"]
+                    state.bad_evals = 0
                     state.best_checkpoint = _save_checkpoint(
                         model=model,
                         run_dir=run_dir,
@@ -505,6 +674,56 @@ def run_sft(
                         sft_config=sft,
                         stats=bundle.stats,
                     )
+                else:
+                    state.bad_evals += 1
+                    if _should_stop_early(state.bad_evals, sft.early_stopping_patience):
+                        log.info(
+                            "Early stop: %d consecutive evals without improvement "
+                            "(patience=%d). Best val loss = %.4f at %s.",
+                            state.bad_evals, sft.early_stopping_patience,
+                            state.best_val_loss, state.best_checkpoint,
+                        )
+                        should_stop_early = True
+
+                # WT-103 catastrophic-forgetting tripwire (SFT.md §6).
+                # Run every Nth SFT eval; compare against the base-model
+                # baseline; hard-stop if PPL has risen above threshold.
+                if (wt103_tokens is not None
+                        and wt103_baseline_ppl is not None
+                        and sft.wt103_eval_every_n_evals > 0):
+                    eval_idx = state.step // sft.eval_every
+                    if eval_idx % sft.wt103_eval_every_n_evals == 0:
+                        cur_ppl = compute_perplexity(
+                            model, wt103_tokens, sft.max_length, device,
+                            batch_size=max(1, sft.batch_size),
+                            max_sequences=sft.wt103_max_sequences,
+                        )
+                        delta_pct = 100.0 * (cur_ppl - wt103_baseline_ppl) / wt103_baseline_ppl
+                        log.info(
+                            "  [wt103] PPL %.3f (Δ %+.2f%% vs baseline %.3f)",
+                            cur_ppl, delta_pct, wt103_baseline_ppl,
+                        )
+                        _write_metric({
+                            "stage": "sft",
+                            "step": state.step,
+                            "epoch": epoch,
+                            "wt103_ppl": cur_ppl,
+                            "wt103_baseline_ppl": wt103_baseline_ppl,
+                            "wt103_delta_pct": delta_pct,
+                        })
+                        if _wt103_should_stop(
+                            baseline_ppl=wt103_baseline_ppl,
+                            current_ppl=cur_ppl,
+                            threshold_pct=sft.wt103_hard_stop_pct,
+                        ):
+                            log.warning(
+                                "CF tripwire: WT-103 PPL up %.2f%% ≥ %.2f%% "
+                                "hard-stop threshold. Halting SFT to preserve "
+                                "world knowledge. Best SFT val: %.4f at %s.",
+                                delta_pct, sft.wt103_hard_stop_pct,
+                                state.best_val_loss, state.best_checkpoint,
+                            )
+                            should_stop_early = True
 
             if state.step % sft.save_every == 0:
                 _save_checkpoint(
@@ -523,7 +742,7 @@ def run_sft(
             accum_loss_sum = 0.0
             accum_tokens_sum = 0
 
-            if state.step >= total_optim_steps:
+            if state.step >= total_optim_steps or should_stop_early:
                 break
 
         # End of epoch: discard any partial accumulation. If we let the
@@ -542,7 +761,7 @@ def run_sft(
             accum_loss_sum = 0.0
             accum_tokens_sum = 0
 
-        if state.step >= total_optim_steps:
+        if state.step >= total_optim_steps or should_stop_early:
             break
 
     # Final checkpoint + summary.

@@ -118,6 +118,27 @@ class AlpacaTemplate:
 DEFAULT_ALPACA_TEMPLATE = AlpacaTemplate()
 
 
+def format_sft_prompt(instruction: str, *, input_text: str = "") -> str:
+    """Format an instruction (and optional input) as an Alpaca prompt
+    suitable for **inference** against an SFT-trained ParrotLLM checkpoint.
+
+    Returns the prompt string up to and including ``### Response:\\n`` —
+    autoregressive generation should continue from there until the EOS
+    token (or a ``###`` boundary, whichever comes first).
+
+    VL07 slide 32 ("Critical rule") is non-negotiable: the template used
+    in training MUST match the template used at inference, byte-for-byte.
+    Any caller running inference against an SFT checkpoint is expected to
+    route prompts through this helper before feeding them to the
+    generator. Skipping it silently degrades response quality because the
+    model is being prompted in a format it has never seen during SFT.
+
+    Reference: ``src/post_training/sft/template.py`` is the single source
+    of truth for the Alpaca template across the SFT pipeline.
+    """
+    return DEFAULT_ALPACA_TEMPLATE.render_prompt(instruction, input_text)
+
+
 def render_example(
     example: dict,
     *,

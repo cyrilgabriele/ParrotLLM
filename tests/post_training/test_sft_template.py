@@ -100,3 +100,24 @@ def test_normalise_unknown_schema_raises():
 def test_render_example_rejects_empty_response():
     with pytest.raises(ValueError):
         render_example({"instruction": "Q", "input": "", "response": ""})
+
+
+# ── Inference parity (VL07 slide 32 critical rule) ──────────────────────────
+
+def test_format_sft_prompt_matches_training_prefix():
+    """`format_sft_prompt` MUST return byte-identical output to the training
+    prompt prefix. Slide 32: train-time and inference-time templates must
+    match — any drift silently degrades SFT quality."""
+    from src.post_training.sft import format_sft_prompt
+    instruction = "Explain gravity to a 5-year-old."
+    inference_prompt = format_sft_prompt(instruction)
+    training_prompt = DEFAULT_ALPACA_TEMPLATE.render_prompt(instruction)
+    assert inference_prompt == training_prompt
+    assert inference_prompt.endswith("### Response:\n")
+
+
+def test_format_sft_prompt_with_input_field():
+    from src.post_training.sft import format_sft_prompt
+    p = format_sft_prompt("Translate.", input_text="Bonjour le monde")
+    assert "### Input:\nBonjour le monde" in p
+    assert p.endswith("### Response:\n")

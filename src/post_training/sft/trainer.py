@@ -64,7 +64,7 @@ from configs.post_training.sftConfig import SFTConfig
 from src.logging_utils import init_logging, make_run_dir
 from src.model import ParrotLLM
 from src.post_training.sft.collator import IGNORE_INDEX, SFTCollator, count_supervised_tokens
-from src.post_training.sft.data import build_sft_datasets
+from src.post_training.sft.data import build_sft_datasets, load_decontam_texts
 from src.post_training.sft.template import DEFAULT_ALPACA_TEMPLATE
 from src.utils import build_tokenizer, get_device
 
@@ -104,6 +104,21 @@ def _wsd_lr(step: int, warmup: int, total: int, peak: float, floor: float,
         return floor
     progress = (step - decay_start) / decay_steps
     return peak - (peak - floor) * progress
+
+
+# ── Numerical guards ─────────────────────────────────────────────────────────
+
+def _is_nonfinite(loss: torch.Tensor) -> bool:
+    """True if the loss is NaN or ±inf.
+
+    A single non-finite loss propagated into AdamW corrupts the first- and
+    second-moment buffers permanently — the rest of the run silently
+    produces useless updates. The training loop checks this BEFORE
+    `.backward()` and discards the in-flight accumulation window if hit.
+    Documented failure mode of all-masked batches (test_sft_forward.py
+    `test_all_positions_masked_produces_nan_loss`) and FP16 overflow.
+    """
+    return not bool(torch.isfinite(loss).item())
 
 
 # ── Optimiser ────────────────────────────────────────────────────────────────
@@ -273,6 +288,17 @@ def run_sft(
     log.info("Tokenizer: vocab=%d, pad_id=%d, eos_id=%d",
              len(tokenizer), pad_id, eos_id)
 
+    # ── Decontamination corpus (SFT.md §3.3 "Mandatory") ──────────────────
+    # Hash benchmark test texts so any verbatim leak in the SFT corpus is
+    # dropped before training. Skipping this invalidates leaderboard scores.
+    decontam_texts: list[str] | None = None
+    if sft.decontam_benchmarks:
+        decontam_texts = list(load_decontam_texts(sft.decontam_benchmarks))
+        log.info(
+            "Decontam: collected %d benchmark strings from %d benchmark(s).",
+            len(decontam_texts), len(sft.decontam_benchmarks),
+        )
+
     # ── Dataset ────────────────────────────────────────────────────────────
     bundle = build_sft_datasets(
         hf_dataset_name=sft.hf_dataset_name,
@@ -282,7 +308,7 @@ def run_sft(
         max_length=sft.max_length,
         val_fraction=sft.val_fraction,
         seed=42,
-        decontam_texts=None,  # wire up from sft.decontam_benchmarks later
+        decontam_texts=decontam_texts,
         max_examples=sft.max_examples,
     )
     log.info("Dataset ready: train=%d, val=%d", len(bundle.train), len(bundle.val))
@@ -367,6 +393,24 @@ def run_sft(
 
             with autocast:
                 loss = model(input_ids, labels=labels)
+
+            if _is_nonfinite(loss):
+                # Discard the whole in-flight accumulation window — partial
+                # gradients sitting in .grad from earlier batches would
+                # otherwise be applied with the wrong divisor on the next
+                # successful step.
+                log.warning(
+                    "Non-finite loss at step %d (NaN/Inf). Skipping batch and "
+                    "resetting accumulator. Inspect the data pipeline if this "
+                    "fires more than once per epoch.",
+                    state.step,
+                )
+                optimizer.zero_grad(set_to_none=True)
+                accum_counter = 0
+                accum_loss_sum = 0.0
+                accum_tokens_sum = 0
+                continue
+
             loss_value = loss.item()
 
             # Gradient accumulation: divide the per-step loss by K so the
@@ -481,6 +525,23 @@ def run_sft(
 
             if state.step >= total_optim_steps:
                 break
+
+        # End of epoch: discard any partial accumulation. If we let the
+        # leftover gradients carry into the next epoch, the first optim
+        # step there would fire after fewer than K backward passes but
+        # still divided by K, producing an under-magnitude update. The
+        # cost of discarding (≤ K-1 batches per epoch boundary) is
+        # negligible at our scale; the cost of a corrupted step is not.
+        if accum_counter > 0:
+            log.info(
+                "Discarding %d partial-accumulation batches at end of epoch %d.",
+                accum_counter, epoch + 1,
+            )
+            optimizer.zero_grad(set_to_none=True)
+            accum_counter = 0
+            accum_loss_sum = 0.0
+            accum_tokens_sum = 0
+
         if state.step >= total_optim_steps:
             break
 

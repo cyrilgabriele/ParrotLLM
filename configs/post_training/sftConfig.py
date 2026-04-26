@@ -22,9 +22,6 @@ Field-by-field sourcing:
 - ``grad_clip`` = 1.0:  VL04 "Gradient Clipping" section — forces gradient
                         norm ≤ 1.0. Standard and cheap insurance against
                         exploding gradients during fine-tuning.
-- ``mask_instruction_loss`` = True: NON-NEGOTIABLE. VL07 slide 15 defines
-                        SFT as "only on response tokens". Setting this to
-                        False breaks the definition of SFT.
 - ``pretraining_mix_ratio`` = 0.0: off by default. When > 0, a fraction of
                         each batch is drawn from the pretraining bin file
                         with ordinary next-token loss (no masking), as a
@@ -77,21 +74,13 @@ class SFTConfig(BaseModel):
             "(1024 per PikoGPT fact sheet hard constraint)."
         ),
     )
-    append_eos: bool = Field(
-        default=True,
-        description=(
-            "Append tokenizer.eos_token to every response so the model "
-            "learns to terminate. VL07 slide 15 example sequence ends in <eos>."
-        ),
-    )
-    mask_instruction_loss: bool = Field(
-        default=True,
-        description=(
-            "If True, instruction tokens get label=-100 and do not "
-            "contribute to the loss. REQUIRED by the definition of SFT "
-            "(VL07 slide 15). Only disable for ablation experiments."
-        ),
-    )
+    # Note: `append_eos` and `mask_instruction_loss` are intentionally NOT
+    # configurable. Both are non-negotiable in the definition of SFT
+    # (VL07 slide 15 + slide 14). Exposing them as YAML knobs misleads
+    # readers into thinking the trainer respects them when in fact masking
+    # is unconditional in SFTCollator and EOS is unconditional in
+    # tokenise_example. If you need an ablation, hard-code the override
+    # in trainer.py for the duration of the experiment.
 
     # ── Optimiser ───────────────────────────────────────────────────────────
     learning_rate: float = Field(default=2e-5, gt=0.0)

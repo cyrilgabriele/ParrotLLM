@@ -142,12 +142,20 @@ sft:
   hf_split: train
   max_examples: null              # null = full; set e.g. 1000 for smoke test
   val_fraction: 0.05
-  decontam_benchmarks: []         # populate with benchmark test splits
+  # Drop SFT examples that overlap with public leaderboard test splits
+  # (PikoGPT fact sheet §4.3). Names map to loaders in
+  # src/post_training/sft/data.py::DECONTAM_LOADERS.
+  decontam_benchmarks:
+    - lambada
+    - hellaswag
+    - winogrande
+    - openbookqa
 
   # Tokenisation / template (VL07 slide 32 "Alpaca — simplest choice")
+  # Note: append_eos and mask_instruction_loss are non-negotiable per
+  # VL07 slides 14-15 and are unconditional in the trainer. They are
+  # intentionally NOT exposed as YAML knobs.
   max_length: 1024                # ≤ model.context_length (hard constraint)
-  append_eos: true
-  mask_instruction_loss: true     # VL07 slide 15: REQUIRED for SFT
 
   # Optimiser (VL07 slide 25 + SFT.md §5)
   learning_rate: 2.0e-5           # ≈1/10 of pretraining peak

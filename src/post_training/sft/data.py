@@ -100,6 +100,76 @@ def filter_contaminated(
     return kept, dropped
 
 
+# ── Benchmark loaders for decontam (SFT.md §3.3 "Mandatory") ────────────────
+
+def _load_lambada() -> Iterable[str]:
+    from datasets import load_dataset  # type: ignore[import]
+    ds = load_dataset("EleutherAI/lambada_openai", split="test")
+    for row in ds:
+        yield row["text"]
+
+
+def _load_hellaswag() -> Iterable[str]:
+    from datasets import load_dataset  # type: ignore[import]
+    # Validation is the standard dev/test split for HellaSwag (test is hidden).
+    ds = load_dataset("Rowan/hellaswag", split="validation")
+    for row in ds:
+        yield f"{row['ctx_a']} {row['ctx_b']}"
+        for ending in row["endings"]:
+            yield ending
+
+
+def _load_winogrande() -> Iterable[str]:
+    from datasets import load_dataset  # type: ignore[import]
+    ds = load_dataset(
+        "allenai/winogrande", "winogrande_xl",
+        split="validation", trust_remote_code=True,
+    )
+    for row in ds:
+        yield row["sentence"]
+
+
+def _load_openbookqa() -> Iterable[str]:
+    from datasets import load_dataset  # type: ignore[import]
+    ds = load_dataset("allenai/openbookqa", "main", split="test")
+    for row in ds:
+        yield row["question_stem"]
+        for choice in row["choices"]["text"]:
+            yield choice
+
+
+# Registry of canonical leaderboard benchmarks (PikoGPT fact sheet §4.3).
+# Keys are the short names users put in `sft.decontam_benchmarks`.
+DECONTAM_LOADERS: dict[str, Callable[[], Iterable[str]]] = {
+    "lambada": _load_lambada,
+    "hellaswag": _load_hellaswag,
+    "winogrande": _load_winogrande,
+    "openbookqa": _load_openbookqa,
+}
+
+
+def load_decontam_texts(names: Iterable[str]) -> Iterable[str]:
+    """Yield benchmark texts for the configured names.
+
+    Resolves each short name in `names` to a registered loader (see
+    `DECONTAM_LOADERS`) and streams its texts. Unknown names raise
+    immediately so a YAML typo cannot silently disable decontamination —
+    invalid leaderboard scores are the worst kind of failure here.
+
+    Caller is `run_sft`, which collects the result into a list and passes
+    it to `build_sft_datasets(decontam_texts=...)`.
+    """
+    for name in names:
+        loader = DECONTAM_LOADERS.get(name)
+        if loader is None:
+            known = ", ".join(sorted(DECONTAM_LOADERS))
+            raise ValueError(
+                f"Decontam: unknown benchmark '{name}'. Known: {known}."
+            )
+        log.info("Decontam: loading benchmark '%s'", name)
+        yield from loader()
+
+
 # ── Tokenisation ─────────────────────────────────────────────────────────────
 
 @dataclass
@@ -157,8 +227,14 @@ def tokenise_example(
         return None
 
     # Truncate from the right (drop tail of response), never the prompt.
+    # Force the final token back to EOS so the model still learns to
+    # terminate on over-length examples — without this, generation at
+    # inference runs to max_tokens with garbage on any prompt resembling
+    # a truncated training example (SFT.md §9 risk row).
     if len(full_ids) > max_length:
         full_ids = full_ids[:max_length]
+        if append_eos and tokenizer.eos_token_id is not None:
+            full_ids[-1] = tokenizer.eos_token_id
 
     if len(prompt_ids) >= max_length:
         # No room left to learn a response. Skip rather than emit a 0-loss

@@ -15,7 +15,7 @@ def main() -> None:
     parser.add_argument(
         "--stage",
         required=True,
-        choices=["preprocess", "train", "tune", "eval", "inference", "chat", "dashboard", "sft"],
+        choices=["preprocess", "train", "tune", "eval", "inference", "chat", "dashboard", "sft", "dpo"],
     )
     parser.add_argument("--config", type=Path, default=Path("configs/default.yaml"))
     parser.add_argument("--checkpoint", default=None)
@@ -147,6 +147,20 @@ def main() -> None:
         from src.post_training.sft.trainer import run_sft
 
         run_sft(project_config, checkpoint=checkpoint_path, device=device)
+        return
+
+    if args.stage == "dpo":
+        # VL08 — Direct Preference Optimization. Requires:
+        #   (i)   a `dpo:` block in the YAML config,
+        #   (ii)  an SFT checkpoint passed via --checkpoint (used as BOTH
+        #         the policy initialisation AND the frozen reference model).
+        dpo_cfg = _require_section(project_config.dpo, "dpo")
+        _require_section(project_config.model, "model")
+        checkpoint_path = _resolve_sft_checkpoint(args.checkpoint, dpo_cfg.base_checkpoint)
+        device = get_device(dpo_cfg.device)
+        from src.post_training.dpo.trainer import run_dpo
+
+        run_dpo(project_config, checkpoint=checkpoint_path, device=device)
         return
 
     if args.stage == "chat":

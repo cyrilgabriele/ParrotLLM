@@ -188,6 +188,60 @@ sft:
   # Performance knobs (5090/Blackwell defaults)
   torch_compile: true             # set false only if compile errors on your platform
 
+# ── Post-training: Direct Preference Optimization (VL08) ────────────────────
+# Initialised from the SFT checkpoint as BOTH policy and frozen reference.
+# Per VL08 slide 33: L = -log σ(β·[Δ_policy_chosen-rejected − Δ_ref_chosen-rejected])
+dpo:
+  # Data — Intel/orca_dpo_pairs is small (12k pairs), Alpaca-friendly,
+  # GPT-4 chosen vs original-LLaMA rejected. Default for our 35M model.
+  hf_dataset_name: Intel/orca_dpo_pairs
+  hf_split: train
+  max_examples: null
+  val_fraction: 0.05
+  decontam_benchmarks:
+    - lambada
+    - hellaswag
+    - winogrande
+    - openbookqa
+
+  max_length: 1024
+
+  # DPO loss (Rafailov et al. 2023; VL08 slide 33)
+  beta: 0.1                       # canonical default; raise to 0.3+ if drift
+  length_normalize_logp: false    # keep canonical sum-of-logp; flip if length collapse
+
+  # Optimiser — DPO LR is typically 1/2-1/4 of SFT LR
+  learning_rate: 5.0e-6
+  min_lr: 5.0e-7
+  weight_decay: 0.0               # canonical DPO recipe: no weight decay
+  beta1: 0.9
+  beta2: 0.95
+  grad_clip: 1.0
+
+  warmup_steps: 50
+  epochs: 1                       # DPO usually 1 epoch (Rafailov + Tunstall)
+  lr_schedule: cosine
+
+  batch_size: 4                   # smaller than SFT — 2 models + 4 forwards/step
+  gradient_accumulation_steps: 8  # effective batch = 32
+  num_workers: 0
+  pin_memory: true
+
+  # CF tripwire — measure DPO drift from the SFT base model, not pretraining
+  wt103_eval_every_n_evals: 2
+  wt103_max_sequences: 64
+  wt103_hard_stop_pct: 10.0
+
+  runs_dir: runs
+  eval_every: 50
+  save_every: 999999
+  log_every: 5
+  early_stopping_patience: 3
+
+  base_checkpoint: null           # override on the CLI
+  device: auto
+  torch_compile: true
+
   # Logging / checkpointing
   runs_dir: runs
   eval_every: 200

@@ -1,0 +1,77 @@
+# SFT smoketest — runs a tiny (100 examples × 1 epoch) SFT pass to verify
+# the whole pipeline (model load, decontam-skipped, tokeniser, collator,
+# forward, backward, optimiser step, eval, checkpoint save). Takes
+# ~30-60s on a 5090 once torch.compile warms up.
+#
+# Usage:
+#   uv run python main.py --stage sft --config configs/post_training/sft_smoketest.yaml \
+#       --checkpoint runs/big_run/exp_c/run_20260408_124138/checkpoints/best_loss_3p5437_epoch_0001_step_0003000.pt
+
+model:
+  vocab_size: 50258
+  pad_token_id: 50257
+  bos_token_id: 50256
+  eos_token_id: 50256
+  d_model: 384
+  n_layers: 14
+  n_heads: 6
+  d_ff: 768
+  context_length: 1024
+  bias: false
+  dropout: 0.0
+  rope_theta: 10000.0
+  gradient_checkpointing: false
+
+logging:
+  console_level: INFO
+  file_level: INFO
+
+sft:
+  # Tiny dataset slice
+  hf_dataset_name: tatsu-lab/alpaca
+  hf_split: train
+  max_examples: 100
+  val_fraction: 0.1                # 10% of 100 = 10 val examples
+  decontam_benchmarks: []          # skip benchmark downloads for speed
+
+  # Tokenisation
+  max_length: 512                  # half of full to make smoke faster
+
+  # Optimiser (same defaults as full run)
+  learning_rate: 2.0e-5
+  min_lr: 2.0e-6
+  weight_decay: 0.1
+  beta1: 0.9
+  beta2: 0.95
+  grad_clip: 1.0
+
+  # Schedule — short
+  warmup_steps: 5
+  epochs: 1
+  lr_schedule: cosine
+
+  # Batching — small for fast smoke
+  batch_size: 4
+  gradient_accumulation_steps: 2   # effective batch = 8
+  num_workers: 0
+  pin_memory: true
+
+  # CF mitigations off for smoke (just verify the loop, not CF behaviour)
+  pretraining_mix_ratio: 0.0
+  pretraining_bin_path: null
+  wt103_eval_every_n_evals: 0      # skip WT-103 download for speed
+  wt103_max_sequences: 64
+  wt103_hard_stop_pct: 10.0
+
+  # Logging / checkpointing — short cadence; avoid mid-run save spam
+  runs_dir: runs
+  eval_every: 5
+  save_every: 999999               # only final checkpoint
+  log_every: 1
+  early_stopping_patience: 0       # disable for smoke
+
+  base_checkpoint: null            # passed via --checkpoint
+  device: auto
+
+  # Performance
+  torch_compile: false             # disable for smoke — first compile adds 30-60s

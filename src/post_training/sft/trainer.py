@@ -440,12 +440,18 @@ def run_sft(
     if device.type == "cuda":
         torch.backends.cuda.matmul.allow_tf32 = True
         torch.backends.cudnn.allow_tf32 = True
-    # `torch.compile` typically buys 1.4–1.8x on this size model. The
-    # `_orig_mod` strip in _save_checkpoint already handles the wrapper
-    # so checkpoints stay compatible with the un-compiled load path.
+    # `torch.compile` typically buys 1.4–1.8x on this size model. We use
+    # the default mode (kernel fusion, no CUDA graphs). `reduce-overhead`
+    # is faster but its CUDA-graph backend cannot handle our pattern of
+    # calling the model in eval mode during validation, in train mode
+    # during the loop, and a third time for the WT-103 tripwire — it
+    # raises "accessing tensor output of CUDAGraphs that has been
+    # overwritten by a subsequent run". Default mode avoids that.
+    # The `_orig_mod` strip in _save_checkpoint already handles the
+    # wrapper so checkpoints stay compatible with the un-compiled load.
     if sft.torch_compile and device.type == "cuda":
-        log.info("Compiling model (torch.compile, mode='reduce-overhead')...")
-        model = torch.compile(model, mode="reduce-overhead", fullgraph=False)
+        log.info("Compiling model (torch.compile, mode='default')...")
+        model = torch.compile(model, fullgraph=False)
 
     # ── Pretraining-mix setup (CF mitigation #1, VL07 slide 25) ────────────
     pretraining_memmap: np.ndarray | None = None

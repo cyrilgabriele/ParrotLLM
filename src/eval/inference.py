@@ -21,8 +21,18 @@ def generate(
     top_k: int = 50,
     top_p: float = 0.9,
     context_length: int = 1024,
+    eos_token_id: int | None = None,
 ) -> torch.Tensor:
-    """Autoregressive generation. temp=0 for greedy, temp>0 for sampling."""
+    """Autoregressive generation. temp=0 for greedy, temp>0 for sampling.
+
+    If ``eos_token_id`` is provided, generation halts as soon as every
+    sequence in the batch has emitted that token. SFT/DPO checkpoints are
+    trained to emit EOS at the semantic end of a response; without this
+    early-stop the loop runs to ``max_new_tokens`` and the post-EOS
+    continuation is unconditioned garbage. Default ``None`` preserves the
+    legacy "always run the full budget" behavior used by leaderboard /
+    pretrain generation.
+    """
     model.eval()
 
     for _ in range(max_new_tokens):
@@ -52,6 +62,9 @@ def generate(
             next_token = torch.multinomial(probs, num_samples=1)
 
         idx = torch.cat([idx, next_token], dim=1)
+
+        if eos_token_id is not None and bool((next_token == eos_token_id).all()):
+            break
 
     return idx
 

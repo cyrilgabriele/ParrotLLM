@@ -29,6 +29,15 @@ def main() -> None:
     parser.add_argument("--temperature", type=float, default=None)
     parser.add_argument("--leaderboard", action="store_true")
     parser.add_argument("--mock-testing", action="store_true", default=None)
+    # Mandatory inference-contract flags (factsheet §4.4). The leaderboard
+    # runner invokes us with these literally; rejecting them invalidates
+    # every benchmark example.
+    parser.add_argument("--device", default=None,
+                        help="Device override (auto/cuda/mps/cpu). Required by "
+                             "the leaderboard inference contract.")
+    parser.add_argument("--seed", type=int, default=None,
+                        help="Deterministic seed. Required by the leaderboard "
+                             "inference contract; overrides the default 42.")
     # dashboard-specific
     parser.add_argument("--open", action="store_true",
                         help="Open browser automatically when starting the dashboard")
@@ -65,7 +74,7 @@ def main() -> None:
     project_config_payload = project_config.model_dump(mode="python")
     HF_TOKEN = maybe_load_hf_token()
 
-    SEED = 42
+    SEED = args.seed if args.seed is not None else 42
     set_seed(SEED)
 
     if args.stage == "preprocess":
@@ -119,7 +128,9 @@ def main() -> None:
         checkpoint_path = args.checkpoint
         if not args.mock_testing:
             checkpoint_path = _require_checkpoint(args.checkpoint, stage="inference")
-        device = get_device(inference_cfg.device)
+        # CLI --device takes precedence over the YAML setting — required by
+        # the leaderboard contract, which always passes --device auto.
+        device = get_device(args.device or inference_cfg.device)
         from src.eval.inference import run_inference
 
         run_inference(

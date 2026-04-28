@@ -403,6 +403,8 @@ def run_sft(
         seed=42,
         decontam_texts=decontam_texts,
         max_examples=sft.max_examples,
+        synthetic_jsonl_path=sft.synthetic_jsonl_path,
+        synthetic_oversample=sft.synthetic_oversample,
     )
     log.info("Dataset ready: train=%d, val=%d", len(bundle.train), len(bundle.val))
 

@@ -1,0 +1,99 @@
+# SFT v6 — Alpaca + synthetic raw-format MC mixin on the 8B base.
+#
+# Goal: teach the model to recognise the leaderboard runner's raw prompt
+# format ("Context: ...\nA) ...\n...\nAnswer:") in addition to Alpaca, so
+# the runner's generation-based MC parser sees a letter as the first token.
+#
+# Mix target (per-batch share, see grilling Q4 "Moderate"):
+#   60% Alpaca
+#   20% synthetic raw (from the JSONL below)
+#   20% pretraining tokens (CF mitigation, unchanged from v5)
+#
+# Math for synthetic_oversample:
+#   ~52k Alpaca rows after decontam, ~2.4k synthetic rows.
+#   Target synthetic share among SFT batches = 25% (because 20% of all
+#   batches go to pretrain mix → SFT pool = 80% of batches; within it
+#   25% × 80% = 20% synthetic of total batches).
+#   Need synth_count / (alpaca + synth) = 0.25 → ~17k synthetic rows.
+#   17k / 2.4k ≈ 7 → oversample = 7.
+#
+# Decontam: extended to all 8 hidden-bench-safe test/validation splits in
+# addition to the 4 visible benchmarks. See DECONTAM_LOADERS in
+# src/post_training/sft/data.py.
+
+model:
+  vocab_size: 50258
+  pad_token_id: 50257
+  bos_token_id: 50256
+  eos_token_id: 50256
+  d_model: 384
+  n_layers: 14
+  n_heads: 6
+  d_ff: 768
+  context_length: 1024
+  bias: false
+  dropout: 0.0
+  rope_theta: 10000.0
+  gradient_checkpointing: false
+
+logging:
+  console_level: INFO
+  file_level: INFO
+
+sft:
+  hf_dataset_name: tatsu-lab/alpaca
+  hf_split: train
+  max_examples: null
+  val_fraction: 0.05
+  decontam_benchmarks:
+    # Visible leaderboard
+    - lambada
+    - hellaswag
+    - winogrande
+    - openbookqa
+    # Extended hidden-bench-safe set (see Q3 grilling)
+    - arc_easy
+    - arc_challenge
+    - boolq
+    - commonsenseqa
+    - sciq
+    - mmlu
+
+  # Synthetic raw-format mixin (Q3 grilling: hybrid programmatic + public)
+  synthetic_jsonl_path: data/synthetic/sft_v6_combined.jsonl
+  synthetic_oversample: 7
+
+  max_length: 1024
+
+  learning_rate: 1.0e-5
+  min_lr: 1.0e-6
+  weight_decay: 0.1
+  beta1: 0.9
+  beta2: 0.95
+  grad_clip: 1.0
+
+  warmup_steps: 50
+  epochs: 2
+  lr_schedule: cosine
+
+  batch_size: 8
+  gradient_accumulation_steps: 8
+  num_workers: 0
+  pin_memory: true
+
+  pretraining_mix_ratio: 0.20
+  pretraining_bin_path: data/processed/filter_c/train.bin
+
+  wt103_eval_every_n_evals: 1
+  wt103_max_sequences: 64
+  wt103_hard_stop_pct: 10.0
+
+  runs_dir: runs
+  eval_every: 100
+  save_every: 999999
+  log_every: 10
+  early_stopping_patience: 3
+
+  base_checkpoint: runs/big_run/exp_c_8b/run_20260410_044337/checkpoints/best_loss_3p2650_epoch_0000_step_0095500.pt
+  device: auto
+  torch_compile: true

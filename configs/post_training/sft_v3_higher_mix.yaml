@@ -1,0 +1,78 @@
+# SFT v3 — higher pretraining-mix to close the CF gap.
+#
+# v2 measurement: WT-103 PPL went from 84.31 (pretrain) to 91.19 (+8.2%).
+# The lecture (VL07 slide 25) lists pretraining-mix as one of five CF
+# mitigations; v2 used the lowest setting (5%). Lecture's recommended
+# range for small models is closer to 20-30%.
+#
+# Hypothesis: raising pretraining_mix_ratio from 0.05 to 0.20 will
+# reduce WT-103 PPL drift to ≤+3% (roughly 87 instead of 91), while
+# keeping enough Alpaca gradient to preserve the chat-template behaviour
+# SFT v2 already learned.
+#
+# Single variable changed from sft_v2_cf_mitigated: pretraining_mix_ratio.
+
+model:
+  vocab_size: 50258
+  pad_token_id: 50257
+  bos_token_id: 50256
+  eos_token_id: 50256
+  d_model: 384
+  n_layers: 14
+  n_heads: 6
+  d_ff: 768
+  context_length: 1024
+  bias: false
+  dropout: 0.0
+  rope_theta: 10000.0
+  gradient_checkpointing: false
+
+logging:
+  console_level: INFO
+  file_level: INFO
+
+sft:
+  hf_dataset_name: tatsu-lab/alpaca
+  hf_split: train
+  max_examples: null
+  val_fraction: 0.05
+  decontam_benchmarks:
+    - lambada
+    - hellaswag
+    - winogrande
+    - openbookqa
+
+  max_length: 1024
+
+  learning_rate: 1.0e-5
+  min_lr: 1.0e-6
+  weight_decay: 0.1
+  beta1: 0.9
+  beta2: 0.95
+  grad_clip: 1.0
+
+  warmup_steps: 50
+  epochs: 2
+  lr_schedule: cosine
+
+  batch_size: 8
+  gradient_accumulation_steps: 8
+  num_workers: 0
+  pin_memory: true
+
+  pretraining_mix_ratio: 0.20            # CHANGED — was 0.05
+  pretraining_bin_path: data/exp_c/train.bin
+
+  wt103_eval_every_n_evals: 1
+  wt103_max_sequences: 64
+  wt103_hard_stop_pct: 10.0
+
+  runs_dir: runs
+  eval_every: 100
+  save_every: 999999
+  log_every: 10
+  early_stopping_patience: 3
+
+  base_checkpoint: runs/big_run/exp_c/run_20260408_124138/checkpoints/best_loss_3p5437_epoch_0001_step_0003000.pt
+  device: auto
+  torch_compile: true

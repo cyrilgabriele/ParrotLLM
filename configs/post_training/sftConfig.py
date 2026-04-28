@@ -64,6 +64,25 @@ class SFTConfig(BaseModel):
             "Fact sheet §4.3 requires this."
         ),
     )
+    synthetic_jsonl_path: str | None = Field(
+        default=None,
+        description=(
+            "Optional path to a JSONL of synthetic raw-format examples "
+            "({instruction, response}). When set, these are mixed into the "
+            "SFT corpus with RawCompletionTemplate (no Alpaca markers) so "
+            "the model learns the leaderboard runner's raw prompt template "
+            "in addition to Alpaca chat. See experiments_v3.md Experiment 4."
+        ),
+    )
+    synthetic_oversample: int = Field(
+        default=1,
+        ge=1,
+        description=(
+            "Repeat factor for the synthetic JSONL before concatenation. "
+            "Lets us hit a target per-batch share without touching the "
+            "trainer (e.g. 50k Alpaca + 2.5k synthetic × 5x = ~20% raw)."
+        ),
+    )
 
     # ── Tokenisation / template ─────────────────────────────────────────────
     max_length: int = Field(

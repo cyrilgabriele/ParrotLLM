@@ -26,12 +26,18 @@ from src.utils import build_tokenizer, get_device
 
 
 PIPELINE = [
-    ("pretrain",
+    ("pre_500M",
      r"runs/big_run/exp_c/run_20260408_124138/checkpoints/best_loss_3p5437_epoch_0001_step_0003000.pt"),
-    ("sft",
-     r"runs/run_20260426_203420_sft/checkpoints/best_step_0001500_epoch_01_valloss_2p7198.pt"),
-    ("dpo",
-     r"runs/run_20260426_210502_dpo/checkpoints/best_step_0000200_epoch_00_valloss_0p0368.pt"),
+    ("pre_8B",
+     r"runs/big_run/exp_c_8b/run_20260410_044337/checkpoints/best_loss_3p2650_epoch_0000_step_0095500.pt"),
+    ("sft_v3",
+     r"runs/run_20260427_214613_sft/checkpoints/best_step_0001500_epoch_01_valloss_2p7318.pt"),
+    ("sft_v5_8B",
+     r"runs/run_20260427_230323_sft/checkpoints/best_step_0001500_epoch_01_valloss_2p4115.pt"),
+    ("dpo_v4",
+     r"runs/run_20260427_215602_dpo/checkpoints/best_step_0000360_epoch_00_valloss_0p6640.pt"),
+    ("dpo_v5_8B",
+     r"runs/run_20260427_231456_dpo/checkpoints/best_step_0000360_epoch_00_valloss_0p6449.pt"),
 ]
 
 BENCHMARKS = ["lambada", "hellaswag", "winogrande", "openbookqa"]
@@ -75,36 +81,20 @@ def main() -> int:
         print()
 
     # ── Summary table ────────────────────────────────────────────────
-    print("=" * 78)
+    stages = [s for s, _ in PIPELINE]
+    print("=" * 90)
     print("LEADERBOARD ACCURACY COMPARISON (% correct)")
-    print("=" * 78)
-    print(f"{'benchmark':<12} " + "  ".join(f"{s:>10}" for s, _ in PIPELINE)
-          + "    delta(DPO-pre)  delta(DPO-SFT)")
-    print("-" * 78)
+    print("=" * 90)
+    print(f"{'benchmark':<12} " + "  ".join(f"{s:>10}" for s in stages))
+    print("-" * 90)
     for bm in BENCHMARKS:
-        pre = rows["pretrain"][bm]
-        sft = rows["sft"][bm]
-        dpo = rows["dpo"][bm]
-        d_pre = (dpo - pre) * 100
-        d_sft = (dpo - sft) * 100
-        line = (f"{bm:<12} "
-                + f"  {pre*100:8.2f}% "
-                + f"  {sft*100:8.2f}% "
-                + f"  {dpo*100:8.2f}% "
-                + f"     {d_pre:+6.2f}pp"
-                + f"        {d_sft:+6.2f}pp")
-        print(line)
+        cells = "  ".join(f"{rows[s][bm]*100:8.2f}%" for s in stages)
+        print(f"{bm:<12}  {cells}")
 
-    # Mean across benchmarks
-    print("-" * 78)
-    means = {s: sum(rows[s][b] for b in BENCHMARKS) / len(BENCHMARKS)
-             for s, _ in PIPELINE}
-    print(f"{'mean':<12} "
-          + f"  {means['pretrain']*100:8.2f}% "
-          + f"  {means['sft']*100:8.2f}% "
-          + f"  {means['dpo']*100:8.2f}% "
-          + f"     {(means['dpo']-means['pretrain'])*100:+6.2f}pp"
-          + f"        {(means['dpo']-means['sft'])*100:+6.2f}pp")
+    print("-" * 90)
+    means = {s: sum(rows[s][b] for b in BENCHMARKS) / len(BENCHMARKS) for s in stages}
+    cells = "  ".join(f"{means[s]*100:8.2f}%" for s in stages)
+    print(f"{'mean':<12}  {cells}")
 
     # ── Save JSON ────────────────────────────────────────────────────
     out_path = Path(args.out)
@@ -126,13 +116,11 @@ def main() -> int:
     print(f"  Best mean accuracy: {best_stage} ({means[best_stage]*100:.2f}%)")
     if best_stage == "pretrain":
         print(f"  → Submit PRETRAIN to the leaderboard. SFT/DPO degraded benchmarks")
-        print(f"    (catastrophic forgetting, VL07 slide 25). Use DPO only for the")
-        print(f"    chat demo since chat is graded on usability, not accuracy.")
+        print(f"    (catastrophic forgetting, VL07 slide 25). Use best DPO for chat demo.")
     elif best_stage == "sft":
-        print(f"  → Submit SFT to the leaderboard. DPO regressed on benchmarks.")
-        print(f"    Likely too aggressive a beta or overfit on preferences.")
+        print(f"  → Submit SFT. DPO did not improve benchmarks beyond noise.")
     else:
-        print(f"  → Submit DPO to the leaderboard. The full chain is your best.")
+        print(f"  → Submit {best_stage}. The full chain is your best on benchmarks.")
     return 0
 
 

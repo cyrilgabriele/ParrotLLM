@@ -23,7 +23,7 @@ import torch
 log = logging.getLogger("parrotllm.chat")
 
 from configs import ProjectConfig
-from src.eval.inference import generate, load_model_from_checkpoint
+from src.eval.inference import generate_stream, load_model_from_checkpoint
 from src.post_training.sft import format_sft_prompt
 from src.utils import build_tokenizer
 
@@ -93,9 +93,35 @@ def run_chat(project_config: ProjectConfig, *, device: torch.device) -> None:
         log.info(msg)
         return msg
 
-    def chat_fn(message, history, temperature, max_tokens):
+    SFT_STOP_MARKERS = ("\n###", "###", "<|endoftext|>")
+    PRETRAIN_STOP_MARKER = "User:"
+
+    def _truncate_at_stop(text: str, stage: str) -> tuple[str, bool]:
+        """Apply template-specific stop-string truncation.
+
+        Returns (cleaned_text, hit_stop). The chat UI uses the boolean to
+        end streaming early once the model has emitted a marker that
+        indicates the response is complete — necessary because EOS
+        already terminates the generator, but stage-specific stop
+        strings (e.g. ``\\n###``) can also signal "done" before EOS.
+        """
+        markers = SFT_STOP_MARKERS if stage in {"sft", "dpo"} else (PRETRAIN_STOP_MARKER,)
+        for marker in markers:
+            i = text.find(marker)
+            if i >= 0:
+                return text[:i], True
+        return text, False
+
+    def chat_fn(message, history, temperature, max_tokens, no_repeat_ngram):
+        """Streaming chat callback.
+
+        Yields the running response after every generated token. Gradio's
+        ChatInterface forwards each yielded string to the chat bubble,
+        producing the token-by-token typing effect.
+        """
         if state["model"] is None:
-            return "Please load a checkpoint first."
+            yield "Please load a checkpoint first."
+            return
 
         mc = state["config"]["model"]
         stage = state.get("training_stage", "pretrain")
@@ -110,8 +136,13 @@ def run_chat(project_config: ProjectConfig, *, device: torch.device) -> None:
             prompt = format_sft_prompt(message)
         else:
             prompt = ""
-            for user_msg, bot_msg in history:
-                prompt += f"User: {user_msg}\nAssistant: {bot_msg}\n"
+            for h in history:
+                role = h.get("role")
+                content = h.get("content", "")
+                if role == "user":
+                    prompt += f"User: {content}\n"
+                elif role == "assistant":
+                    prompt += f"Assistant: {content}\n"
             prompt += f"User: {message}\nAssistant:"
 
         input_ids = tokenizer.encode(prompt)
@@ -120,31 +151,27 @@ def run_chat(project_config: ProjectConfig, *, device: torch.device) -> None:
             input_ids = input_ids[-max_ctx:]
 
         idx = torch.tensor([input_ids], dtype=torch.long, device=device)
-        # SFT/DPO checkpoints are trained to terminate on EOS — pass it so
-        # generation stops at the semantic end of the response instead of
-        # running the full max_tokens budget into post-EOS garbage.
         eos_id = tokenizer.eos_token_id if stage in {"sft", "dpo"} else None
-        output = generate(
+
+        gen_ids: list[int] = []
+        for tok_id in generate_stream(
             state["model"], idx, max_tokens,
             temperature=temperature,
             top_k=chat_cfg.top_k,
             top_p=chat_cfg.top_p,
             context_length=mc["context_length"],
             eos_token_id=eos_id,
-        )
-        generated = tokenizer.decode(output[0, len(input_ids):].tolist())
-
-        # Truncate at the template's natural terminator.
-        if stage in {"sft", "dpo"}:
-            for marker in ("\n###", "###", "<|endoftext|>"):
-                idx_m = generated.find(marker)
-                if idx_m >= 0:
-                    generated = generated[:idx_m]
-                    break
-        else:
-            if "User:" in generated:
-                generated = generated[:generated.index("User:")]
-        return generated.strip()
+            no_repeat_ngram_size=int(no_repeat_ngram),
+        ):
+            gen_ids.append(tok_id)
+            # Re-decode the full id sequence each step. BPE tokens can
+            # represent partial UTF-8 bytes, so per-token decoding may
+            # yield replacement chars; full re-decode resolves them.
+            text = tokenizer.decode(gen_ids)
+            cleaned, hit_stop = _truncate_at_stop(text, stage)
+            yield cleaned.strip()
+            if hit_stop:
+                return
 
     available = list_checkpoints()
     best_per_stage = _best_by_stage(available)
@@ -166,52 +193,87 @@ def run_chat(project_config: ProjectConfig, *, device: torch.device) -> None:
         if p:
             quick_choices.append((f"{label} (valloss {_parse_valloss(p):.4f})", p))
 
+    theme = gr.themes.Soft(
+        primary_hue="emerald",
+        neutral_hue="slate",
+        font=[gr.themes.GoogleFont("Inter"), "system-ui", "sans-serif"],
+    )
+    custom_css = """
+    .gradio-container { max-width: 1200px !important; margin: 0 auto !important; }
+    .sidebar-card { background: var(--block-background-fill); border-radius: 12px;
+                    padding: 12px; }
+    """
+
     with gr.Blocks(title="ParrotLLM Chat") as demo:
-        gr.Markdown(
-            "# ParrotLLM Chat\n"
-            "Loads any pretrained / SFT / DPO checkpoint. The right prompt "
-            "template is auto-detected from the checkpoint's `training_stage`. "
-            "**Tip:** at this model scale, lower temperature (0.0–0.3) gives "
-            "much more coherent answers than the default 0.7."
-        )
+        gr.Markdown("## ParrotLLM Chat — instruction-tuned PikoGPT (40M)")
 
         with gr.Row():
-            ckpt_dropdown = gr.Dropdown(
-                choices=available, value=default_ckpt,
-                label="Checkpoint", interactive=True,
-            )
-            load_btn = gr.Button("Load")
-            status = gr.Textbox(
-                label="Status", interactive=False, value=initial_status,
-            )
+            # ── Sidebar: model + sampling ───────────────────────────
+            with gr.Column(scale=1, min_width=280):
+                with gr.Group(elem_classes="sidebar-card"):
+                    status = gr.Textbox(
+                        label="Loaded checkpoint",
+                        interactive=False,
+                        value=initial_status,
+                        lines=3,
+                        max_lines=4,
+                    )
+                    if quick_choices:
+                        quick = gr.Radio(
+                            choices=quick_choices, value=default_ckpt,
+                            label="Quick load (best val loss)",
+                        )
+
+                with gr.Accordion("Generation", open=True):
+                    temp_slider = gr.Slider(
+                        minimum=0.0, maximum=1.5, value=0.3, step=0.05,
+                        label="Temperature",
+                        info="0 = greedy. 0.2-0.5 is the sweet spot at this scale.",
+                    )
+                    max_tokens_slider = gr.Slider(
+                        minimum=16, maximum=400, value=120, step=8,
+                        label="Max new tokens",
+                    )
+                    ngram_slider = gr.Slider(
+                        minimum=0, maximum=6, value=3, step=1,
+                        label="No-repeat n-gram",
+                        info="0 = off. 3 = forbids repeating any 3-token sequence — kills 'blue, with a blue, with a blue' loops.",
+                    )
+
+                with gr.Accordion("Advanced — manual checkpoint pick", open=False):
+                    ckpt_dropdown = gr.Dropdown(
+                        choices=available, value=default_ckpt,
+                        label="Checkpoint", interactive=True,
+                    )
+                    load_btn = gr.Button("Load", size="sm")
+
+                gr.Markdown(
+                    "_Stages: **pretrain** (raw text continuation) · "
+                    "**sft** / **dpo** (Alpaca single-turn). The template is "
+                    "picked from the checkpoint's `training_stage` field — "
+                    "VL07 slide 32._"
+                )
+
+            # ── Main: chat ──────────────────────────────────────────
+            with gr.Column(scale=3):
+                gr.ChatInterface(
+                    chat_fn,
+                    additional_inputs=[temp_slider, max_tokens_slider, ngram_slider],
+                    chatbot=gr.Chatbot(
+                        height=560,
+                        layout="bubble",
+                        buttons=["copy"],
+                    ),
+                )
 
         load_btn.click(load_ckpt, inputs=ckpt_dropdown, outputs=status)
-
         if quick_choices:
-            quick = gr.Radio(
-                choices=quick_choices, value=default_ckpt,
-                label="Quick load (best by val loss)",
-            )
-
             def _quick_swap(path):
                 return load_ckpt(path), gr.update(value=path)
-
             quick.change(_quick_swap, inputs=quick, outputs=[status, ckpt_dropdown])
 
-        with gr.Row():
-            temp_slider = gr.Slider(
-                minimum=0.0, maximum=1.5, value=0.3, step=0.05,
-                label="Temperature (0 = deterministic / greedy; 0.3 = focused)",
-            )
-            max_tokens_slider = gr.Slider(
-                minimum=16, maximum=400, value=120, step=8,
-                label="Max new tokens",
-            )
-
-        chatbot = gr.ChatInterface(
-            chat_fn,
-            additional_inputs=[temp_slider, max_tokens_slider],
-        )
-
     log.info("Launching chat UI...")
-    demo.launch(server_name="127.0.0.1", server_port=7860, inbrowser=False)
+    demo.queue(default_concurrency_limit=1).launch(
+        server_name="127.0.0.1", server_port=7860, inbrowser=False,
+        theme=theme, css=custom_css,
+    )

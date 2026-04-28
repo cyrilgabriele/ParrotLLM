@@ -118,6 +118,46 @@ class AlpacaTemplate:
 DEFAULT_ALPACA_TEMPLATE = AlpacaTemplate()
 
 
+@dataclass(frozen=True)
+class RawCompletionTemplate:
+    """Pass-through template for raw-format SFT examples.
+
+    Used for synthetic multiple-choice / cloze data whose prompt should
+    reach the model without any Alpaca markers. The instruction text is
+    the entire prompt (e.g. ``"Context: ...\\nA) ...\\nB) ...\\nAnswer:"``)
+    and the response is the bare completion (e.g. ``" B"``). At inference
+    the leaderboard runner sends prompts in exactly this raw form, so
+    training-time and inference-time strings are byte-identical (VL07
+    slide 32's "critical rule" still holds — just for a different
+    template than Alpaca).
+
+    The mask boundary is the byte length of ``instruction`` itself:
+    everything before contributes -100 labels, everything after (the
+    response + EOS) contributes its own ids.
+    """
+
+    response_marker: str = ""
+
+    def render_prompt(self, instruction: str, input_text: str = "") -> str:
+        # input_text is unused for raw format — the full context is in
+        # `instruction`. Kept in the signature for AlpacaTemplate parity.
+        del input_text
+        return instruction
+
+    def render_full(
+        self,
+        instruction: str,
+        response: str,
+        input_text: str = "",
+        eos_token: str = "",
+    ) -> str:
+        del input_text
+        return instruction + response + eos_token
+
+
+DEFAULT_RAW_TEMPLATE = RawCompletionTemplate()
+
+
 def format_sft_prompt(instruction: str, *, input_text: str = "") -> str:
     """Format an instruction (and optional input) as an Alpaca prompt
     suitable for **inference** against an SFT-trained ParrotLLM checkpoint.
@@ -142,16 +182,22 @@ def format_sft_prompt(instruction: str, *, input_text: str = "") -> str:
 def render_example(
     example: dict,
     *,
-    template: AlpacaTemplate = DEFAULT_ALPACA_TEMPLATE,
+    template=DEFAULT_ALPACA_TEMPLATE,
     eos_token: str = "",
 ) -> tuple[str, str]:
     """Render one ({instruction, input, response}) example.
 
     Returns:
-        (prompt, full_text) — where ``prompt`` ends with the response marker
-        and ``full_text = prompt + response + eos_token``. The caller uses
-        the byte length of ``prompt`` (or rather the tokeniser-equivalent
-        boundary) to construct the -100 label mask in the collator.
+        (prompt, full_text) — where ``prompt`` is the conditioning string
+        (the model sees this; it never contributes to the loss) and
+        ``full_text`` is the complete training string including response
+        and EOS. The caller uses the byte length of ``prompt`` (or rather
+        the tokeniser-equivalent boundary) to construct the -100 label
+        mask in the collator.
+
+    Each template owns its own ``render_full`` so format-specific concerns
+    (e.g. Alpaca strips the response, Raw preserves leading whitespace
+    that is part of the trained completion) live with the template.
     """
     instruction = example.get("instruction", "")
     response = example.get("response", example.get("output", ""))
@@ -164,7 +210,9 @@ def render_example(
         )
 
     prompt = template.render_prompt(instruction, input_text)
-    full_text = prompt + response.strip() + eos_token
+    full_text = template.render_full(
+        instruction, response, input_text=input_text, eos_token=eos_token,
+    )
     return prompt, full_text
 
 

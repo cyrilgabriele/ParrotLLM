@@ -149,6 +149,17 @@ def score_openbookqa(model, tokenizer, n: int, *, ctx_len: int, device) -> dict:
 
 
 def score_lambada(model, tokenizer, n: int, *, ctx_len: int, device) -> dict:
+    """LAMBADA accuracy: argmax sequence == BPE tokenization of the target word.
+
+    Mirrors EleutherAI lm-evaluation-harness's `lambada_openai` accuracy
+    metric. We tokenize the target with a leading space (BPE convention
+    for word-internal tokens), greedy-decode that many tokens from the
+    prefix, and require an exact token-id match. The previous version
+    decoded back to text and compared whitespace-split words, which
+    false-negatives whenever punctuation attaches to the model's first
+    token (e.g. ``"Paris."`` vs ``"Paris"``) — that produced an absurd
+    ~1% accuracy across all checkpoints.
+    """
     from datasets import load_dataset  # type: ignore
     ds = load_dataset("EleutherAI/lambada_openai", split="test")
     correct = 0
@@ -157,32 +168,33 @@ def score_lambada(model, tokenizer, n: int, *, ctx_len: int, device) -> dict:
         if i >= n:
             break
         text = row["text"].strip()
-        # Last word is the target. Greedy-decode 1 token from the prefix.
         words = text.split()
         if len(words) < 2:
             continue
-        prefix = " ".join(words[:-1])
-        gold_word = words[-1]
-        ids = tokenizer.encode(prefix, add_special_tokens=False)
-        # Truncate to context len-1 so we can predict 1 more.
-        if len(ids) > ctx_len - 1:
-            ids = ids[-(ctx_len - 1):]
-        idx = torch.tensor([ids], dtype=torch.long, device=device)
+        prefix_text = " ".join(words[:-1])
+        # BPE leading-space convention: " Paris" tokenises differently
+        # from "Paris", and continuations from a prefix carry the space.
+        gold_text = " " + words[-1]
+        prefix_ids = tokenizer.encode(prefix_text, add_special_tokens=False)
+        gold_ids = tokenizer.encode(gold_text, add_special_tokens=False)
+        if not gold_ids:
+            continue
+        # Reserve room for the gold tokens we're about to predict.
+        max_prefix = ctx_len - len(gold_ids)
+        if max_prefix <= 0:
+            continue
+        if len(prefix_ids) > max_prefix:
+            prefix_ids = prefix_ids[-max_prefix:]
+
+        cur = torch.tensor([prefix_ids], dtype=torch.long, device=device)
+        gen_ids: list[int] = []
         with torch.no_grad():
-            logits, _ = model(idx, return_logits=True)
-        # Greedy continue ~5 tokens, then check if the gold word is a prefix.
-        gen_ids = []
-        cur = idx
-        for _ in range(8):
-            with torch.no_grad():
+            for _ in range(len(gold_ids)):
                 lg, _ = model(cur, return_logits=True)
-            nxt = lg[:, -1, :].argmax(dim=-1, keepdim=True)
-            gen_ids.append(int(nxt.item()))
-            cur = torch.cat([cur, nxt], dim=1)
-            if int(nxt.item()) == tokenizer.eos_token_id:
-                break
-        produced = tokenizer.decode(gen_ids).strip()
-        if produced.split()[:1] == [gold_word]:
+                nxt = lg[:, -1, :].argmax(dim=-1, keepdim=True)
+                gen_ids.append(int(nxt.item()))
+                cur = torch.cat([cur, nxt], dim=1)
+        if gen_ids == gold_ids:
             correct += 1
         total += 1
     return {"benchmark": "LAMBADA", "n": total, "accuracy": correct / max(1, total)}

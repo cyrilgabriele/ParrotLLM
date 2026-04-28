@@ -20,12 +20,18 @@ from src.utils import build_tokenizer, get_device
 
 
 PIPELINE = [
-    ("pretrain",
+    ("pre_500M",
      r"runs/big_run/exp_c/run_20260408_124138/checkpoints/best_loss_3p5437_epoch_0001_step_0003000.pt"),
-    ("sft",
-     r"runs/run_20260426_203420_sft/checkpoints/best_step_0001500_epoch_01_valloss_2p7198.pt"),
-    ("dpo",
-     r"runs/run_20260426_210502_dpo/checkpoints/best_step_0000200_epoch_00_valloss_0p0368.pt"),
+    ("pre_8B",
+     r"runs/big_run/exp_c_8b/run_20260410_044337/checkpoints/best_loss_3p2650_epoch_0000_step_0095500.pt"),
+    ("sft_v3",
+     r"runs/run_20260427_214613_sft/checkpoints/best_step_0001500_epoch_01_valloss_2p7318.pt"),
+    ("sft_v5_8B",
+     r"runs/run_20260427_230323_sft/checkpoints/best_step_0001500_epoch_01_valloss_2p4115.pt"),
+    ("dpo_v4",
+     r"runs/run_20260427_215602_dpo/checkpoints/best_step_0000360_epoch_00_valloss_0p6640.pt"),
+    ("dpo_v5_8B",
+     r"runs/run_20260427_231456_dpo/checkpoints/best_step_0000360_epoch_00_valloss_0p6449.pt"),
 ]
 
 
@@ -41,7 +47,11 @@ def main() -> int:
     wt_ids = torch.tensor(tok.encode(wt_text), dtype=torch.long)
     print(f"  Wikitext-103 test: {len(wt_ids):,} tokens")
 
-    owt_path = Path("data/processed/val.bin")
+    # Use the exp_c held-out split (same OWT subset the pretrain saw at
+    # validation). Not the official course test set from the switch URL,
+    # but the closest proxy locally available — swap in the official
+    # download path before quoting numbers in the tech report.
+    owt_path = Path("data/exp_c/val.bin")
     if owt_path.exists():
         owt_ids = torch.from_numpy(np.memmap(owt_path, dtype=np.uint16, mode="r").astype(np.int64))
         print(f"  OWT val: {len(owt_ids):,} tokens")
@@ -82,12 +92,11 @@ def main() -> int:
     datasets = ["wikitext103", "owt_val"]
     for d in datasets:
         if all(d in rows[s] for s, _ in PIPELINE):
-            pre = rows["pretrain"][d]
-            sft = rows["sft"][d]
-            dpo = rows["dpo"][d]
-            delta = dpo - pre
+            cells = "  ".join(f"{rows[s][d]:8.2f}" for s, _ in PIPELINE)
+            base = rows[PIPELINE[0][0]][d]
+            delta = rows[PIPELINE[-1][0]][d] - base
             sign = "+" if delta >= 0 else ""
-            print(f"{d:<14}   {pre:8.2f}     {sft:8.2f}     {dpo:8.2f}     {sign}{delta:7.2f}")
+            print(f"{d:<14}   {cells}     {sign}{delta:7.2f}")
 
     out = Path("runs/perplexity_comparison.json")
     out.parent.mkdir(parents=True, exist_ok=True)

@@ -1,0 +1,74 @@
+# SFT v5 — same recipe as v3 (CF-mitigated, pretraining_mix=0.20) but
+# starting from the 8B-token pretrain checkpoint downloaded from
+# ParrotLabs/Preprocessed instead of the local 500M-token base.
+#
+# Variables changed from sft_v3_higher_mix:
+#   - base_checkpoint: 500M run -> 8B run (the actual midterm-quality base)
+#   - pretraining_bin_path: data/exp_c -> data/processed/filter_c (the
+#     same OWT subset the 8B base was trained on, so CF-mix is in-
+#     distribution for the base).
+
+model:
+  vocab_size: 50258
+  pad_token_id: 50257
+  bos_token_id: 50256
+  eos_token_id: 50256
+  d_model: 384
+  n_layers: 14
+  n_heads: 6
+  d_ff: 768
+  context_length: 1024
+  bias: false
+  dropout: 0.0
+  rope_theta: 10000.0
+  gradient_checkpointing: false
+
+logging:
+  console_level: INFO
+  file_level: INFO
+
+sft:
+  hf_dataset_name: tatsu-lab/alpaca
+  hf_split: train
+  max_examples: null
+  val_fraction: 0.05
+  decontam_benchmarks:
+    - lambada
+    - hellaswag
+    - winogrande
+    - openbookqa
+
+  max_length: 1024
+
+  learning_rate: 1.0e-5
+  min_lr: 1.0e-6
+  weight_decay: 0.1
+  beta1: 0.9
+  beta2: 0.95
+  grad_clip: 1.0
+
+  warmup_steps: 50
+  epochs: 2
+  lr_schedule: cosine
+
+  batch_size: 8
+  gradient_accumulation_steps: 8
+  num_workers: 0
+  pin_memory: true
+
+  pretraining_mix_ratio: 0.20
+  pretraining_bin_path: data/processed/filter_c/train.bin
+
+  wt103_eval_every_n_evals: 1
+  wt103_max_sequences: 64
+  wt103_hard_stop_pct: 10.0
+
+  runs_dir: runs
+  eval_every: 100
+  save_every: 999999
+  log_every: 10
+  early_stopping_patience: 3
+
+  base_checkpoint: runs/big_run/exp_c_8b/run_20260410_044337/checkpoints/best_loss_3p2650_epoch_0000_step_0095500.pt
+  device: auto
+  torch_compile: true

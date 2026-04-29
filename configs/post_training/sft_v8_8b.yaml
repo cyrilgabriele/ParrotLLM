@@ -1,0 +1,86 @@
+# SFT v8 — adds large-scale auto-cloze (25k from Wikitext-103 train)
+# on top of v7's hand-crafted synthetic mix. Targets the LAMBADA gap
+# (v7 measured 22.2% on n=500). Auto-cloze data is decontaminated
+# against all four leaderboard validation files AND Wikitext-103 test.
+#
+# Variables changed from sft_v7_8b:
+#   - synthetic_jsonl_path: sft_v7_combined.jsonl -> sft_v8_combined.jsonl
+#     (= sft_v7_combined.jsonl ++ sft_v8_auto_cloze.jsonl, 7151 + 25000 = 32151)
+#   - synthetic_oversample: 2 -> 1 (synthetic pool grew ~4.6x; over-
+#     sampling at the same factor would crowd out Alpaca too aggressively)
+#
+# Same arch / base ckpt / LR schedule / decontam list as v7.
+
+model:
+  vocab_size: 50258
+  pad_token_id: 50257
+  bos_token_id: 50256
+  eos_token_id: 50256
+  d_model: 384
+  n_layers: 14
+  n_heads: 6
+  d_ff: 768
+  context_length: 1024
+  bias: false
+  dropout: 0.0
+  rope_theta: 10000.0
+  gradient_checkpointing: false
+
+logging:
+  console_level: INFO
+  file_level: INFO
+
+sft:
+  hf_dataset_name: tatsu-lab/alpaca
+  hf_split: train
+  max_examples: null
+  val_fraction: 0.05
+  decontam_benchmarks:
+    - lambada
+    - hellaswag
+    - winogrande
+    - openbookqa
+    - arc_easy
+    - arc_challenge
+    - boolq
+    - commonsenseqa
+    - sciq
+    - mmlu
+
+  synthetic_jsonl_path: data/synthetic/sft_v8_combined.jsonl
+  synthetic_oversample: 1
+
+  max_length: 1024
+
+  learning_rate: 1.0e-5
+  min_lr: 1.0e-6
+  weight_decay: 0.1
+  beta1: 0.9
+  beta2: 0.95
+  grad_clip: 1.0
+
+  warmup_steps: 50
+  epochs: 2
+  lr_schedule: cosine
+
+  batch_size: 8
+  gradient_accumulation_steps: 8
+  num_workers: 0
+  pin_memory: true
+
+  pretraining_mix_ratio: 0.20
+  pretraining_bin_path: data/processed/filter_c/train.bin
+
+  wt103_eval_every_n_evals: 1
+  wt103_max_sequences: 64
+  wt103_hard_stop_pct: 10.0
+
+  runs_dir: runs
+  eval_every: 100
+  save_every: 999999
+  log_every: 10
+  early_stopping_patience: 3
+
+  base_checkpoint: runs/big_run/exp_c_8b/run_20260410_044337/checkpoints/best_loss_3p2650_epoch_0000_step_0095500.pt
+  device: auto
+  torch_compile: true

@@ -65,15 +65,32 @@ def run_chat(project_config: ProjectConfig, *, device: torch.device) -> None:
         return "pretrain"
 
     def _best_by_stage(candidates):
-        """Lowest-valloss `best_*` checkpoint per stage, across all runs."""
+        """Lowest-valloss ``best_*`` checkpoint per stage, across all runs.
+
+        Filters out collapsed/length-bias runs whose val_loss is implausibly
+        low (< 0.3). DPO v1/v2 collapsed to 0.018 — the runner would auto-
+        load that and hand the user a model that emits dialog-shaped garbage.
+        """
+        COLLAPSE_FLOOR = 0.3
         out = {}
         for p in candidates:
             if not os.path.basename(p).startswith("best_"):
                 continue
             stage = _stage_from_path(p)
-            if stage not in out or _parse_valloss(p) < _parse_valloss(out[stage]):
+            valloss = _parse_valloss(p)
+            if valloss < COLLAPSE_FLOOR:
+                continue
+            if stage not in out or valloss < _parse_valloss(out[stage]):
                 out[stage] = p
         return out
+
+    # Manual override: latest SFT/DPO run wins regardless of val_loss when its
+    # name matches one of these explicit "v7" markers. Lets the user point
+    # the chat at a specific iteration without filename gymnastics.
+    PREFERRED_RUNS = (
+        "run_20260428_211931_sft",   # sft_v7 (synthetic v7 mixin, 8B base)
+        "run_20260428_104023_dpo",   # dpo_v6 (last good DPO)
+    )
 
     def load_ckpt(path):
         if not path:
@@ -175,10 +192,25 @@ def run_chat(project_config: ProjectConfig, *, device: torch.device) -> None:
 
     available = list_checkpoints()
     best_per_stage = _best_by_stage(available)
-    # DPO sits on top of SFT and inherits its CF guardrails, so DPO is the
-    # default chat target; SFT is one click away via the Quick load radio.
+
+    # Prefer an explicitly-marked run if available — overrides val_loss
+    # heuristics. Picks the lowest-valloss best_* inside that run.
+    def _best_in_run(run_name):
+        cands = [p for p in available
+                 if run_name in p and os.path.basename(p).startswith("best_")]
+        if not cands:
+            return None
+        return min(cands, key=_parse_valloss)
+
+    preferred_default = None
+    for run_name in PREFERRED_RUNS:
+        preferred_default = _best_in_run(run_name)
+        if preferred_default:
+            break
+
     default_ckpt = (
-        best_per_stage.get("dpo")
+        preferred_default
+        or best_per_stage.get("dpo")
         or best_per_stage.get("sft")
         or (available[0] if available else None)
     )

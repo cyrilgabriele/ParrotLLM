@@ -318,6 +318,89 @@ def _normalize_local_jsonl_record(record: Mapping[str, Any], source_cfg: SFTSour
     return messages, metadata
 
 
+def _normalize_alpaca_record(record: Mapping[str, Any], source_cfg: SFTSourceConfig) -> tuple[list[dict[str, str]], dict[str, Any]] | None:
+    instruction = str(record.get("instruction") or record.get("prompt") or "").strip()
+    input_text = str(record.get("input") or record.get("context") or "").strip()
+    response = str(
+        record.get("output")
+        or record.get("response")
+        or record.get("completion")
+        or ""
+    ).strip()
+    if not instruction or not response:
+        return None
+
+    prompt = instruction
+    if input_text:
+        prompt = f"{instruction}\n\nInput:\n{input_text}"
+
+    messages = [
+        {"role": "user", "content": prompt},
+        {"role": "assistant", "content": response},
+    ]
+    metadata = {
+        "record_id": record.get("id"),
+        "rationale": source_cfg.rationale,
+    }
+    return messages, metadata
+
+
+def _normalize_ai2_arc_record(record: Mapping[str, Any], source_cfg: SFTSourceConfig) -> tuple[list[dict[str, str]], dict[str, Any]] | None:
+    question = str(record.get("question") or "").strip()
+    raw_choices = record.get("choices")
+    answer_key = str(record.get("answerKey") or record.get("answer_key") or "").strip()
+    if not question or not isinstance(raw_choices, Mapping) or not answer_key:
+        return None
+
+    choice_texts = raw_choices.get("text")
+    if not isinstance(choice_texts, list) or len(choice_texts) != 4:
+        return None
+
+    cleaned_choices = [clean_message_content(text) for text in choice_texts]
+    if any(not text for text in cleaned_choices):
+        return None
+
+    raw_labels = raw_choices.get("label")
+    answer_index: int | None = None
+    if isinstance(raw_labels, list):
+        normalized_answer = answer_key.strip().upper()
+        for idx, label in enumerate(raw_labels):
+            label_text = str(label).strip().upper()
+            if label_text == normalized_answer:
+                answer_index = idx
+                break
+
+    if answer_index is None:
+        if answer_key.isdigit():
+            numeric_index = int(answer_key) - 1
+            if 0 <= numeric_index < len(cleaned_choices):
+                answer_index = numeric_index
+        else:
+            letter_index = ord(answer_key.upper()[:1]) - ord("A")
+            if 0 <= letter_index < len(cleaned_choices):
+                answer_index = letter_index
+
+    if answer_index is None:
+        return None
+
+    labels = ["A", "B", "C", "D"]
+    options = "\n".join(
+        f"{label}. {text}" for label, text in zip(labels, cleaned_choices)
+    )
+    prompt = f"{question}\n{options}\nAnswer with only the letter."
+    messages = [
+        {"role": "user", "content": prompt},
+        {"role": "assistant", "content": labels[answer_index]},
+    ]
+    metadata = {
+        "record_id": record.get("id"),
+        "arc_subset": source_cfg.subset,
+        "original_answer_key": answer_key,
+        "rationale": source_cfg.rationale,
+    }
+    return messages, metadata
+
+
 def _normalize_wildchat_record(record: Mapping[str, Any], source_cfg: SFTSourceConfig) -> tuple[list[dict[str, str]], dict[str, Any]] | None:
     model_name = str(record.get("model") or record.get("model_name") or "").lower()
     if source_cfg.require_model_substring and source_cfg.require_model_substring.lower() not in model_name:
@@ -531,6 +614,10 @@ def _normalize_source_record(
 ) -> tuple[list[dict[str, str]], dict[str, Any]] | None:
     if source_cfg.loader == "local_jsonl":
         return _normalize_local_jsonl_record(record, source_cfg)
+    if source_cfg.loader == "alpaca":
+        return _normalize_alpaca_record(record, source_cfg)
+    if source_cfg.loader == "ai2_arc":
+        return _normalize_ai2_arc_record(record, source_cfg)
     if source_cfg.loader == "wildchat":
         return _normalize_wildchat_record(record, source_cfg)
     if source_cfg.loader == "tulu":

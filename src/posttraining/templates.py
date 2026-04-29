@@ -1,4 +1,4 @@
-"""Shared plain-text chat template used for SFT and interactive chat."""
+"""Shared Alpaca-style instruction template used for SFT and interactive chat."""
 
 from __future__ import annotations
 
@@ -14,19 +14,20 @@ ROLE_ALIASES = {
     "model": "assistant",
     "chatbot": "assistant",
     "system": "system",
-    "instruction": "system",
+    "instruction": "user",
     "user": "user",
     "human": "user",
     "prompter": "user",
 }
 
 ROLE_HEADERS = {
-    "system": "### System:\n",
-    "user": "### User:\n",
-    "assistant": "### Assistant:\n",
+    "user": "### Instruction:\n",
+    "assistant": "### Response:\n",
 }
 
-HEADER_STOP_RE = re.compile(r"(?:\n\n|\A)### (?:System|User|Assistant):")
+HEADER_STOP_RE = re.compile(
+    r"(?:\n\n|\A)### (?:Instruction|Response|System|User|Assistant):"
+)
 
 
 @dataclass(slots=True)
@@ -72,6 +73,7 @@ def normalize_messages(
     require_final_assistant: bool = True,
 ) -> list[dict[str, str]]:
     normalized: list[dict[str, str]] = []
+    del system_prompt  # Alpaca format has no rendered system prompt.
 
     for raw in messages:
         role = canonicalize_role(raw.get("role")) if isinstance(raw, Mapping) else None
@@ -81,10 +83,6 @@ def normalize_messages(
         if not content:
             continue
         if role == "system":
-            if normalized and normalized[0]["role"] == "system":
-                normalized[0] = {"role": "system", "content": content}
-            elif not normalized:
-                normalized.append({"role": "system", "content": content})
             continue
         if not normalized and role == "assistant":
             continue
@@ -94,14 +92,6 @@ def normalize_messages(
             continue
         normalized.append({"role": role, "content": content})
 
-    if system_prompt:
-        system_prompt = clean_message_content(system_prompt)
-        if system_prompt:
-            if normalized and normalized[0]["role"] == "system":
-                normalized[0] = {"role": "system", "content": normalized[0]["content"]}
-            else:
-                normalized.insert(0, {"role": "system", "content": system_prompt})
-
     if normalized and normalized[0]["role"] == "assistant":
         normalized = normalized[1:]
 
@@ -109,8 +99,6 @@ def normalize_messages(
     prev_role: str | None = None
     for message in normalized:
         role = message["role"]
-        if role == "system" and cleaned:
-            continue
         if prev_role == role and role != "system":
             continue
         cleaned.append(message)
@@ -131,31 +119,51 @@ def render_conversation(
     text_parts: list[str] = []
     assistant_spans: list[tuple[int, int]] = []
     cursor = 0
-    normalized = [{"role": str(m["role"]), "content": str(m["content"])} for m in messages]
+    rendered_messages: list[dict[str, str]] = []
+    pending_user: dict[str, str] | None = None
 
-    for idx, message in enumerate(normalized):
-        if idx > 0:
-            text_parts.append("\n\n")
-            cursor += 2
-        prefix = ROLE_HEADERS[message["role"]]
-        content = clean_message_content(message["content"])
-        text_parts.append(prefix)
-        cursor += len(prefix)
-        start = cursor
-        text_parts.append(content)
-        cursor += len(content)
-        if message["role"] == "assistant":
-            assistant_spans.append((start, cursor))
-
-    if add_generation_prompt:
+    def append_block(user_content: str, assistant_content: str | None) -> None:
+        nonlocal cursor
         if text_parts:
             text_parts.append("\n\n")
-        text_parts.append(ROLE_HEADERS["assistant"])
+            cursor += 2
+        instruction_prefix = ROLE_HEADERS["user"]
+        user_text = clean_message_content(user_content)
+        response_prefix = "\n\n" + ROLE_HEADERS["assistant"]
+        text_parts.append(instruction_prefix)
+        cursor += len(instruction_prefix)
+        text_parts.append(user_text)
+        cursor += len(user_text)
+        text_parts.append(response_prefix)
+        cursor += len(response_prefix)
+        if assistant_content is not None:
+            answer_text = clean_message_content(assistant_content)
+            start = cursor
+            text_parts.append(answer_text)
+            cursor += len(answer_text)
+            assistant_spans.append((start, cursor))
+
+    for raw in messages:
+        role = str(raw["role"])
+        if role == "system":
+            continue
+        content = str(raw["content"])
+        if role == "user":
+            pending_user = {"role": "user", "content": content}
+            continue
+        if role == "assistant" and pending_user is not None:
+            append_block(pending_user["content"], content)
+            rendered_messages.extend([pending_user, {"role": "assistant", "content": content}])
+            pending_user = None
+
+    if add_generation_prompt and pending_user is not None:
+        append_block(pending_user["content"], None)
+        rendered_messages.append(pending_user)
 
     return RenderedConversation(
         text="".join(text_parts),
         assistant_spans=assistant_spans,
-        messages=normalized,
+        messages=rendered_messages,
     )
 
 
@@ -195,7 +203,7 @@ def tokenize_conversation(
         if eos_id is None:
             raise ValueError("Tokenizer must define eos_token_id when append_eos=True.")
         tokens.append(int(eos_id))
-        mask.append(0)
+        mask.append(1)
     return TokenizedConversation(
         tokens=tokens,
         token_loss_mask=mask,
@@ -248,9 +256,15 @@ def build_generation_prompt(
 def strip_generated_assistant_text(text: str) -> str:
     stripped = text.strip()
     match = HEADER_STOP_RE.search(stripped)
-    if match and match.start() > 0:
+    if match:
         stripped = stripped[: match.start()]
-    for stop in ("\n\n### User:", "\n\n### System:", "\n\n### Assistant:"):
+    for stop in (
+        "\n\n### Instruction:",
+        "\n\n### Response:",
+        "\n\n### User:",
+        "\n\n### System:",
+        "\n\n### Assistant:",
+    ):
         if stop in stripped:
             stripped = stripped.split(stop, 1)[0]
     return stripped.strip()

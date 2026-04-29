@@ -41,8 +41,8 @@ sft:
   base_checkpoint: runs/posttraining/base_import/run_20260410_044337/checkpoints/best_loss_3p2650_epoch_0000_step_0095500.pt
   cache_dir: data/posttraining/hf_cache
   raw_dir: data/posttraining/raw
-  prepared_dir: data/posttraining/sft_mix
-  runs_dir: runs/posttraining/sft
+  prepared_dir: data/posttraining/sft_mix_lima
+  runs_dir: runs/posttraining/sft_lima
   checkpoint_dir: checkpoints
   system_prompt: "You are ParrotLLM, a helpful assistant."
   max_seq_length: 1024
@@ -61,7 +61,7 @@ sft:
   replay_ratio: 0.3
   replay_train_bin: data/processed/train.bin
   replay_val_bin: data/processed/val.bin
-  num_epochs: 3.0
+  num_epochs: 1.0
   polish_epochs: 0.0
   polish_subset_size: 4000
   save_every: 10
@@ -79,7 +79,7 @@ sft:
       loader: oasst1
       path: OpenAssistant/oasst1
       split: train
-      target_examples: 4000
+      target_examples: 750
       candidate_multiplier: 3
       language: en
       use_best_branch: true
@@ -94,7 +94,7 @@ sft:
       loader: tulu
       path: allenai/tulu-3-sft-mixture
       split: train
-      target_examples: 3000
+      target_examples: 250
       candidate_multiplier: 5
       language: en
       source_matches: [flan_v2, flan]

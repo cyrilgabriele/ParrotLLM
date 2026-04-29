@@ -163,6 +163,55 @@ def _validate_source_preview(
     }
 
 
+def _validate_local_jsonl_source(
+    source_cfg: SFTSourceConfig,
+    *,
+    tokenizer,
+    system_prompt: str,
+    max_seq_length: int,
+    lang_filter: OptionalLanguageFilter,
+) -> dict[str, Any]:
+    if source_cfg.loader != "local_jsonl":
+        raise ValueError(f"Expected local_jsonl source, got {source_cfg.loader!r}.")
+
+    local_path = Path(source_cfg.path)
+    if not local_path.exists():
+        raise FileNotFoundError(
+            f"Local SFT source '{source_cfg.name}' is missing at {local_path}."
+        )
+
+    preview_cfg = source_cfg.model_copy(
+        update={
+            "target_examples": min(8, source_cfg.target_examples),
+            "candidate_multiplier": min(2, source_cfg.candidate_multiplier),
+        }
+    )
+    preview_candidates: list[PreparedExample] = _collect_candidates_for_source(
+        preview_cfg,
+        tokenizer=tokenizer,
+        system_prompt=system_prompt,
+        max_seq_length=max_seq_length,
+        lang_filter=lang_filter,
+    )
+    if not preview_candidates:
+        raise RuntimeError(
+            f"Local SFT source '{source_cfg.name}' at {local_path} yielded zero "
+            "preview examples after normalization/filtering."
+        )
+
+    return {
+        "name": source_cfg.name,
+        "loader": source_cfg.loader,
+        "path": str(local_path),
+        "snapshot_path": None,
+        "num_rows": None,
+        "preview_candidates": len(preview_candidates),
+        "raw_normalized_examples": len(preview_candidates),
+        "validation_mode": "local_jsonl_preview",
+        "target_examples": source_cfg.target_examples,
+    }
+
+
 def _validate_local_decontam(cfg: SFTDecontamConfig) -> dict[str, Any]:
     local_path = Path(cfg.path)
     if not local_path.exists():
@@ -256,10 +305,16 @@ def run_download_sft(
     source_results = []
     for source_cfg in sft_cfg.sources:
         if source_cfg.loader == "local_jsonl":
-            raise ValueError(
-                f"SFT source '{source_cfg.name}' uses loader=local_jsonl. "
-                "The sft-download stage only handles public datasets."
+            source_results.append(
+                _validate_local_jsonl_source(
+                    source_cfg,
+                    tokenizer=tokenizer,
+                    system_prompt=sft_cfg.system_prompt,
+                    max_seq_length=sft_cfg.max_seq_length,
+                    lang_filter=lang_filter,
+                )
             )
+            continue
         dataset_key = (source_cfg.path, source_cfg.subset, source_cfg.split)
         snapshot_path = snapshot_cache.get(dataset_key)
         if snapshot_path is None:

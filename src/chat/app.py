@@ -74,6 +74,7 @@ def run_chat(project_config: ProjectConfig, *, device: torch.device) -> None:
             top_k=chat_cfg.top_k,
             top_p=chat_cfg.top_p,
             context_length=mc["context_length"],
+            eos_token_id=tokenizer.eos_token_id,
         )
         generated = tokenizer.decode(output[0, len(input_ids):].tolist())
         return strip_generated_assistant_text(generated)

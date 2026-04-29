@@ -21,6 +21,84 @@ Track what was changed, why it was changed, and any important notes.
 
 ## Unreleased
 
+### [2026-04-29] - Tilman / Codex
+
+#### What
+- Reworked the final SFT path around the lecture-recommended Alpaca instruction format:
+  - canonical prompt format is now `### Instruction:` followed by `### Response:`,
+  - old `### System:`, `### User:`, and `### Assistant:` rendering is no longer used for SFT/chat/inference wrapping,
+  - system prompts passed through old config fields are harmlessly ignored by the shared renderer.
+- Updated SFT preparation and source handling:
+  - added Alpaca dataset normalization from `instruction`/`input`/`output` fields into the internal `{user, assistant}` message schema,
+  - allowed local JSONL sidecar sources for small format-focused SFT datasets,
+  - kept the final trial centered on Alpaca plus generic MCQ-format examples rather than task-specific factual corrections.
+- Added generic multiple-choice SFT support:
+  - created a local MCQ format sidecar so the model sees examples where the correct output is only `A`, `B`, `C`, or `D`,
+  - added MCQ cases to the prompt-suite so training-time evaluation checks letter-only behavior.
+- Improved inference/chat behavior for the new SFT format:
+  - raw CLI prompts are auto-wrapped into Alpaca format during inference,
+  - already formatted Alpaca prompts are left unchanged,
+  - generated text is stripped/stopped if it emits another Alpaca block or old chat headers.
+- Added behavior-focused training diagnostics:
+  - prompt-suite generations are now printed during SFT evaluation so model behavior can be inspected directly in the shell,
+  - prompt-suite scoring rejects prompt echoing and visible chat/template headers,
+  - early stopping can now target `format_score` with `mode: max`.
+- Added and validated the overnight SFT config:
+  - `configs/posttraining/sft_final_overnight.yaml`,
+  - learning rate `5e-7`,
+  - `min_lr_ratio: 0.5`,
+  - `replay_ratio: 0.1`,
+  - `num_epochs: 20.0`,
+  - early stopping on `format_score >= 0.875`.
+- Added a larger Alpaca + AI2 ARC SFT option:
+  - `configs/posttraining/sft_final_alpaca_arc.yaml`,
+  - `8000` Alpaca train examples,
+  - `1400` `allenai/ai2_arc` `ARC-Easy` train examples,
+  - `600` `allenai/ai2_arc` `ARC-Challenge` train examples,
+  - ARC examples are normalized into Alpaca MCQ prompts and letter-only responses,
+  - ARC validation/test splits are not used for training.
+- Enabled the provided NLP26 OpenWebText eval split as a decontamination reference in the final SFT configs:
+  - `data/owt-eval/NLP26/NLP26_OWT_eval/test` is used only to filter contaminated SFT examples,
+  - it is not used as training data.
+
+#### Why
+- The previous chat-style prompt template caused the model to continue fake dialogue transcripts instead of producing a single answer.
+- The Alpaca format matches the TA/lecture recommendation and gives a simpler instruction-response target for a small model.
+- The first Alpaca-only runs showed loss improvement but no useful `format_score` improvement, so training needed stronger behavior visibility and better format-specific evaluation.
+- Generic MCQ examples are needed because leaderboard-style tasks include multiple-choice evaluation, but the sidecar should teach answer format rather than memorize known benchmarks.
+- AI2 ARC is included in the new optional final config because it has a clean train-split MCQ schema (`question`, `choices`, `answerKey`) and can teach the A/B/C/D response contract more reliably than Alpaca alone.
+- `replay_ratio: 0.1` preserves some general English modeling ability while keeping most updates focused on SFT behavior.
+- Decontamination against Wikitext-103 test and the provided OWT eval split is required so final SFT examples do not include restricted evaluation data.
+
+#### Remarks
+- The existing `data/processed/train.bin` replay source is treated as safe because it was manually produced as a clean pretraining dataset.
+- The latest overnight run with Alpaca plus only 50 MCQ examples did not improve `format_score`; future runs should use a stronger generic English/MCQ format sidecar instead of more capital-question corrections.
+- The weak freeform haiku prompt-suite case can over-credit bad repetitive text, so future prompt-suite revisions should tighten or replace that case.
+
+### [2026-04-26] - Tilman
+
+#### What
+- Successfully debugged and stabilized the SFT behavior for the 35.8M model through three major technical fixes:
+  - **EOS Training Fix:** Corrected `src/posttraining/templates.py` to set the loss mask to `1` for the EOS token, finally allowing the model to learn the "Stop" signal.
+  - **Inference Termination Fix:** Updated `src/eval/inference.py` to respect the `eos_token_id` and break the generation loop immediately upon prediction, preventing forced repetition loops.
+  - **Template Symmetry Enforcement:** Identified that for models < 100M parameters, exact prompt-template matching (including `### System:`, `### User:`, and `### Assistant:` headers with real newlines) is mandatory to trigger the Assistant persona.
+- Established the **"Deep Burn" Golden Profile** in `configs/posttraining/sft.yaml`:
+  - **Learning Rate:** `1e-5` (Ultra-low to prevent weights from exploding)
+  - **Replay Ratio:** `0.3` (30% pretraining data to anchor basic English logic)
+  - **Training Depth:** `3.0` Epochs (Necessary for a tiny model to internalize new instructions)
+  - **Curated Data Mix:** Reduced sources to high-quality `OASST1` (human-reviewed chat) and `Tulu-3 FLAN` (structured instructions) to minimize noise.
+- Fixed a `NameError` in the evaluation pipeline where `tokenizer` was not defined in the `generate` scope.
+
+#### Why
+- Initial SFT attempts with standard learning rates (`1e-4`) caused "Mode Collapse" (repetitive gibberish), proving that 35M models are extremely sensitive to fine-tuning intensity.
+- The model was previously "forbidden" from learning how to stop because the EOS token was masked out in training data; fixing this was the key to preventing infinite rambling.
+- High replay ratios and low learning rates were required to prevent "Catastrophic Forgetting," where the model would learn the Assistant format but lose its ability to form English sentences.
+
+#### Remarks
+- Empirically identified the lower bound of SFT capacity: a 35M model can learn **Format** (headers and stopping) but struggles to maintain **Factual Knowledge** (e.g., capitals) and **Instruction Logic** simultaneously.
+- The model now correctly predicts `<|endoftext|>` and remains stable (no symbolic gibberish) when using the "Golden" configuration.
+- These findings serve as the baseline for the upcoming DPO (Direct Preference Optimization) phase.
+
 ### [2026-04-23] - Tilman
 
 #### What

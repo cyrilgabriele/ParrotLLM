@@ -61,9 +61,9 @@ sft:
   replay_ratio: 0.3
   replay_train_bin: data/processed/train.bin
   replay_val_bin: data/processed/val.bin
-  num_epochs: 3.0
-  polish_epochs: 0.0
-  polish_subset_size: 4000
+  num_epochs: 1.0
+  polish_epochs: 1.0
+  polish_subset_size: 500
   save_every: 10
   eval_every: 100
   keep_last_checkpoints: 3

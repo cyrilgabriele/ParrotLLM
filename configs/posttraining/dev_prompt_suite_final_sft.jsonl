@@ -1,0 +1,8 @@
+{"messages":[{"role":"user","content":"What is the capital of France? Answer with only the city name."}],"expected_format":"short_answer","gold":"Paris","max_tokens":12,"forbid_prompt_echo":true}
+{"messages":[{"role":"user","content":"What is the capital of Paris?"}],"expected_format":"freeform","must_contain":["Paris","city","capital of France"],"max_tokens":48,"forbid_prompt_echo":true}
+{"messages":[{"role":"user","content":"Explain gravity to a 5-year-old in one sentence."}],"expected_format":"short_answer","max_words":24,"must_contain":["pull"],"max_tokens":48,"forbid_prompt_echo":true}
+{"messages":[{"role":"user","content":"Write a haiku about mountains."}],"expected_format":"freeform","max_tokens":48,"forbid_prompt_echo":true}
+{"messages":[{"role":"user","content":"Return valid JSON with keys \"name\" and \"age\" for a person named Ada who is 12."}],"expected_format":"json","must_contain":["name","age"],"max_tokens":48,"forbid_prompt_echo":true}
+{"messages":[{"role":"user","content":"Say \"I don't know\" if unsure: who invented the flarbnicator?"}],"expected_format":"short_answer","gold":"I don't know","max_tokens":16,"forbid_prompt_echo":true}
+{"messages":[{"role":"user","content":"Which option is the largest planet in this list?\nA. Earth\nB. Jupiter\nC. Mars\nD. Venus\nAnswer with only the letter."}],"expected_format":"mcq_letter","gold":"B","max_tokens":4,"forbid_prompt_echo":true}
+{"messages":[{"role":"user","content":"Choose the word that is a color.\nA. Table\nB. Blue\nC. Running\nD. Chair\nReply with only A, B, C, or D."}],"expected_format":"mcq_letter","gold":"B","max_tokens":4,"forbid_prompt_echo":true}

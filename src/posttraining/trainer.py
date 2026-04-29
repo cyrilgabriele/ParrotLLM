@@ -269,6 +269,7 @@ def _evaluate_checkpoint(
     autocast_ctx,
     tokenizer,
     context_length: int,
+    generation_log_label: str | None = None,
 ) -> dict[str, float]:
     dev_loss = _evaluate_sft_loss(
         model,
@@ -298,12 +299,56 @@ def _evaluate_checkpoint(
         temperature=0.0,
         top_k=0,
         top_p=1.0,
+        return_generations=bool(sft_cfg.log_prompt_suite_generations),
     )
     metrics["format_score"] = float(suite.get("format_score", 0.0))
+    if sft_cfg.log_prompt_suite_generations:
+        _log_prompt_suite_generations(
+            suite.get("generations", []),
+            label=generation_log_label or "eval",
+            format_score=metrics["format_score"],
+        )
     if device.type == "mps":
         gc.collect()
         _empty_device_cache(device)
     return metrics
+
+
+def _terminal_bar(value: float, *, width: int = 12) -> str:
+    filled = max(0, min(width, round(float(value) * width)))
+    return "[" + "#" * filled + "-" * (width - filled) + "]"
+
+
+def _one_line(text: Any, *, limit: int = 140) -> str:
+    normalized = " ".join(str(text).replace("\r", " ").replace("\n", " ").split())
+    if len(normalized) <= limit:
+        return normalized
+    return normalized[: max(0, limit - 3)] + "..."
+
+
+def _log_prompt_suite_generations(
+    generations: Any,
+    *,
+    label: str,
+    format_score: float,
+) -> None:
+    if not isinstance(generations, list) or not generations:
+        return
+    lines = [
+        "",
+        f"Prompt-suite generation check ({label}) "
+        f"format_score={format_score:.3f} {_terminal_bar(format_score)}",
+    ]
+    for record in generations:
+        if not isinstance(record, dict):
+            continue
+        score = float(record.get("score", 0.0))
+        idx = int(record.get("case_index", 0))
+        response = _one_line(record.get("response", ""))
+        raw_generated = _one_line(record.get("raw_generated", ""))
+        shown = response or raw_generated or "<empty>"
+        lines.append(f"  case {idx:02d} score={score:.1f} {_terminal_bar(score, width=8)} {shown}")
+    log.info("\n".join(lines))
 
 
 def _composite_score(
@@ -319,6 +364,31 @@ def _composite_score(
         replay_penalty = max(0.0, float(metrics.get("replay_ppl", base_replay_ppl)) - base_replay_ppl)
         score += forgetting_weight * replay_penalty
     return score
+
+
+def _early_stopping_value(metrics: dict[str, float], composite_score: float, metric: str) -> float:
+    if metric == "composite_score":
+        return float(composite_score)
+    if metric not in metrics:
+        raise ValueError(
+            f"Unsupported early_stopping_metric '{metric}'. "
+            f"Available metrics: composite_score, {', '.join(sorted(metrics))}"
+        )
+    return float(metrics[metric])
+
+
+def _early_stopping_improved(current: float, best: float, *, mode: str, min_delta: float) -> bool:
+    if mode == "max":
+        return current > (best + min_delta)
+    return current < (best - min_delta)
+
+
+def _early_stopping_target_reached(current: float, target: float | None, *, mode: str) -> bool:
+    if target is None:
+        return False
+    if mode == "max":
+        return current >= target
+    return current <= target
 
 
 def _run_single_sweep(
@@ -489,6 +559,7 @@ def _run_single_sweep(
         autocast_ctx=autocast_ctx,
         tokenizer=tokenizer,
         context_length=context_length,
+        generation_log_label="step 0",
     )
     _empty_device_cache(device)
     base_replay_ppl = base_metrics["replay_ppl"] if math.isfinite(base_metrics["replay_ppl"]) else None
@@ -498,7 +569,13 @@ def _run_single_sweep(
         format_weight=sft_cfg.format_score_weight,
         forgetting_weight=sft_cfg.forgetting_penalty_weight,
     )
+    best_early_stop_value = _early_stopping_value(
+        base_metrics,
+        best_score,
+        sft_cfg.early_stopping_metric,
+    )
     best_metrics = dict(base_metrics)
+    early_stop_bad_evals = 0
     best_checkpoint = checkpoint_manager.maybe_save_best(
         model,
         optimizer,
@@ -634,6 +711,7 @@ def _run_single_sweep(
                 autocast_ctx=autocast_ctx,
                 tokenizer=tokenizer,
                 context_length=context_length,
+                generation_log_label=f"step {step}",
             )
             if device.type == "mps":
                 gc.collect()
@@ -644,6 +722,11 @@ def _run_single_sweep(
                 format_weight=sft_cfg.format_score_weight,
                 forgetting_weight=sft_cfg.forgetting_penalty_weight,
             )
+            early_stop_value = _early_stopping_value(
+                metrics,
+                score,
+                sft_cfg.early_stopping_metric,
+            )
             jlog.log(
                 "sft",
                 "eval",
@@ -652,6 +735,8 @@ def _run_single_sweep(
                 replay_ppl=metrics["replay_ppl"],
                 format_score=metrics["format_score"],
                 composite_score=score,
+                early_stopping_metric=sft_cfg.early_stopping_metric,
+                early_stopping_value=early_stop_value,
             )
             progress.set_postfix(
                 loss=f"{float(loss.detach().item()):.3f}",
@@ -660,7 +745,8 @@ def _run_single_sweep(
                 score=f"{float(score):.3f}",
                 refresh=False,
             )
-            if score < best_score:
+            improved = score < (best_score - sft_cfg.early_stopping_min_delta)
+            if improved:
                 best_score = score
                 best_metrics = metrics
                 best_checkpoint = checkpoint_manager.maybe_save_best(
@@ -674,6 +760,73 @@ def _run_single_sweep(
                     scheduler=scheduler,
                     trainer_state={"selection_metric": "composite_score"},
                 )
+
+            early_stop_improved = _early_stopping_improved(
+                early_stop_value,
+                best_early_stop_value,
+                mode=sft_cfg.early_stopping_mode,
+                min_delta=sft_cfg.early_stopping_min_delta,
+            )
+            if early_stop_improved:
+                best_early_stop_value = early_stop_value
+                early_stop_bad_evals = 0
+            elif sft_cfg.early_stopping_patience > 0:
+                early_stop_bad_evals += 1
+                log.info(
+                    "SFT early stopping: no %s improvement for %d/%d evals "
+                    "(current=%.4f best=%.4f mode=%s min_delta=%.4g).",
+                    sft_cfg.early_stopping_metric,
+                    early_stop_bad_evals,
+                    sft_cfg.early_stopping_patience,
+                    early_stop_value,
+                    best_early_stop_value,
+                    sft_cfg.early_stopping_mode,
+                    sft_cfg.early_stopping_min_delta,
+                )
+                jlog.log(
+                    "sft",
+                    "early_stopping",
+                    step=step,
+                    metric=sft_cfg.early_stopping_metric,
+                    mode=sft_cfg.early_stopping_mode,
+                    bad_evals=early_stop_bad_evals,
+                    patience=sft_cfg.early_stopping_patience,
+                    best_value=best_early_stop_value,
+                    current_value=early_stop_value,
+                    min_delta=sft_cfg.early_stopping_min_delta,
+                )
+                if early_stop_bad_evals >= sft_cfg.early_stopping_patience:
+                    log.info(
+                        "Stopping SFT early at step %d/%d after %d non-improving evals.",
+                        step,
+                        optimizer_steps,
+                        early_stop_bad_evals,
+                    )
+                    break
+            if _early_stopping_target_reached(
+                early_stop_value,
+                sft_cfg.early_stopping_target,
+                mode=sft_cfg.early_stopping_mode,
+            ):
+                log.info(
+                    "Stopping SFT early at step %d/%d because %s reached target %.4f "
+                    "(current=%.4f).",
+                    step,
+                    optimizer_steps,
+                    sft_cfg.early_stopping_metric,
+                    sft_cfg.early_stopping_target,
+                    early_stop_value,
+                )
+                jlog.log(
+                    "sft",
+                    "early_stopping_target",
+                    step=step,
+                    metric=sft_cfg.early_stopping_metric,
+                    mode=sft_cfg.early_stopping_mode,
+                    target=sft_cfg.early_stopping_target,
+                    current_value=early_stop_value,
+                )
+                break
 
     progress.close()
     checkpoint_manager.save_last(

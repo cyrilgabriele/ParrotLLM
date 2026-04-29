@@ -12,7 +12,16 @@ class SFTSourceConfig(BaseModel):
     model_config = ConfigDict(extra="ignore")
 
     name: str = Field(...)
-    loader: Literal["wildchat", "oasst1", "tulu", "wildguardmix", "pku_safe_rlhf_qa", "local_jsonl"] = Field(...)
+    loader: Literal[
+        "ai2_arc",
+        "alpaca",
+        "wildchat",
+        "oasst1",
+        "tulu",
+        "wildguardmix",
+        "pku_safe_rlhf_qa",
+        "local_jsonl",
+    ] = Field(...)
     path: str = Field(...)
     subset: str | None = Field(default=None)
     split: str = Field(default="train")
@@ -78,6 +87,11 @@ class SFTConfig(BaseModel):
     polish_subset_size: int = Field(default=4000, ge=1)
     save_every: int = Field(default=250, ge=1)
     eval_every: int = Field(default=100, ge=1)
+    early_stopping_metric: str = Field(default="composite_score")
+    early_stopping_mode: Literal["min", "max"] = Field(default="min")
+    early_stopping_target: float | None = Field(default=None)
+    early_stopping_patience: int = Field(default=0, ge=0)
+    early_stopping_min_delta: float = Field(default=0.0, ge=0.0)
     keep_last_checkpoints: int = Field(default=3, ge=0)
     keep_best_checkpoints: int = Field(default=2, ge=0)
     log_every: int = Field(default=10, ge=1)
@@ -86,6 +100,7 @@ class SFTConfig(BaseModel):
     format_score_weight: float = Field(default=0.1, ge=0.0)
     forgetting_penalty_weight: float = Field(default=0.05, ge=0.0)
     prompt_suite_path: Path | None = Field(default=Path("configs/posttraining/dev_prompt_suite.jsonl"))
+    log_prompt_suite_generations: bool = Field(default=True)
     sources: list[SFTSourceConfig] = Field(default_factory=list)
     decontam_datasets: list[SFTDecontamConfig] = Field(default_factory=list)
 

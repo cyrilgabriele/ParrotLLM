@@ -21,6 +21,7 @@ def generate(
     top_k: int = 50,
     top_p: float = 0.9,
     context_length: int = 1024,
+    eos_token_id: int | None = None,
 ) -> torch.Tensor:
     """Autoregressive generation. temp=0 for greedy, temp>0 for sampling."""
     model.eval()
@@ -53,6 +54,10 @@ def generate(
 
         idx = torch.cat([idx, next_token], dim=1)
 
+        # Stop if we generated the EOS token
+        if eos_token_id is not None and next_token.item() == eos_token_id:
+            break
+
     return idx
 
 
@@ -63,6 +68,15 @@ def load_model_from_checkpoint(checkpoint_path: str, device: torch.device):
     model.load_state_dict(ckpt["model"])
     model.eval()
     return model, config
+
+
+def _maybe_wrap_alpaca_prompt(prompt: str) -> str:
+    from src.posttraining.templates import build_generation_prompt
+
+    text = str(prompt)
+    if "### Instruction:" in text or "### Response:" in text:
+        return text
+    return build_generation_prompt([{"role": "user", "content": text}], system_prompt=None)
 
 
 def run_inference(
@@ -97,7 +111,7 @@ def run_inference(
 
     tokenizer = build_tokenizer()
 
-    input_text = prompt if prompt else "Parrot are amazing because"
+    input_text = _maybe_wrap_alpaca_prompt(prompt) if prompt else "Parrot are amazing because"
     input_ids = tokenizer.encode(input_text)
     idx = torch.tensor([input_ids], dtype=torch.long, device=device)
 
@@ -112,13 +126,16 @@ def run_inference(
         model, idx, max_tokens,
         temperature=temperature, top_k=top_k, top_p=top_p,
         context_length=mc["context_length"],
+        eos_token_id=tokenizer.eos_token_id,
     )
     text = tokenizer.decode(output[0].tolist())
 
     if leaderboard:
+        from src.posttraining.templates import strip_generated_assistant_text
+
         # leaderboard mode: ONLY generated text, no logging
         generated = tokenizer.decode(output[0, len(input_ids):].tolist())
-        sys.stdout.write(generated)
+        sys.stdout.write(strip_generated_assistant_text(generated))
     else:
         log.info(f"prompt: {input_text}")
         log.info(f"output: {text}")

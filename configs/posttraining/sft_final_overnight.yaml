@@ -29,20 +29,20 @@ inference:
 
 chat:
   device: auto
-  max_tokens: 256
-  temperature: 0.7
+  max_tokens: 40
+  temperature: 0.0
   top_k: 50
   top_p: 0.9
   system_prompt: "You are ParrotLLM, a helpful assistant."
-  checkpoint_dir: runs
+  checkpoint_dir: runs/posttraining/sft_final_overnight
 
 sft:
   device: auto
   base_checkpoint: runs/posttraining/base_import/run_20260410_044337/checkpoints/best_loss_3p2650_epoch_0000_step_0095500.pt
   cache_dir: data/posttraining/hf_cache
   raw_dir: data/posttraining/raw
-  prepared_dir: data/posttraining/sft_mix
-  runs_dir: runs/posttraining/sft
+  prepared_dir: data/posttraining/sft_mix_final_overnight
+  runs_dir: runs/posttraining/sft_final_overnight
   checkpoint_dir: checkpoints
   system_prompt: "You are ParrotLLM, a helpful assistant."
   max_seq_length: 1024
@@ -50,59 +50,61 @@ sft:
   eval_batch_size: 8
   gradient_accumulation_steps: 4
   learning_rates:
-    - 1.0e-5
-  min_lr_ratio: 0.1
+    - 5.0e-7
+  min_lr_ratio: 0.5
   warmup_ratio: 0.03
   weight_decay: 0.01
   beta1: 0.9
   beta2: 0.95
   grad_clip: 1.0
   z_loss_coeff: 0.0
-  replay_ratio: 0.3
+  replay_ratio: 0.1
   replay_train_bin: data/processed/train.bin
   replay_val_bin: data/processed/val.bin
-  num_epochs: 3.0
+  num_epochs: 20.0
   polish_epochs: 0.0
   polish_subset_size: 4000
   save_every: 10
-  eval_every: 100
-  keep_last_checkpoints: 3
-  keep_best_checkpoints: 2
+  eval_every: 25
+  early_stopping_metric: format_score
+  early_stopping_mode: max
+  early_stopping_target: 0.875
+  early_stopping_patience: 4
+  early_stopping_min_delta: 0.0
+  keep_last_checkpoints: 4
+  keep_best_checkpoints: 3
   log_every: 1
   seed: 42
   compile: false
-  format_score_weight: 0.1
-  forgetting_penalty_weight: 0.05
-  prompt_suite_path: configs/posttraining/dev_prompt_suite.jsonl
+  format_score_weight: 0.25
+  forgetting_penalty_weight: 0.08
+  prompt_suite_path: configs/posttraining/dev_prompt_suite_final_sft.jsonl
+  log_prompt_suite_generations: true
   sources:
-    - name: oasst1_ready
-      loader: oasst1
-      path: OpenAssistant/oasst1
+    - name: alpaca_instruction
+      loader: alpaca
+      path: tatsu-lab/alpaca
       split: train
-      target_examples: 4000
+      target_examples: 1950
       candidate_multiplier: 3
       language: en
-      use_best_branch: true
-      require_tree_state: ready_for_export
-      min_turns: 2
-      max_turns: 4
-      max_depth: 4
-      quality_weight: 1.1
-      tags: [chat, human_reviewed]
-      rationale: Human-reviewed dialogue trees that teach cleaner assistant behavior.
-    - name: tulu_flan_v2
-      loader: tulu
-      path: allenai/tulu-3-sft-mixture
-      split: train
-      target_examples: 3000
-      candidate_multiplier: 5
-      language: en
-      source_matches: [flan_v2, flan]
       min_turns: 2
       max_turns: 2
-      quality_weight: 1.0
-      tags: [short_answer, classification]
-      rationale: Protects exact-answer and benchmark-shaped task behavior.
+      quality_weight: 1.1
+      tags: [alpaca, instruction_following]
+      rationale: TA-recommended simple Alpaca-style instruction-response alignment data.
+    - name: mcq_format
+      loader: local_jsonl
+      path: data/posttraining/custom/final_mcq_format.jsonl
+      split: train
+      target_examples: 50
+      candidate_multiplier: 1
+      language: en
+      min_turns: 2
+      max_turns: 2
+      quality_weight: 1.2
+      tags: [multiple_choice, format_following]
+      rationale: Generic non-benchmark MCQ examples that teach letter-only A/B/C/D responses.
   decontam_datasets:
     - name: wikitext103_test
       loader: local_disk

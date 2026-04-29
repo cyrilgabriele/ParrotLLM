@@ -176,9 +176,6 @@ def load_model_from_checkpoint(checkpoint_path: str, device: torch.device):
 
 _MC_ANSWER_RE = re.compile(r"\nAnswer:\s*$")
 _MC_LETTER_LINE_RE = re.compile(r"\n([A-Z])\) ")
-# Capture option text from "\nL) <text>" up to the next "\nL) " bullet,
-# the trailing "\nAnswer:" sentinel, or end-of-prompt. DOTALL so options
-# spanning multiple sentences (rare but legal) are still captured fully.
 _MC_OPTION_RE = re.compile(
     r"\n([A-Z])\)\s+(.+?)(?=\n[A-Z]\)\s+|\nAnswer:|\Z)",
     re.DOTALL,
@@ -214,14 +211,7 @@ def parse_mc_options(prompt: str) -> dict[str, str] | None:
 
 
 def extract_mc_stem(prompt: str) -> str:
-    """Strip the leaderboard MC scaffolding to recover the bare context.
-
-    The runner's MC prompts are ``"<prefix>: <stem>\\nA) ...\\nB) ...\\nAnswer:"``
-    where prefix is "Context" (HellaSwag/WinoGrande) or "Question" (OBQA).
-    Cloze scoring works on the stem alone — the option list and the
-    "Answer:" sentinel are MC-formatting artifacts that confuse a
-    completion-trained model.
-    """
+    """Return the bare question stem from an MC prompt (drops "Context:"/"Question:" prefix and the option list)."""
     body = _MC_ANSWER_RE.sub("", prompt)
     cut = re.search(r"\n[A-Z]\)\s", body)
     if cut:
@@ -242,13 +232,7 @@ def _score_logits(
     device: torch.device,
     context_length: int,
 ) -> tuple[float, int]:
-    """Sum log-likelihood and token count of ``continuation`` tokens given
-    ``context``. Both are tokenized as-is — the caller is responsible for
-    putting any required leading whitespace into ``continuation``.
-
-    If context + continuation exceeds ``context_length``, the context is
-    truncated from the left so the entire continuation is always scored.
-    """
+    """Return (sum_logprob, n_tokens) of `continuation` given `context`. Caller normalizes."""
     ctx_ids = tokenizer.encode(context)
     cont_ids = tokenizer.encode(continuation)
     if not cont_ids:
@@ -290,34 +274,18 @@ def score_mc_options(
     context_length: int,
     pmi: bool = False,
 ) -> dict[str, float]:
-    """Length-normalized log-likelihood of each option given the bare stem.
+    """Length-normalized loglik of each option given the bare stem.
 
-    Two scoring modes:
-      * Standard cloze (HellaSwag, OpenBookQA): score ``" <option>"`` as a
-        continuation of the stem.
-      * Substitution cloze (WinoGrande): the stem contains an underscore
-        marking a blank. For each option we substitute the option text into
-        the blank and score the *post-blank* tail conditioned on the
-        substituted prefix. This is the lm-eval-harness WinoGrande recipe;
-        scoring just the option token (e.g. " Sarah" vs " Maria") in that
-        sentence position is a much weaker signal than scoring the
-        downstream tail's likelihood under each substitution.
+    WinoGrande-style stems with an underscore use substitution cloze
+    (substitute the option into the blank, score the post-blank tail).
+    Other stems use standard cloze.
 
-    If ``pmi`` is True, additionally subtract the per-option unconditional
-    log-likelihood (averaged over its tokens) measured against a neutral
-    prefix. This is the "Calibrate Before Use" / PMI debiasing trick from
-    Zhao et al. 2021 — it removes the model's unconditional preference
-    for an option's surface form, which is the standard fix for the OBQA
-    "answer-letter prior" / option-text-frequency bias.
+    With pmi=True, subtract the option's loglik against a neutral prefix
+    (Calibrate-Before-Use, Zhao et al. 2021). Off for substitution.
     """
     stem = extract_mc_stem(prompt)
     scores: dict[str, float] = {}
     is_substitution = "_" in stem
-    # PMI is a per-benchmark trade-off at this scale: empirically helps
-    # OBQA (knowledge MC) by ~10pp by canceling option-text frequency
-    # bias, but hurts WinoGrande's substitution scoring because the
-    # "neutral" baseline becomes meaningless once the option is fused
-    # into the prefix. Disable PMI for substitution; keep for the rest.
     use_pmi = pmi and not is_substitution
 
     if is_substitution:
@@ -342,9 +310,6 @@ def score_mc_options(
                                    device, context_length)
         score = sum_lp / n if n > 0 else float("-inf")
         if use_pmi and n > 0:
-            # Neutral prefix is just "Answer:" — the model's prior on
-            # "what option text would I emit if I knew nothing about the
-            # question?". Subtracting cancels per-option surface bias.
             base_lp, base_n = _score_logits(
                 model, tokenizer, "Answer:", " " + opt_text,
                 device, context_length,
@@ -355,7 +320,6 @@ def score_mc_options(
     return scores
 
 
-# Back-compat shim: older callers still import score_continuation_loglik.
 def score_continuation_loglik(
     model, tokenizer, prompt, continuation, device, context_length,
 ):
@@ -420,13 +384,7 @@ def run_inference(
 
     input_text = prompt if prompt else "Parrot are amazing because"
     if leaderboard:
-        # LAMBADA prompts arrive with a single trailing space (the rest end
-        # with "Answer:" — no trailing whitespace either way after rstrip).
-        # That trailing space breaks GPT-2 BPE alignment: greedy decoding
-        # then collapses onto a meaningless token (literal underscores were
-        # the most common failure mode), tanking LAMBADA accuracy from the
-        # ~14% reported on the prior benchmark to ~0%. Stripping makes the
-        # tokenizer emit clean space-prefixed continuation tokens.
+        # LAMBADA prompts arrive with a trailing space; stripping it keeps BPE alignment clean.
         input_text = input_text.rstrip()
     input_ids = tokenizer.encode(input_text)
     idx = torch.tensor([input_ids], dtype=torch.long, device=device)
@@ -453,11 +411,6 @@ def run_inference(
             # argmax over the letter token throws away.
             options = parse_mc_options(input_text)
             if options is not None and set(options.keys()) == set(letters):
-                # PMI on by default in leaderboard mode: measured +0.4pp on
-                # SFT V7 / V8 (n=500) and +0.7pp on DPO V6, with no
-                # downside on substitution-cloze (WinoGrande gates PMI off
-                # internally for the substitution path). Pure inference-
-                # time scoring trick, no benchmark exposure.
                 scores = score_mc_options(
                     model, tokenizer, input_text, options,
                     device, mc["context_length"],

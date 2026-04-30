@@ -29,6 +29,7 @@ def main() -> None:
             "sft",
             "benchmark",
             "dpo-prepare",
+            "dpo",
         ],
     )
     parser.add_argument("--config", type=Path, default=Path("configs/default.yaml"))
@@ -232,6 +233,19 @@ def main() -> None:
         from src.posttraining.dpo.prepare import run_prepare_dpo
 
         run_prepare_dpo(project_config, seed=SEED, hf_token=HF_TOKEN)
+        return
+
+    if args.stage == "dpo":
+        dpo_cfg = _require_section(project_config.dpo, "dpo")
+        _require_section(project_config.model, "model")
+        device = get_device(dpo_cfg.device)
+        from src.posttraining.dpo.trainer import run_dpo
+
+        run_dpo(
+            project_config,
+            device=device,
+            checkpoint=args.checkpoint,
+        )
         return
 
     if args.stage == "sft":

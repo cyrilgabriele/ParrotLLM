@@ -31,9 +31,11 @@ def test_build_generation_prompt_uses_frozen_template():
         [{"role": "user", "content": "Say hello."}],
         system_prompt="You are helpful.",
     )
-    assert prompt.startswith("### System:\nYou are helpful.")
-    assert "### User:\nSay hello." in prompt
-    assert prompt.endswith("### Assistant:\n")
+    # Alpaca-merge style: system_prompt is prepended into the first user turn,
+    # not emitted as a separate ### System: block.
+    assert prompt.startswith("### Instruction:\nYou are helpful.")
+    assert "Say hello." in prompt
+    assert prompt.endswith("### Response:\n")
 
 
 def test_tokenize_conversation_masks_only_assistant_content():
@@ -48,8 +50,10 @@ def test_tokenize_conversation_masks_only_assistant_content():
         append_eos=True,
     )
     assert len(tokenized.tokens) == len(tokenized.token_loss_mask)
-    assert sum(tokenized.token_loss_mask) == len("World")
-    assert tokenized.token_loss_mask[-1] == 0
+    # Active tokens: "World" (5 chars) + EOS token (always supervised) = 6.
+    assert sum(tokenized.token_loss_mask) == len("World") + 1
+    # EOS is always supervised (mask=1).
+    assert tokenized.token_loss_mask[-1] == 1
 
 
 def test_trim_messages_to_token_limit_drops_earliest_turns():

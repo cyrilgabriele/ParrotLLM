@@ -73,7 +73,6 @@ def normalize_messages(
     require_final_assistant: bool = True,
 ) -> list[dict[str, str]]:
     normalized: list[dict[str, str]] = []
-    del system_prompt  # Alpaca format has no rendered system prompt.
 
     for raw in messages:
         role = canonicalize_role(raw.get("role")) if isinstance(raw, Mapping) else None
@@ -83,6 +82,8 @@ def normalize_messages(
         if not content:
             continue
         if role == "system":
+            # Drop any inline system messages from the source data; we rely on
+            # the explicit `system_prompt` argument as the single source of truth.
             continue
         if not normalized and role == "assistant":
             continue
@@ -107,6 +108,17 @@ def normalize_messages(
     if require_final_assistant:
         while cleaned and cleaned[-1]["role"] != "assistant":
             cleaned.pop()
+
+    # Alpaca-style: prepend the system prompt onto the first user turn.
+    # Stanford Alpaca uses an analogous PROMPT_DICT prefix; here we keep the
+    # ### Instruction: header from render_conversation and embed the system
+    # text as the opening sentence of the first user message.
+    sys = (system_prompt or "").strip()
+    if sys and cleaned and cleaned[0]["role"] == "user":
+        cleaned[0] = {
+            "role": "user",
+            "content": f"{sys}\n\n{cleaned[0]['content']}",
+        }
 
     return cleaned
 

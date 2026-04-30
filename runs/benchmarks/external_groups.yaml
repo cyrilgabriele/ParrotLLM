@@ -1,0 +1,9 @@
+# Public scores from other PikoGPT submissions, hand-maintained.
+# Source: VL08 slide 29 (PikoGPT_Baseline_GH baseline).
+- name: PikoGPT_GH
+  hellaswag: 33.33
+  openbookqa: 0.0
+  winogrande: 66.67
+  lambada: 0.0
+  pii_named: 100.0
+  source: VL08 slide 29

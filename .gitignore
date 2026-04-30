@@ -214,7 +214,9 @@ __marimo__/
 checkpoints/*.pt
 
 # Training runs (logs, metrics, checkpoints)
-runs/
+runs/*
+# ...except the benchmark registry, which is small and meant to be auditable.
+!runs/benchmarks/
 
 # Weights & Biases
 wandb/

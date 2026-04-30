@@ -27,6 +27,7 @@ def main() -> None:
             "sft-download",
             "sft-prepare",
             "sft",
+            "benchmark",
         ],
     )
     parser.add_argument("--config", type=Path, default=Path("configs/default.yaml"))
@@ -60,6 +61,18 @@ def main() -> None:
                         help="Override Optuna timeout (seconds)")
     parser.add_argument("--export-only", action="store_true",
                         help="Just export best params from existing study")
+    # benchmark-specific
+    parser.add_argument(
+        "--tier",
+        choices=["smoke", "quick", "full"],
+        default="quick",
+        help="Benchmark tier; smoke=5 items, quick=200 items, full=all.",
+    )
+    parser.add_argument(
+        "--submission-name",
+        default="ParrotLLM",
+        help="Name of the submission folder under external/PikoGPT_Leaderboard/Submissions/.",
+    )
 
     args = parser.parse_args()
 
@@ -163,6 +176,40 @@ def main() -> None:
         from src.chat.app import run_chat
 
         run_chat(project_config, device=device)
+        return
+
+    if args.stage == "benchmark":
+        import subprocess
+        from src.posttraining.benchmarks.harness import BenchmarkRunSpec, run_benchmark
+        from src.posttraining.benchmarks.compare import build_comparison_markdown
+
+        checkpoint_path = _require_checkpoint(args.checkpoint, stage="benchmark")
+        leaderboard_repo = Path("external/PikoGPT_Leaderboard")
+        registry_dir = Path("runs/benchmarks")
+        external_yaml = registry_dir / "external_groups.yaml"
+
+        git_sha = subprocess.check_output(
+            ["git", "rev-parse", "--short", "HEAD"], text=True
+        ).strip()
+
+        spec = BenchmarkRunSpec(
+            checkpoint=Path(checkpoint_path),
+            tier=args.tier,
+            submission_name=args.submission_name,
+            leaderboard_repo=leaderboard_repo,
+            registry_dir=registry_dir,
+            git_sha=git_sha,
+        )
+        result = run_benchmark(spec)
+        print(f"\nBenchmark result for {result.checkpoint_basename} @ tier={result.tier}:")
+        print(f"  hellaswag={result.scores.get('hellaswag', 0):.2f}")
+        print(f"  openbookqa={result.scores.get('openbookqa', 0):.2f}")
+        print(f"  winogrande={result.scores.get('winogrande', 0):.2f}")
+        print(f"  lambada={result.scores.get('lambada', 0):.2f}")
+        print(f"  PII (named) = {result.pii_named:.2f}")
+        print(f"  wall-clock = {result.wall_clock_seconds:.1f}s")
+        print()
+        print(build_comparison_markdown(registry_dir, external_yaml))
         return
 
     if args.stage == "sft-download":

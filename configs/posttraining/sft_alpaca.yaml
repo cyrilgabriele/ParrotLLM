@@ -1,0 +1,145 @@
+# SFT Alpaca recipe — follows VL07 slide 48's explicit recommendation:
+#   "Use Alpaca dataset for chat alignment through SFT.
+#    Try to avoid catastrophic forgetting: choose a small LR."
+#
+# Source: tatsu-lab/alpaca (52,002 GPT-4-generated instruction-response pairs).
+# Designed to address the SFT-scope gaps from Task 11 (run on OASST + Tulu-FLAN):
+#   - Length-constraint following ("Reply with one word"): Alpaca has many
+#     short instruction examples with explicit format directives.
+#   - EOS calibration: Alpaca's response-length distribution is wider than
+#     OASST's long-form bias, giving more EOS supervision per token.
+#   - Course alignment: this is the dataset the lecturer asks for.
+#
+# Recipe stays close to the canonical Alpaca paper:
+#   - LR 2e-5 (Alpaca paper used 2e-5 for 7B; small for our 40M base
+#     too — slide 48: "small LR" for catastrophic-forgetting protection)
+#   - 3 epochs (Alpaca paper standard)
+#   - Polish pass at half LR (our pipeline's second-stage tight refinement)
+#   - replay_ratio 0.05 (Ibrahim et al. 2024) — anchor pretraining
+
+model:
+  vocab_size: 50258
+  pad_token_id: 50257
+  bos_token_id: 50256
+  eos_token_id: 50256
+  d_model: 384
+  n_layers: 14
+  n_heads: 6
+  d_ff: 768
+  context_length: 1024
+  bias: false
+  dropout: 0.0151
+  rope_theta: 10000.0
+  gradient_checkpointing: false
+
+logging:
+  console_level: INFO
+  file_level: DEBUG
+  components:
+    posttraining: INFO
+    training: INFO
+
+inference:
+  device: auto
+  max_tokens: 128
+  temperature: 0.2
+  top_k: 50
+  top_p: 0.9
+
+chat:
+  device: auto
+  max_tokens: 256
+  temperature: 0.7
+  top_k: 50
+  top_p: 0.9
+  system_prompt: "You are ParrotLLM, a helpful assistant."
+  checkpoint_dir: runs
+
+sft:
+  device: auto
+  base_checkpoint: runs/posttraining/base_import/run_20260410_044337/checkpoints/best_loss_3p2650_epoch_0000_step_0095500.pt
+  cache_dir: data/posttraining/hf_cache
+  raw_dir: data/posttraining/raw
+  prepared_dir: data/posttraining/sft_mix_alpaca
+  runs_dir: runs/posttraining/sft_alpaca
+  checkpoint_dir: checkpoints
+  system_prompt: "You are ParrotLLM, a helpful assistant."
+  max_seq_length: 1024
+  train_batch_size: 8
+  eval_batch_size: 8
+  gradient_accumulation_steps: 4
+  learning_rates:
+    - 2.0e-5
+  min_lr_ratio: 0.1
+  warmup_ratio: 0.03
+  weight_decay: 0.01
+  beta1: 0.9
+  beta2: 0.95
+  grad_clip: 1.0
+  z_loss_coeff: 0.0
+  replay_ratio: 0.05
+  replay_train_bin: data/processed/train.bin
+  replay_val_bin: data/processed/val.bin
+  num_epochs: 3.0
+  polish_epochs: 0.5
+  polish_subset_size: 4000
+  save_every: 100
+  eval_every: 100
+  keep_last_checkpoints: 3
+  keep_best_checkpoints: 2
+  log_every: 1
+  seed: 42
+  compile: false
+  format_score_weight: 0.3
+  forgetting_penalty_weight: 0.05
+  prompt_suite_path: configs/posttraining/dev_prompt_suite_ifeval_lite.jsonl
+  sources:
+    - name: alpaca_instruction
+      loader: alpaca
+      path: tatsu-lab/alpaca
+      split: train
+      target_examples: 50000
+      candidate_multiplier: 1
+      language: en
+      min_turns: 2
+      max_turns: 2
+      quality_weight: 1.0
+      tags: [alpaca, instruction_following]
+      rationale: |
+        Stanford Alpaca, 52K GPT-4-generated instruction-response pairs.
+        Slide 48's explicit recommendation for PikoGPT chat alignment.
+        Wider response-length distribution than OASST/FLAN gives stronger
+        EOS supervision and better short-form / format-constraint coverage.
+  decontam_datasets:
+    - name: wikitext103_test
+      loader: local_disk
+      path: data/wikitext-103-test
+      field: text
+      split: test
+    - name: nlp26_owt_eval
+      loader: local_disk
+      path: data/owt-eval/NLP26/NLP26_OWT_eval/test
+      field: text
+      split: test
+    - name: hellaswag
+      loader: huggingface
+      path: Rowan/hellaswag
+      field: ctx
+      split: validation
+    - name: winogrande
+      loader: huggingface
+      path: allenai/winogrande
+      subset: winogrande_xl
+      field: sentence
+      split: validation
+    - name: openbookqa
+      loader: huggingface
+      path: allenai/openbookqa
+      subset: main
+      field: question_stem
+      split: validation
+    - name: lambada
+      loader: huggingface
+      path: EleutherAI/lambada_openai
+      field: text
+      split: test

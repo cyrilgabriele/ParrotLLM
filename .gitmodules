@@ -1,0 +1,3 @@
+[submodule "external/PikoGPT_Leaderboard"]
+	path = external/PikoGPT_Leaderboard
+	url = https://github.com/unisg-ics-dsnlp/PikoGPT_Leaderboard.git

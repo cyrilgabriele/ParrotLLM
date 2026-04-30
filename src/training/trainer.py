@@ -466,8 +466,10 @@ def get_autocast_context(device: torch.device):
             return torch.autocast("cuda", dtype=torch.float16), scaler
     if device.type == "mps":
         # bfloat16 on MPS (PyTorch 2.6+): full fp32 range, no GradScaler needed.
-        # The previous fp16-without-scaler pairing caused gradient underflow → NaN
-        # within a couple of optimizer steps when fine-tuning from a fp32 base.
+        # NOTE: bf16 alone does NOT make MPS reliable for SFT — the chunked-CE
+        # backward path produces non-deterministic gradient norms (observed
+        # spread of ~30 to ~9000 on identical inputs across runs). MPS is
+        # currently unreliable for SFT in this codebase; use CPU or CUDA.
         return torch.autocast("mps", dtype=torch.bfloat16), None
     return torch.autocast(device.type, enabled=False), None
 

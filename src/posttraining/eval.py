@@ -49,7 +49,11 @@ def _score_case(case: dict[str, Any], response: str, raw_generated: str = "") ->
 
     forbidden = list(DEFAULT_FORBIDDEN_SUBSTRINGS)
     forbidden.extend(str(item) for item in (case.get("forbidden_contains") or []))
-    if any(needle and needle in raw_text for needle in forbidden):
+    # Apply forbidden-substring check to the CLEANED response, not the raw
+    # generation — otherwise a correct answer followed by template bleed
+    # is indistinguishable from a wrong answer. Stopping behavior is
+    # measured separately via response-length / EOS-rate metrics.
+    if any(needle and needle in normalized for needle in forbidden):
         return 0.0
 
     if case.get("forbid_prompt_echo", False):

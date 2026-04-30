@@ -12,14 +12,12 @@ model:
   dropout: 0.0151
   rope_theta: 10000.0
   gradient_checkpointing: false
-
 logging:
   console_level: INFO
   file_level: DEBUG
   components:
     posttraining: INFO
     training: INFO
-
 sft:
   device: auto
   base_checkpoint: runs/posttraining/base_import/run_20260410_044337/checkpoints/best_loss_3p2650_epoch_0000_step_0095500.pt
@@ -28,13 +26,13 @@ sft:
   prepared_dir: data/posttraining/sft_mix_smoke_fast
   runs_dir: runs/posttraining/sft_smoke_fast
   checkpoint_dir: checkpoints
-  system_prompt: "You are ParrotLLM, a helpful assistant."
+  system_prompt: You are ParrotLLM, a helpful assistant.
   max_seq_length: 1024
   train_batch_size: 2
   eval_batch_size: 2
   gradient_accumulation_steps: 1
   learning_rates:
-    - 1.0e-4
+  - 5.0e-05
   min_lr_ratio: 0.1
   warmup_ratio: 0.03
   weight_decay: 0.01
@@ -42,11 +40,11 @@ sft:
   beta2: 0.95
   grad_clip: 1.0
   z_loss_coeff: 0.0
-  replay_ratio: 0.0
+  replay_ratio: 0.05
   replay_train_bin: data/processed/train.bin
   replay_val_bin: data/processed/val.bin
   num_epochs: 0.1
-  polish_epochs: 0.1
+  polish_epochs: 0.25
   polish_subset_size: 4
   save_every: 1
   eval_every: 1
@@ -55,64 +53,70 @@ sft:
   log_every: 1
   seed: 42
   compile: false
-  format_score_weight: 0.1
+  format_score_weight: 0.3
   forgetting_penalty_weight: 0.05
-  prompt_suite_path: configs/posttraining/dev_prompt_suite_smoke.jsonl
+  prompt_suite_path: configs/posttraining/dev_prompt_suite_ifeval_lite.jsonl
   sources:
-    - name: wildchat_gpt4
-      loader: wildchat
-      path: allenai/WildChat
-      split: train
-      target_examples: 4
-      candidate_multiplier: 1
-      language: en
-      require_model_substring: gpt-4
-      exclude_toxic: true
-      exclude_redacted: true
-      min_turns: 2
-      max_turns: 6
-      quality_weight: 1.0
-      tags: [chat]
-      rationale: Fast smoke-test chat slice.
-    - name: oasst1_ready
-      loader: oasst1
-      path: OpenAssistant/oasst1
-      split: train
-      target_examples: 4
-      candidate_multiplier: 1
-      language: en
-      use_best_branch: true
-      require_tree_state: ready_for_export
-      min_turns: 2
-      max_turns: 4
-      max_depth: 4
-      quality_weight: 1.1
-      tags: [chat]
-      rationale: Fast smoke-test OASST slice.
-    - name: tulu_flan_v2
-      loader: tulu
-      path: allenai/tulu-3-sft-mixture
-      split: train
-      target_examples: 4
-      candidate_multiplier: 1
-      language: en
-      source_matches: [flan_v2, flan]
-      min_turns: 2
-      max_turns: 2
-      quality_weight: 1.0
-      tags: [short_answer]
-      rationale: Fast smoke-test FLAN slice.
-    - name: pku_safe_rlhf_refusals
-      loader: pku_safe_rlhf_qa
-      path: PKU-Alignment/PKU-SafeRLHF-QA
-      split: train
-      target_examples: 4
-      candidate_multiplier: 1
-      language: en
-      keep_harmful_only: true
-      min_turns: 2
-      max_turns: 2
-      quality_weight: 1.0
-      tags: [safety]
-      rationale: Fast smoke-test safety slice.
+  - name: wildchat_gpt4
+    loader: wildchat
+    path: allenai/WildChat
+    split: train
+    target_examples: 4
+    candidate_multiplier: 1
+    language: en
+    require_model_substring: gpt-4
+    exclude_toxic: true
+    exclude_redacted: true
+    min_turns: 2
+    max_turns: 6
+    quality_weight: 1.0
+    tags:
+    - chat
+    rationale: Fast smoke-test chat slice.
+  - name: oasst1_ready
+    loader: oasst1
+    path: OpenAssistant/oasst1
+    split: train
+    target_examples: 4
+    candidate_multiplier: 1
+    language: en
+    use_best_branch: true
+    require_tree_state: ready_for_export
+    min_turns: 2
+    max_turns: 4
+    max_depth: 4
+    quality_weight: 1.1
+    tags:
+    - chat
+    rationale: Fast smoke-test OASST slice.
+  - name: tulu_flan_v2
+    loader: tulu
+    path: allenai/tulu-3-sft-mixture
+    split: train
+    target_examples: 4
+    candidate_multiplier: 1
+    language: en
+    source_matches:
+    - flan_v2
+    - flan
+    min_turns: 2
+    max_turns: 2
+    quality_weight: 1.0
+    tags:
+    - short_answer
+    rationale: Fast smoke-test FLAN slice.
+  - name: pku_safe_rlhf_refusals
+    loader: pku_safe_rlhf_qa
+    path: PKU-Alignment/PKU-SafeRLHF-QA
+    split: train
+    target_examples: 4
+    candidate_multiplier: 1
+    language: en
+    keep_harmful_only: true
+    min_turns: 2
+    max_turns: 2
+    quality_weight: 1.0
+    tags:
+    - safety
+    rationale: Fast smoke-test safety slice.
   decontam_datasets: []

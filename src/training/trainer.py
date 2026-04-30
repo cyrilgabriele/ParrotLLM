@@ -325,8 +325,26 @@ class ParrotLRScheduler(LRScheduler):
 # ── Optimizer ────────────────────────────────────────────────────────────────
 
 def build_optimizer(model: nn.Module, tc: dict) -> torch.optim.AdamW:
-    decay_params = [p for p in model.parameters() if p.dim() >= 2]
-    no_decay_params = [p for p in model.parameters() if p.dim() < 2]
+    decay_params: list[torch.nn.Parameter] = []
+    no_decay_params: list[torch.nn.Parameter] = []
+    seen: set[int] = set()
+    for name, p in model.named_parameters():
+        if not p.requires_grad:
+            continue
+        # Dedupe across tied parameters (lm_head.weight aliases tok_emb.weight).
+        if id(p) in seen:
+            continue
+        seen.add(id(p))
+        # Canonical decay rule (nanoGPT, GPT-2/3, LLaMA HF impl):
+        # - exclude all 1D params (biases, RMSNorm/LayerNorm gains)
+        # - exclude token embeddings (and tied lm_head, by id-dedup above)
+        is_norm = ("ln_" in name) or ("_norm." in name)
+        is_bias = name.endswith(".bias")
+        is_emb = name.endswith("tok_emb.weight")
+        if p.dim() < 2 or is_norm or is_bias or is_emb:
+            no_decay_params.append(p)
+        else:
+            decay_params.append(p)
     groups = [
         {"params": decay_params, "weight_decay": tc["weight_decay"]},
         {"params": no_decay_params, "weight_decay": 0.0},

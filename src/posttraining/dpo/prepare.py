@@ -160,7 +160,7 @@ def run_prepare_dpo(project_config: ProjectConfig, *, seed: int, hf_token: str |
             log.info("Loading source: %s (%s)", source.name, source.path)
             ds = load_dataset(
                 source.path,
-                source.subset,
+                data_dir=source.subset,
                 split=source.split,
                 cache_dir=str(dpo.cache_dir) if dpo.cache_dir else None,
                 token=hf_token,

@@ -28,6 +28,7 @@ def main() -> None:
             "sft-prepare",
             "sft",
             "benchmark",
+            "dpo-prepare",
         ],
     )
     parser.add_argument("--config", type=Path, default=Path("configs/default.yaml"))
@@ -224,6 +225,13 @@ def main() -> None:
         from src.posttraining.prepare import run_prepare_sft
 
         run_prepare_sft(project_config, seed=SEED, hf_token=HF_TOKEN)
+        return
+
+    if args.stage == "dpo-prepare":
+        _require_section(project_config.dpo, "dpo")
+        from src.posttraining.dpo.prepare import run_prepare_dpo
+
+        run_prepare_dpo(project_config, seed=SEED, hf_token=HF_TOKEN)
         return
 
     if args.stage == "sft":

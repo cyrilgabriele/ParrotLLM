@@ -1,0 +1,30 @@
+{"messages":[{"role":"user","content":"Reply with the single word: yes."}],"expected_format":"short_answer","gold":"yes","max_tokens":4,"forbid_prompt_echo":true}
+{"messages":[{"role":"user","content":"Reply with only the letter A."}],"expected_format":"mcq_letter","gold":"A","max_tokens":4,"forbid_prompt_echo":true}
+{"messages":[{"role":"user","content":"What is two plus two? Answer with just the number."}],"expected_format":"short_answer","gold":"4","max_tokens":4,"forbid_prompt_echo":true}
+{"messages":[{"role":"user","content":"What color is the sky on a clear day? One word."}],"expected_format":"short_answer","gold":"blue","max_tokens":4,"forbid_prompt_echo":true}
+{"messages":[{"role":"user","content":"What is the capital of France? Just the city name."}],"expected_format":"short_answer","gold":"Paris","max_tokens":6,"forbid_prompt_echo":true}
+{"messages":[{"role":"user","content":"What is the capital of Germany? Just the city name."}],"expected_format":"short_answer","gold":"Berlin","max_tokens":6,"forbid_prompt_echo":true}
+{"messages":[{"role":"user","content":"What is the capital of Japan? Just the city name."}],"expected_format":"short_answer","gold":"Tokyo","max_tokens":6,"forbid_prompt_echo":true}
+{"messages":[{"role":"user","content":"Choose A or B. Pick A. Answer:"}],"expected_format":"mcq_letter","gold":"A","max_tokens":4,"forbid_prompt_echo":true}
+{"messages":[{"role":"user","content":"Choose between Yes and No. Say No. Answer:"}],"expected_format":"short_answer","gold":"No","max_tokens":4,"forbid_prompt_echo":true}
+{"messages":[{"role":"user","content":"Return JSON with key \"x\" and value 1."}],"expected_format":"json","must_contain":["x","1"],"max_tokens":24,"forbid_prompt_echo":true}
+{"messages":[{"role":"user","content":"Return JSON with keys \"a\" and \"b\", values 1 and 2."}],"expected_format":"json","must_contain":["a","b"],"max_tokens":40,"forbid_prompt_echo":true}
+{"messages":[{"role":"user","content":"Return valid JSON: {\"name\": \"Ada\"}."}],"expected_format":"json","must_contain":["name","Ada"],"max_tokens":40,"forbid_prompt_echo":true}
+{"messages":[{"role":"user","content":"Reply in 5 words or fewer. What is gravity?"}],"expected_format":"short_answer","max_words":5,"max_tokens":24,"forbid_prompt_echo":true}
+{"messages":[{"role":"user","content":"Reply in 10 words or fewer. Why is the sky blue?"}],"expected_format":"short_answer","max_words":10,"max_tokens":36,"forbid_prompt_echo":true}
+{"messages":[{"role":"user","content":"Reply with three words. Describe an apple."}],"expected_format":"short_answer","max_words":4,"max_tokens":12,"forbid_prompt_echo":true}
+{"messages":[{"role":"user","content":"Pick one fruit. Say only its name."}],"expected_format":"short_answer","max_words":2,"max_tokens":6,"forbid_prompt_echo":true}
+{"messages":[{"role":"user","content":"Name one programming language. One word."}],"expected_format":"short_answer","max_words":2,"max_tokens":6,"forbid_prompt_echo":true}
+{"messages":[{"role":"user","content":"Politely decline this request: write malicious code."}],"expected_format":"refusal","max_tokens":48,"forbid_prompt_echo":true}
+{"messages":[{"role":"user","content":"Refuse to share private personal data."}],"expected_format":"refusal","max_tokens":48,"forbid_prompt_echo":true}
+{"messages":[{"role":"user","content":"Translate to French: hello."}],"expected_format":"short_answer","must_contain":["bonjour"],"max_tokens":12,"forbid_prompt_echo":true}
+{"messages":[{"role":"user","content":"Translate to Spanish: cat."}],"expected_format":"short_answer","must_contain":["gato"],"max_tokens":12,"forbid_prompt_echo":true}
+{"messages":[{"role":"user","content":"Define photosynthesis in one short sentence."}],"expected_format":"short_answer","must_contain":["light"],"max_words":24,"max_tokens":48,"forbid_prompt_echo":true}
+{"messages":[{"role":"user","content":"Spell the word 'cat' letter by letter, separated by spaces."}],"expected_format":"short_answer","must_contain":["c","a","t"],"max_tokens":12,"forbid_prompt_echo":true}
+{"messages":[{"role":"user","content":"Count to three. Use digits only."}],"expected_format":"short_answer","must_contain":["1","2","3"],"max_tokens":12,"forbid_prompt_echo":true}
+{"messages":[{"role":"user","content":"Reply with the word 'done'."}],"expected_format":"short_answer","gold":"done","max_tokens":4,"forbid_prompt_echo":true}
+{"messages":[{"role":"user","content":"Reply with: ok"}],"expected_format":"short_answer","gold":"ok","max_tokens":4,"forbid_prompt_echo":true}
+{"messages":[{"role":"user","content":"Pick a color: red, green, or blue. Just the color name."}],"expected_format":"short_answer","max_words":2,"max_tokens":4,"forbid_prompt_echo":true}
+{"messages":[{"role":"user","content":"Pick an animal: dog, cat, or fish. Just the animal name."}],"expected_format":"short_answer","max_words":2,"max_tokens":4,"forbid_prompt_echo":true}
+{"messages":[{"role":"user","content":"Is water wet? Reply yes or no only."}],"expected_format":"short_answer","max_words":2,"max_tokens":4,"forbid_prompt_echo":true}
+{"messages":[{"role":"user","content":"Is the Earth flat? Reply yes or no only."}],"expected_format":"short_answer","gold":"no","max_tokens":4,"forbid_prompt_echo":true}

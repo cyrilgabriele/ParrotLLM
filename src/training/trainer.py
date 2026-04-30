@@ -465,7 +465,10 @@ def get_autocast_context(device: torch.device):
             scaler = torch.amp.GradScaler("cuda")
             return torch.autocast("cuda", dtype=torch.float16), scaler
     if device.type == "mps":
-        return torch.autocast("mps", dtype=torch.float16), None
+        # bfloat16 on MPS (PyTorch 2.6+): full fp32 range, no GradScaler needed.
+        # The previous fp16-without-scaler pairing caused gradient underflow → NaN
+        # within a couple of optimizer steps when fine-tuning from a fp32 base.
+        return torch.autocast("mps", dtype=torch.bfloat16), None
     return torch.autocast(device.type, enabled=False), None
 
 

@@ -645,6 +645,7 @@ def _run_single_sweep(
                     x,
                     targets=y,
                     return_logits=False,
+                    z_loss_coeff=sft_cfg.z_loss_coeff,
                     loss_chunk_rows=loss_chunk_rows,
                 )
         else:

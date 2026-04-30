@@ -90,9 +90,8 @@ def pack_pair(
         system_prompt=system_prompt,
         require_final_assistant=False,
     )
-    prompt_render = render_conversation(prompt_messages)
-    # Append the assistant header so the response starts at a clean position.
-    prompt_text = prompt_render.text + "\n\n### Response:\n"
+    prompt_render = render_conversation(prompt_messages, add_generation_prompt=True)
+    prompt_text = prompt_render.text  # already ends with "\n\n### Response:\n"
 
     chosen_text = prompt_text + pair.chosen.strip()
     rejected_text = prompt_text + pair.rejected.strip()

@@ -48,3 +48,42 @@ def test_pack_pair_writes_shared_prompt_and_distinct_responses() -> None:
     assert packed["chosen_tokens"][:packed["prompt_len"]] == packed["prompt_tokens"]
     assert packed["rejected_tokens"][:packed["prompt_len"]] == packed["prompt_tokens"]
     assert packed["chosen_tokens"] != packed["rejected_tokens"]
+
+
+def test_pack_pair_renders_user_question_into_prompt() -> None:
+    """Regression: prior bug rendered prompts as ONLY '\\n\\n### Response:\\n' (empty content).
+
+    `render_conversation` requires `add_generation_prompt=True` to emit a single-user-message
+    prompt; without it, it returns the empty string. The earlier code appended a manual
+    response header to that empty string, producing a packed record where the user
+    question was missing entirely. DPO would have trained on prompts containing zero
+    question signal — silently.
+    """
+    from transformers import GPT2TokenizerFast
+
+    tok = GPT2TokenizerFast.from_pretrained("gpt2")
+    pair = PreparedPreferencePair(
+        prompt="What is two plus two?",
+        chosen="Four.",
+        rejected="Seven.",
+    )
+    packed = pack_pair(
+        pair,
+        tokenizer=tok,
+        system_prompt="You are ParrotLLM.",
+        max_seq_length=128,
+    )
+    decoded_prompt = tok.decode(packed["prompt_tokens"])
+    # User question text must be present.
+    assert "two plus two" in decoded_prompt, (
+        f"User question was lost during prompt rendering. "
+        f"decoded prompt = {decoded_prompt!r}"
+    )
+    # System prompt must be present (Alpaca-merge style).
+    assert "You are ParrotLLM" in decoded_prompt, (
+        f"System prompt was lost. decoded prompt = {decoded_prompt!r}"
+    )
+    # Prompt should still end with the response header so the model knows where to start.
+    assert decoded_prompt.rstrip().endswith("### Response:"), (
+        f"Prompt should end with the assistant header. decoded prompt = {decoded_prompt!r}"
+    )

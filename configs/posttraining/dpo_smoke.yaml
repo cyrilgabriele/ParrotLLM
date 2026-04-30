@@ -22,7 +22,7 @@ logging:
 
 dpo:
   device: auto
-  reference_checkpoint: runs/posttraining/sft/run_LATEST/checkpoints/best_loss_REPLACE.pt
+  reference_checkpoint: runs/posttraining/sft_alpaca/run_20260430_191324_sft_lr_2e-05/checkpoints/best_loss_2p7847_epoch_0000_step_0000200.pt
   cache_dir: data/posttraining/hf_cache
   raw_dir: data/posttraining/dpo_raw
   prepared_dir: data/posttraining/dpo_pairs

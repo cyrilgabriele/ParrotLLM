@@ -64,7 +64,6 @@ def build_sft_collator(pad_token_id: int):
         x = torch.full((batch_size, seq_len), pad_token_id, dtype=torch.long)
         y = torch.zeros((batch_size, seq_len), dtype=torch.long)
         loss_mask = torch.zeros((batch_size, seq_len), dtype=torch.float32)
-        quality = torch.zeros((batch_size,), dtype=torch.float32)
         for row_idx, item in enumerate(batch):
             tokens = item["tokens"]
             mask = item["loss_mask"]
@@ -72,10 +71,37 @@ def build_sft_collator(pad_token_id: int):
             x[row_idx, :n] = torch.tensor(tokens[:-1], dtype=torch.long)
             y[row_idx, :n] = torch.tensor(tokens[1:], dtype=torch.long)
             loss_mask[row_idx, :n] = torch.tensor(mask[1:], dtype=torch.float32)
-            quality[row_idx] = float(item.get("quality_score", 1.0))
-        return {"x": x, "y": y, "loss_mask": loss_mask, "quality": quality}
+        return {"x": x, "y": y, "loss_mask": loss_mask}
 
     return _collate
+
+
+def _build_quality_sampler(
+    dataset: PackedConversationDataset,
+    *,
+    seed: int,
+    num_samples: int | None = None,
+) -> torch.utils.data.WeightedRandomSampler:
+    """Sample packed records proportional to their `quality_score` field.
+
+    Records without quality_score default to weight 1.0. Quality routing
+    happens at the data-mixing level, not via per-example loss weighting,
+    matching canonical SFT practice (LIMA, Tulu 2/3, Alpaca).
+    """
+    weights = torch.tensor(
+        [float(rec.get("quality_score", 1.0)) for rec in dataset.records],
+        dtype=torch.double,
+    )
+    weights = weights.clamp_min(1e-6)
+    n = num_samples if num_samples is not None else len(dataset)
+    generator = torch.Generator()
+    generator.manual_seed(int(seed))
+    return torch.utils.data.WeightedRandomSampler(
+        weights=weights,
+        num_samples=n,
+        replacement=True,
+        generator=generator,
+    )
 
 
 @dataclass(slots=True)
@@ -442,13 +468,15 @@ def _run_single_sweep(
     dev_ds = PackedConversationDataset(dev_dataset_path)
     collate_fn = build_sft_collator(pad_token_id)
 
-    generator = torch.Generator()
-    generator.manual_seed(int(sft_cfg.seed))
+    sampler = _build_quality_sampler(
+        train_ds,
+        seed=int(sft_cfg.seed),
+        num_samples=len(train_ds),
+    )
     train_loader = DataLoader(
         train_ds,
         batch_size=train_batch_size,
-        shuffle=True,
-        generator=generator,
+        sampler=sampler,
         num_workers=0,
         collate_fn=collate_fn,
     )

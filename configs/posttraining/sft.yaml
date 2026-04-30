@@ -50,7 +50,8 @@ sft:
   eval_batch_size: 8
   gradient_accumulation_steps: 4
   learning_rates:
-    - 1.0e-5
+    - 5.0e-5
+    - 1.0e-4
   min_lr_ratio: 0.1
   warmup_ratio: 0.03
   weight_decay: 0.01
@@ -58,11 +59,11 @@ sft:
   beta2: 0.95
   grad_clip: 1.0
   z_loss_coeff: 0.0
-  replay_ratio: 0.3
+  replay_ratio: 0.05
   replay_train_bin: data/processed/train.bin
   replay_val_bin: data/processed/val.bin
   num_epochs: 3.0
-  polish_epochs: 0.0
+  polish_epochs: 0.5
   polish_subset_size: 4000
   save_every: 10
   eval_every: 100
@@ -71,9 +72,9 @@ sft:
   log_every: 1
   seed: 42
   compile: false
-  format_score_weight: 0.1
+  format_score_weight: 0.3
   forgetting_penalty_weight: 0.05
-  prompt_suite_path: configs/posttraining/dev_prompt_suite.jsonl
+  prompt_suite_path: configs/posttraining/dev_prompt_suite_ifeval_lite.jsonl
   sources:
     - name: oasst1_ready
       loader: oasst1

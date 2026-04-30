@@ -778,12 +778,16 @@ def estimate_loss(model: nn.Module, dataset: torch.utils.data.Dataset,
         drop_last=False,
         persistent_workers=num_workers > 0,
     )
+    # On MPS the chunked CE backward path is buggy (see _use_chunked_ce_for_device
+    # in src/posttraining/trainer.py). Forward-only eval is safe even on MPS,
+    # but for consistency we still use the non-chunked path on MPS.
+    use_chunked_ce = device.type != "mps"
     for i, (x, y) in enumerate(loader):
         if i >= max_batches:
             break
         x, y = x.to(device), y.to(device)
         with autocast_ctx:
-            _, loss = eval_model(x, targets=y, return_logits=False)
+            _, loss = eval_model(x, targets=y, return_logits=not use_chunked_ce)
         n_toks = y.numel()
         total_loss += loss.item() * n_toks
         total_tokens += n_toks
@@ -1321,10 +1325,12 @@ def run_train(
 
                     x, y = x.to(device), y.to(device)
                     with autocast_ctx:
+                        # MPS: bypass the chunked CE backward bug (commit 2820d29);
+                        # use the non-chunked path which is correct on MPS.
                         _, loss = model(
                             x,
                             targets=y,
-                            return_logits=False,
+                            return_logits=(device.type == "mps"),
                             z_loss_coeff=z_loss_coeff,
                         )
                         loss = loss / micro_batches_target

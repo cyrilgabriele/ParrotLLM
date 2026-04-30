@@ -148,6 +148,19 @@ def _loss_chunk_rows_for_device(device: torch.device) -> int:
     return 2048
 
 
+def _use_chunked_ce_for_device(device: torch.device) -> bool:
+    """Whether to use the model's chunked CE path (return_logits=False).
+
+    On MPS, the chunked CE backward (introduced by commit 2820d29 "fix the OOM")
+    produces wildly inflated gradient norms intermittently — same input has been
+    observed at ~normal up to ~10× too large, sometimes much worse. The
+    non-chunked path materializes full logits but its backward is numerically
+    correct on MPS (matches CPU within fp32 noise). Memory cost at SFT scale
+    (B=1, T=1024, vocab≈50k) is ~200 MB transient — fine on Apple Silicon.
+    """
+    return device.type != "mps"
+
+
 def _resolve_runtime_batching(
     *,
     device: torch.device,
@@ -158,20 +171,20 @@ def _resolve_runtime_batching(
     if device.type != "mps":
         return train_batch_size, eval_batch_size, gradient_accumulation_steps
 
-    # On Apple MPS, memory drift is a real issue. Batch 1 is the most stable.
-    # We compensate for the small batch size by increasing gradient accumulation.
-    safe_train_batch_size = min(train_batch_size, 1)
-    safe_eval_batch_size = min(eval_batch_size, 2)
-
-    if safe_train_batch_size == train_batch_size:
-        return train_batch_size, safe_eval_batch_size, gradient_accumulation_steps
-
-    effective_sequences = train_batch_size * gradient_accumulation_steps
-    safe_gradient_accumulation_steps = max(
-        gradient_accumulation_steps,
-        math.ceil(effective_sequences / safe_train_batch_size),
-    )
-    return safe_train_batch_size, safe_eval_batch_size, safe_gradient_accumulation_steps
+    # MPS has TWO related autograd bugs that bite SFT:
+    # (1) Chunked CE backward (commit 2820d29) — gradient norms intermittently
+    #     blow up. Mitigated by `_use_chunked_ce_for_device` returning False on MPS.
+    # (2) Gradient ACCUMULATION across multiple `.backward()` calls — `p.grad +=`
+    #     is non-deterministic on MPS, occasionally producing grad norms 10²–10⁵×
+    #     correct. The pretrain run from 2026-03-08 worked because it used
+    #     gradient_accumulation_steps=1; the SFT recipe uses 4 (or 32 after the
+    #     MPS-batch=1 override), which fires the bug at step 2 every time.
+    # Workaround: force gradient_accumulation_steps=1 on MPS. This means the
+    # effective batch size is the configured `train_batch_size` (no compensation
+    # via accumulation). Cap batch at 8 to keep transient logits memory < 2 GB.
+    safe_train_batch_size = min(train_batch_size, 8)
+    safe_eval_batch_size = min(eval_batch_size, 8)
+    return safe_train_batch_size, safe_eval_batch_size, 1
 
 
 def _make_replay_loader(
@@ -230,7 +243,7 @@ def _evaluate_sft_loss(
                 x,
                 targets=y,
                 loss_mask=loss_mask,
-                return_logits=False,
+                return_logits=not _use_chunked_ce_for_device(device),
                 z_loss_coeff=z_loss_coeff,
                 loss_chunk_rows=_loss_chunk_rows_for_device(device),
             )
@@ -628,6 +641,7 @@ def _run_single_sweep(
         dynamic_ncols=True,
         disable=not sys.stderr.isatty(),
     )
+    use_chunked_ce = _use_chunked_ce_for_device(device)
     while micro_step < micro_batches:
         try:
             batch = next(train_iter)
@@ -644,7 +658,7 @@ def _run_single_sweep(
                 _, loss = model(
                     x,
                     targets=y,
-                    return_logits=False,
+                    return_logits=not use_chunked_ce,
                     z_loss_coeff=sft_cfg.z_loss_coeff,
                     loss_chunk_rows=loss_chunk_rows,
                 )
@@ -657,7 +671,7 @@ def _run_single_sweep(
                     x,
                     y,
                     loss_mask=loss_mask,
-                    return_logits=False,
+                    return_logits=not use_chunked_ce,
                     z_loss_coeff=sft_cfg.z_loss_coeff,
                     loss_chunk_rows=loss_chunk_rows,
                 )

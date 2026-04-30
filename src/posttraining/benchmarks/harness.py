@@ -43,25 +43,32 @@ class BenchmarkRunSpec:
 def _invoke_leaderboard(cmd: list[str], cwd: Path) -> dict[str, float]:
     """Run the leaderboard CLI and parse its overview.json results.
 
-    Returns a dict mapping benchmark name -> accuracy in [0, 100].
+    The leaderboard exits with code 1 whenever any benchmark scores at-or-below
+    random chance — at low --limit tiers this is essentially guaranteed even for
+    a working model. So we use the existence of overview.json (not the return
+    code) as the success signal.
+
+    Returns a dict mapping benchmark name -> accuracy_pct in [0, 100].
     """
-    completed = subprocess.run(cmd, cwd=cwd, check=True, capture_output=True, text=True)
+    completed = subprocess.run(cmd, cwd=cwd, check=False, capture_output=True, text=True)
     # The leaderboard writes to Results/<submission>/<checkpoint_stem>/...;
     # locate the most recent overview.json regardless of the exact subdirectory.
     results_dir = cwd / "Results"
     candidates = sorted(results_dir.rglob("*overview.json"), key=lambda p: p.stat().st_mtime)
     if not candidates:
         raise RuntimeError(
-            f"Leaderboard ran (rc=0) but no overview.json found under {results_dir}.\n"
+            f"Leaderboard exited rc={completed.returncode} and produced no overview.json under {results_dir}.\n"
             f"stdout:\n{completed.stdout}\nstderr:\n{completed.stderr}"
         )
     overview = json.loads(candidates[-1].read_text())
-    # Normalize to lowercase benchmark names. Filter to numeric scores only —
-    # overview.json may contain metadata fields besides per-benchmark accuracy.
+    # Per-benchmark scores live under overview["benchmarks"] as a list of dicts;
+    # top-level numeric fields are config metadata (seed, limit, timeout_s, ...).
     out: dict[str, float] = {}
-    for k, v in overview.items():
-        if isinstance(v, (int, float)):
-            out[str(k).lower()] = float(v)
+    for entry in overview.get("benchmarks", []):
+        name = str(entry.get("benchmark", "")).lower()
+        acc = entry.get("accuracy_pct")
+        if name and isinstance(acc, (int, float)):
+            out[name] = float(acc)
     return out
 
 

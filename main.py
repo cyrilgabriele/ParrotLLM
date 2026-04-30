@@ -193,7 +193,7 @@ def main() -> None:
         ).strip()
 
         spec = BenchmarkRunSpec(
-            checkpoint=Path(checkpoint_path),
+            checkpoint=Path(checkpoint_path).resolve(),
             tier=args.tier,
             submission_name=args.submission_name,
             leaderboard_repo=leaderboard_repo,

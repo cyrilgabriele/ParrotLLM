@@ -127,14 +127,27 @@ def render_conversation(
     messages: Sequence[Mapping[str, str]],
     *,
     add_generation_prompt: bool = False,
+    template_format: str = "alpaca",
 ) -> RenderedConversation:
+    """Render a chat into a single text + assistant_spans for loss masking.
+
+    template_format:
+      - "alpaca" (default): standard ### Instruction:/### Response: wrappers,
+        suitable for chat-style SFT.
+      - "raw": no role headers, no separators between turns. Designed for
+        benchmark-format records where prompt and completion are *already*
+        in the surface form the eval expects (e.g. user="Question: ...\\nAnswer:",
+        assistant=" Paris" → rendered as "Question: ...\\nAnswer: Paris"). Lets
+        SFT shift the model toward MCQ/QA likelihoods without imposing a chat
+        wrapper that would break lm-eval-harness-style scoring.
+    """
     text_parts: list[str] = []
     assistant_spans: list[tuple[int, int]] = []
     cursor = 0
     rendered_messages: list[dict[str, str]] = []
     pending_user: dict[str, str] | None = None
 
-    def append_block(user_content: str, assistant_content: str | None) -> None:
+    def append_block_alpaca(user_content: str, assistant_content: str | None) -> None:
         nonlocal cursor
         if text_parts:
             text_parts.append("\n\n")
@@ -154,6 +167,38 @@ def render_conversation(
             text_parts.append(answer_text)
             cursor += len(answer_text)
             assistant_spans.append((start, cursor))
+
+    def append_block_raw(user_content: str, assistant_content: str | None) -> None:
+        """Concatenate user + assistant. Insert a single space between them
+        when both are non-empty (lm-eval-harness convention: prompt ends without
+        whitespace, completion is scored with a leading space — e.g. OpenBookQA's
+        "Question: ...\\nAnswer:" + " Paris"). Empty user (e.g. WinoGrande full-
+        sentence scoring) emits no leading space."""
+        nonlocal cursor
+        # Multi-turn raw: single-newline turn separator
+        if text_parts:
+            text_parts.append("\n")
+            cursor += 1
+        user_text = str(user_content)
+        if user_text:
+            text_parts.append(user_text)
+            cursor += len(user_text)
+        if assistant_content is not None:
+            answer_text = str(assistant_content)
+            if user_text and answer_text:
+                text_parts.append(" ")
+                cursor += 1
+            start = cursor
+            text_parts.append(answer_text)
+            cursor += len(answer_text)
+            assistant_spans.append((start, cursor))
+
+    if template_format == "raw":
+        append_block = append_block_raw
+    elif template_format == "alpaca":
+        append_block = append_block_alpaca
+    else:
+        raise ValueError(f"Unsupported template_format: {template_format!r}")
 
     for raw in messages:
         role = str(raw["role"])
@@ -186,13 +231,18 @@ def tokenize_conversation(
     system_prompt: str | None = None,
     add_generation_prompt: bool = False,
     append_eos: bool = False,
+    template_format: str = "alpaca",
 ) -> TokenizedConversation:
     normalized = normalize_messages(
         messages,
         system_prompt=system_prompt,
         require_final_assistant=not add_generation_prompt,
     )
-    rendered = render_conversation(normalized, add_generation_prompt=add_generation_prompt)
+    rendered = render_conversation(
+        normalized,
+        add_generation_prompt=add_generation_prompt,
+        template_format=template_format,
+    )
     encoded = tokenizer(
         rendered.text,
         add_special_tokens=False,
@@ -231,6 +281,7 @@ def trim_messages_to_token_limit(
     system_prompt: str | None,
     max_tokens: int,
     append_eos: bool = True,
+    template_format: str = "alpaca",
 ) -> TokenizedConversation | None:
     working = normalize_messages(messages, system_prompt=system_prompt)
     while working:
@@ -239,6 +290,7 @@ def trim_messages_to_token_limit(
             working,
             system_prompt=None,
             append_eos=append_eos,
+            template_format=template_format,
         )
         if len(tokenized.tokens) <= max_tokens:
             return tokenized
@@ -256,13 +308,18 @@ def build_generation_prompt(
     messages: Sequence[Mapping[str, str]],
     *,
     system_prompt: str | None = None,
+    template_format: str = "alpaca",
 ) -> str:
     normalized = normalize_messages(
         messages,
         system_prompt=system_prompt,
         require_final_assistant=False,
     )
-    return render_conversation(normalized, add_generation_prompt=True).text
+    return render_conversation(
+        normalized,
+        add_generation_prompt=True,
+        template_format=template_format,
+    ).text
 
 
 def strip_generated_assistant_text(text: str) -> str:

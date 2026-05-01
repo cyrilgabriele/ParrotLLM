@@ -67,6 +67,7 @@ class SFTConfig(BaseModel):
     runs_dir: Path = Field(default=Path("runs/posttraining/sft"))
     checkpoint_dir: str = Field(default="checkpoints")
     system_prompt: str = Field(default="You are ParrotLLM, a helpful assistant.")
+    template_format: Literal["alpaca", "raw"] = Field(default="alpaca")
     max_seq_length: int = Field(default=1024, ge=32)
     train_batch_size: int = Field(default=8, ge=1)
     eval_batch_size: int = Field(default=8, ge=1)

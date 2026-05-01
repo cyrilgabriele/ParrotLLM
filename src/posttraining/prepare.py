@@ -638,6 +638,7 @@ def _prepare_message_example(
     max_seq_length: int,
     lang_filter: OptionalLanguageFilter,
     metadata: dict[str, Any],
+    template_format: str = "alpaca",
 ) -> PreparedExample | None:
     messages = _sanitize_messages(messages)
     if not messages:
@@ -659,6 +660,7 @@ def _prepare_message_example(
         system_prompt=system_prompt,
         max_tokens=max_seq_length + 1,
         append_eos=True,
+        template_format=template_format,
     )
     if tokenized is None:
         return None
@@ -696,6 +698,7 @@ def _collect_candidates_for_source(
     snapshot_path: Path | None = None,
     cache_dir: Path | None = None,
     hf_token: str | None = None,
+    template_format: str = "alpaca",
 ) -> list[PreparedExample]:
     target_candidates = source_cfg.target_examples * source_cfg.candidate_multiplier
     prepared: list[PreparedExample] = []
@@ -731,6 +734,7 @@ def _collect_candidates_for_source(
             max_seq_length=max_seq_length,
             lang_filter=lang_filter,
             metadata=metadata,
+            template_format=template_format,
         )
         if item is None:
             continue
@@ -1017,6 +1021,7 @@ def run_prepare_sft(
             max_seq_length=sft_cfg.max_seq_length,
             lang_filter=lang_filter,
             snapshot_path=snapshot_path,
+            template_format=sft_cfg.template_format,
         )
         source_candidates[source_cfg.name] = candidates
         log.info("Collected %d candidates for %s", len(candidates), source_cfg.name)

@@ -1,0 +1,249 @@
+model:
+  vocab_size: 50258
+  pad_token_id: 50257
+  bos_token_id: 50256
+  eos_token_id: 50256
+  d_model: 384
+  n_layers: 14
+  n_heads: 6
+  d_ff: 768
+  context_length: 1024
+  bias: false
+  dropout: 0.0151
+  rope_theta: 10000.0
+  gradient_checkpointing: false
+
+logging:
+  console_level: INFO
+  file_level: DEBUG
+  components:
+    posttraining: INFO
+    training: INFO
+
+inference:
+  device: auto
+  max_tokens: 128
+  temperature: 0.2
+  top_k: 50
+  top_p: 0.9
+
+chat:
+  device: auto
+  max_tokens: 256
+  temperature: 0.7
+  top_k: 50
+  top_p: 0.9
+  system_prompt: "You are ParrotLLM, a helpful assistant."
+  checkpoint_dir: runs
+
+sft:
+  device: auto
+  base_checkpoint: runs/posttraining/base_import/run_20260410_044337/checkpoints/best_loss_3p2650_epoch_0000_step_0095500.pt
+  cache_dir: data/posttraining/hf_cache
+  raw_dir: data/posttraining/raw
+  prepared_dir: data/posttraining/sft_mix_smoke
+  runs_dir: runs/posttraining/sft
+  checkpoint_dir: checkpoints
+  system_prompt: "You are ParrotLLM, a helpful assistant."
+  max_seq_length: 1024
+  train_batch_size: 8
+  eval_batch_size: 8
+  gradient_accumulation_steps: 4
+  learning_rates:
+    - 5.0e-5
+    - 1.0e-4
+  min_lr_ratio: 0.1
+  warmup_ratio: 0.03
+  weight_decay: 0.01
+  beta1: 0.9
+  beta2: 0.95
+  grad_clip: 1.0
+  z_loss_coeff: 0.0
+  replay_ratio: 0.05
+  replay_train_bin: data/processed/train.bin
+  replay_val_bin: data/processed/val.bin
+  num_epochs: 3.0
+  polish_epochs: 0.5
+  polish_subset_size: 4000
+  save_every: 10
+  eval_every: 100
+  keep_last_checkpoints: 3
+  keep_best_checkpoints: 2
+  log_every: 1
+  seed: 42
+  compile: false
+  format_score_weight: 0.3
+  forgetting_penalty_weight: 0.05
+  prompt_suite_path: configs/posttraining/dev_prompt_suite_ifeval_lite.jsonl
+  sources:
+    # MC sources
+    - name: arc_easy
+      loader: ai2_arc
+      path: allenai/ai2_arc
+      subset: ARC-Easy
+      split: train
+      target_examples: 20
+      candidate_multiplier: 2
+      language: en
+      quality_weight: 1.0
+      tags: [mc, science, letter_answer]
+      rationale: ARC-Easy science MC; teaches single-letter answers.
+    - name: arc_challenge
+      loader: ai2_arc
+      path: allenai/ai2_arc
+      subset: ARC-Challenge
+      split: train
+      target_examples: 20
+      candidate_multiplier: 2
+      language: en
+      quality_weight: 1.0
+      tags: [mc, science, letter_answer]
+      rationale: ARC-Challenge science MC; harder reasoning.
+    - name: sciq
+      loader: sciq
+      path: allenai/sciq
+      split: train
+      target_examples: 20
+      candidate_multiplier: 2
+      language: en
+      quality_weight: 1.0
+      tags: [mc, science, letter_answer]
+      rationale: SciQ 4-option science MC.
+    - name: commonsense_qa
+      loader: commonsense_qa
+      path: tau/commonsense_qa
+      split: train
+      target_examples: 20
+      candidate_multiplier: 2
+      language: en
+      quality_weight: 1.0
+      tags: [mc, common_sense, letter_answer]
+      rationale: 5-option common-sense MC.
+    - name: race_middle
+      loader: race
+      path: ehovy/race
+      subset: middle
+      split: train
+      target_examples: 20
+      candidate_multiplier: 2
+      language: en
+      quality_weight: 1.0
+      tags: [mc, reading, letter_answer]
+      rationale: Reading-comprehension MC with longer contexts.
+    - name: mmlu_aux
+      loader: mmlu
+      path: cais/mmlu
+      subset: auxiliary_train
+      split: train
+      target_examples: 20
+      candidate_multiplier: 2
+      language: en
+      quality_weight: 1.0
+      tags: [mc, multi_domain, letter_answer]
+      rationale: Broad-domain MC; closest analog to hidden benchmarks.
+    - name: boolq_letter
+      loader: boolq
+      path: google/boolq
+      split: train
+      target_examples: 20
+      candidate_multiplier: 2
+      language: en
+      quality_weight: 1.0
+      tags: [mc, binary, letter_answer]
+      rationale: BoolQ reformatted as A/B for binary-MC signal.
+
+    # Chat / instruction sources
+    - name: oasst1_ready
+      loader: oasst1
+      path: OpenAssistant/oasst1
+      split: train
+      target_examples: 20
+      candidate_multiplier: 2
+      language: en
+      use_best_branch: true
+      require_tree_state: ready_for_export
+      min_turns: 2
+      max_turns: 4
+      max_depth: 4
+      quality_weight: 1.1
+      tags: [chat, human_reviewed]
+      rationale: Human-reviewed dialogue trees that teach cleaner assistant behavior.
+    - name: tulu_flan_v2
+      loader: tulu
+      path: allenai/tulu-3-sft-mixture
+      split: train
+      target_examples: 20
+      candidate_multiplier: 2
+      language: en
+      source_matches: [flan_v2, flan]
+      min_turns: 2
+      max_turns: 2
+      quality_weight: 1.0
+      tags: [short_answer, classification]
+      rationale: Protects exact-answer and benchmark-shaped task behavior.
+    - name: wildchat_filtered
+      loader: wildchat
+      path: allenai/WildChat
+      split: train
+      target_examples: 20
+      candidate_multiplier: 2
+      language: en
+      require_model_substring: gpt-4
+      quality_weight: 1.0
+      tags: [chat, realistic]
+      rationale: Realistic GPT-4 conversations; capped to keep chat from dominating.
+    - name: alpaca_cleaned
+      loader: alpaca
+      path: yahma/alpaca-cleaned
+      split: train
+      target_examples: 20
+      candidate_multiplier: 2
+      language: en
+      quality_weight: 1.0
+      tags: [chat, instruction_following]
+      rationale: General instruction-following.
+
+    # Safety / refusal
+    - name: pku_saferlhf_refusals
+      loader: pku_safe_rlhf_qa
+      path: PKU-Alignment/PKU-SafeRLHF-QA
+      split: train
+      target_examples: 20
+      candidate_multiplier: 2
+      language: en
+      quality_weight: 0.9
+      tags: [safety, refusal]
+      rationale: Concise refusals for unsafe requests.
+  decontam_datasets:
+    - name: wikitext103_test
+      loader: local_disk
+      path: data/wikitext-103-test
+      field: text
+      split: test
+    - name: nlp26_owt_eval
+      loader: local_disk
+      path: data/owt-eval/NLP26/NLP26_OWT_eval/test
+      field: text
+      split: test
+    - name: hellaswag
+      loader: huggingface
+      path: Rowan/hellaswag
+      field: ctx
+      split: validation
+    - name: winogrande
+      loader: huggingface
+      path: allenai/winogrande
+      subset: winogrande_xl
+      field: sentence
+      split: validation
+    - name: openbookqa
+      loader: huggingface
+      path: allenai/openbookqa
+      subset: main
+      field: question_stem
+      split: validation
+    - name: lambada
+      loader: huggingface
+      path: EleutherAI/lambada_openai
+      field: text
+      split: test

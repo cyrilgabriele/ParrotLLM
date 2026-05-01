@@ -21,6 +21,11 @@ class SFTSourceConfig(BaseModel):
         "wildguardmix",
         "pku_safe_rlhf_qa",
         "local_jsonl",
+        "sciq",
+        "commonsense_qa",
+        "race",
+        "mmlu",
+        "boolq",
     ] = Field(...)
     path: str = Field(...)
     subset: str | None = Field(default=None)

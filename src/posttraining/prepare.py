@@ -401,6 +401,135 @@ def _normalize_ai2_arc_record(record: Mapping[str, Any], source_cfg: SFTSourceCo
     return messages, metadata
 
 
+def _format_mc_prompt(question: str, choices: list[str]) -> str:
+    """Format an MC prompt in the leaderboard's expected shape.
+
+    Output:
+      <question>
+      A) <choices[0]>
+      B) <choices[1]>
+      ...
+      Answer:
+    """
+    labels = ["A", "B", "C", "D", "E"]
+    options = "\n".join(f"{labels[i]}) {choices[i]}" for i in range(len(choices)))
+    return f"{question.strip()}\n{options}\nAnswer:"
+
+
+def _build_mc_messages(prompt_text: str, answer_letter: str) -> list[dict[str, str]]:
+    return [
+        {"role": "user", "content": prompt_text},
+        {"role": "assistant", "content": answer_letter},
+    ]
+
+
+def _normalize_sciq_record(record: Mapping[str, Any], source_cfg: SFTSourceConfig) -> tuple[list[dict[str, str]], dict[str, Any]] | None:
+    question = str(record.get("question") or "").strip()
+    correct = str(record.get("correct_answer") or "").strip()
+    distractors = [str(record.get(k) or "").strip() for k in ("distractor1", "distractor2", "distractor3")]
+    if not question or not correct or any(not d for d in distractors):
+        return None
+    seed = int(hashlib.sha1(question.encode("utf-8")).hexdigest(), 16) % (2**31)
+    import random
+
+    rng = random.Random(seed)
+    options = [correct, *distractors]
+    rng.shuffle(options)
+    answer_index = options.index(correct)
+    prompt = _format_mc_prompt(question, options)
+    answer_letter = "ABCD"[answer_index]
+    return _build_mc_messages(prompt, answer_letter), {
+        "record_id": record.get("id"),
+        "rationale": source_cfg.rationale,
+    }
+
+
+def _normalize_commonsense_qa_record(record: Mapping[str, Any], source_cfg: SFTSourceConfig) -> tuple[list[dict[str, str]], dict[str, Any]] | None:
+    question = str(record.get("question") or "").strip()
+    raw_choices = record.get("choices")
+    answer_key = str(record.get("answerKey") or "").strip().upper()
+    if not question or not isinstance(raw_choices, Mapping) or not answer_key:
+        return None
+    labels = raw_choices.get("label") or []
+    texts = raw_choices.get("text") or []
+    if not isinstance(texts, list) or len(texts) != 5 or not isinstance(labels, list) or len(labels) != 5:
+        return None
+    cleaned = [str(t).strip() for t in texts]
+    if any(not c for c in cleaned):
+        return None
+    try:
+        answer_index = [str(l).strip().upper() for l in labels].index(answer_key)
+    except ValueError:
+        return None
+    prompt = _format_mc_prompt(question, cleaned)
+    return _build_mc_messages(prompt, "ABCDE"[answer_index]), {
+        "record_id": record.get("id"),
+        "rationale": source_cfg.rationale,
+    }
+
+
+def _normalize_race_record(record: Mapping[str, Any], source_cfg: SFTSourceConfig) -> tuple[list[dict[str, str]], dict[str, Any]] | None:
+    article = str(record.get("article") or "").strip()
+    question = str(record.get("question") or "").strip()
+    options = record.get("options") or []
+    answer = str(record.get("answer") or "").strip().upper()
+    if not article or not question or not isinstance(options, list) or len(options) != 4 or not answer:
+        return None
+    cleaned = [str(o).strip() for o in options]
+    if any(not c for c in cleaned) or answer not in "ABCD":
+        return None
+    answer_index = "ABCD".index(answer)
+    prompt_text = f"Passage: {article}\n\nQuestion: {question}"
+    prompt = _format_mc_prompt(prompt_text, cleaned)
+    return _build_mc_messages(prompt, "ABCD"[answer_index]), {
+        "record_id": record.get("example_id") or record.get("id"),
+        "rationale": source_cfg.rationale,
+    }
+
+
+def _normalize_mmlu_record(record: Mapping[str, Any], source_cfg: SFTSourceConfig) -> tuple[list[dict[str, str]], dict[str, Any]] | None:
+    # `cais/mmlu` config `auxiliary_train` wraps each row as {"train": {...}}.
+    # Other splits/configs are flat. Unwrap if needed.
+    inner = record.get("train")
+    if isinstance(inner, Mapping):
+        record = inner
+    question = str(record.get("question") or "").strip()
+    choices = record.get("choices") or []
+    answer = record.get("answer")
+    if not question or not isinstance(choices, list) or len(choices) != 4 or answer is None:
+        return None
+    cleaned = [str(c).strip() for c in choices]
+    if any(not c for c in cleaned):
+        return None
+    try:
+        answer_index = int(answer)
+    except (TypeError, ValueError):
+        return None
+    if not (0 <= answer_index < 4):
+        return None
+    prompt = _format_mc_prompt(question, cleaned)
+    return _build_mc_messages(prompt, "ABCD"[answer_index]), {
+        "record_id": record.get("id"),
+        "subject": record.get("subject"),
+        "rationale": source_cfg.rationale,
+    }
+
+
+def _normalize_boolq_record(record: Mapping[str, Any], source_cfg: SFTSourceConfig) -> tuple[list[dict[str, str]], dict[str, Any]] | None:
+    question = str(record.get("question") or "").strip()
+    passage = str(record.get("passage") or "").strip()
+    answer = record.get("answer")
+    if not question or not passage or answer is None:
+        return None
+    answer_letter = "A" if bool(answer) else "B"
+    prompt_text = f"Passage: {passage}\n\nQuestion: {question}"
+    prompt = _format_mc_prompt(prompt_text, ["Yes", "No"])
+    return _build_mc_messages(prompt, answer_letter), {
+        "record_id": record.get("id") or record.get("idx"),
+        "rationale": source_cfg.rationale,
+    }
+
+
 def _normalize_wildchat_record(record: Mapping[str, Any], source_cfg: SFTSourceConfig) -> tuple[list[dict[str, str]], dict[str, Any]] | None:
     model_name = str(record.get("model") or record.get("model_name") or "").lower()
     if source_cfg.require_model_substring and source_cfg.require_model_substring.lower() not in model_name:
@@ -626,6 +755,16 @@ def _normalize_source_record(
         return _normalize_wildguardmix_record(record, source_cfg)
     if source_cfg.loader == "pku_safe_rlhf_qa":
         return _normalize_pku_safe_rlhf_qa_record(record, source_cfg)
+    if source_cfg.loader == "sciq":
+        return _normalize_sciq_record(record, source_cfg)
+    if source_cfg.loader == "commonsense_qa":
+        return _normalize_commonsense_qa_record(record, source_cfg)
+    if source_cfg.loader == "race":
+        return _normalize_race_record(record, source_cfg)
+    if source_cfg.loader == "mmlu":
+        return _normalize_mmlu_record(record, source_cfg)
+    if source_cfg.loader == "boolq":
+        return _normalize_boolq_record(record, source_cfg)
     raise ValueError(f"Unsupported loader for record-level normalization: {source_cfg.loader}")
 
 

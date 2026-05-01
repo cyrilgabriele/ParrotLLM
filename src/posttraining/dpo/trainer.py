@@ -322,6 +322,18 @@ def run_dpo(project_config: ProjectConfig, *, device: torch.device, checkpoint: 
     # get_autocast_context returns (ctx, scaler); DPO doesn't use a GradScaler.
     autocast_ctx, _scaler_unused = get_autocast_context(device)
 
+    # MPS allocator caches blocks aggressively and leaks slowly across long DPO
+    # runs (4 forwards/step, 2 of which retain backward state). Periodically
+    # returning the cache to the OS is the cheapest mitigation; without it the
+    # 4688-step letter DPO run OOM'd at step 674. Frequency tuned empirically:
+    # every 25 steps + after every eval keeps walltime overhead under ~3% while
+    # bounding the cache below the per-process limit.
+    def _empty_device_cache() -> None:
+        if device.type == "mps":
+            torch.mps.empty_cache()
+        elif device.type == "cuda":
+            torch.cuda.empty_cache()
+
     step = 0
     pbar = tqdm(total=total_steps, desc="dpo")
     done = False
@@ -357,6 +369,10 @@ def run_dpo(project_config: ProjectConfig, *, device: torch.device, checkpoint: 
                     **metrics,
                 )
 
+            # Periodic cache release — bounds MPS allocator growth.
+            if step % 25 == 0:
+                _empty_device_cache()
+
             if step % dpo_cfg.eval_every == 0:
                 acc = _evaluate_chosen_token_accuracy(
                     policy, reference, dev_loader, device=device,
@@ -376,6 +392,9 @@ def run_dpo(project_config: ProjectConfig, *, device: torch.device, checkpoint: 
                     None,  # no GradScaler in DPO
                     val_loss=1.0 - acc,
                 )
+                # Eval traverses the full dev set (2 forwards/example) and is a
+                # known leak hotspot — drop the cache once the eval is logged.
+                _empty_device_cache()
 
             if step % dpo_cfg.save_every == 0:
                 checkpointer.save_last(

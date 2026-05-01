@@ -13,6 +13,7 @@ from __future__ import annotations
 import hashlib
 import json
 import logging
+import random
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Iterable
@@ -131,7 +132,17 @@ def _decontam_set(decontam_specs: Iterable, tokenizer) -> set[str]:
 
 
 def run_prepare_dpo(project_config: ProjectConfig, *, seed: int, hf_token: str | None = None) -> None:
-    """Pipeline entry point: download HH-RLHF, format, decontam, write JSONL."""
+    """Pipeline entry point: dispatch on `dpo.preference_format`."""
+    dpo = project_config.dpo
+    if dpo is None:
+        raise ValueError("project config has no `dpo` section")
+    if dpo.preference_format == "mc_letter":
+        return _run_prepare_dpo_mc_letter(project_config, seed=seed, hf_token=hf_token)
+    return _run_prepare_dpo_hh_rlhf(project_config, seed=seed, hf_token=hf_token)
+
+
+def _run_prepare_dpo_hh_rlhf(project_config: ProjectConfig, *, seed: int, hf_token: str | None = None) -> None:
+    """Original HH-RLHF preparation path."""
     from datasets import load_dataset
 
     dpo = project_config.dpo
@@ -188,10 +199,11 @@ def run_prepare_dpo(project_config: ProjectConfig, *, seed: int, hf_token: str |
                 else:
                     n_dev += 1
                 n_pairs += 1
-                if n_dev >= dpo.dev_pairs and n_train >= train_target:
+                if n_train >= train_target and n_dev >= dpo.dev_pairs:
                     break
 
     manifest = {
+        "preference_format": "hh_rlhf",
         "n_train": n_train,
         "n_dev": n_dev,
         "n_dropped_decontam": n_dropped_decontam,
@@ -201,3 +213,209 @@ def run_prepare_dpo(project_config: ProjectConfig, *, seed: int, hf_token: str |
     }
     (out_dir / "manifest.json").write_text(json.dumps(manifest, indent=2))
     log.info("DPO prepare finished: %s", manifest)
+
+
+def _build_letter_dpo_pair(
+    *,
+    user_prompt: str,
+    correct_letter: str,
+    candidate_letters: list[str],
+    tokenizer,
+    system_prompt: str,
+    max_seq_length: int,
+    rng: random.Random,
+) -> dict[str, Any] | None:
+    """Build a (prompt, chosen=correct, rejected=wrong) packed JSONL record.
+
+    Mirrors `pack_pair`'s output shape so the existing DPO trainer consumes it
+    unchanged. The chosen response is the correct letter; the rejected
+    response is a randomly-sampled wrong letter from the same MC option set.
+    """
+    wrong_options = [letter for letter in candidate_letters if letter != correct_letter]
+    if not wrong_options:
+        return None
+    rejected_letter = rng.choice(wrong_options)
+
+    prompt_messages = normalize_messages(
+        [{"role": "user", "content": user_prompt}],
+        system_prompt=system_prompt,
+        require_final_assistant=False,
+    )
+    prompt_render = render_conversation(prompt_messages, add_generation_prompt=True)
+    prompt_text = prompt_render.text  # ends with "\n\n### Response:\n"
+
+    chosen_text = prompt_text + correct_letter
+    rejected_text = prompt_text + rejected_letter
+
+    prompt_tokens = tokenizer.encode(prompt_text)
+    chosen_tokens = tokenizer.encode(chosen_text)
+    rejected_tokens = tokenizer.encode(rejected_text)
+
+    if len(chosen_tokens) > max_seq_length or len(rejected_tokens) > max_seq_length:
+        # Skip; safer than truncating a 1-token response (would change loss).
+        return None
+
+    return {
+        "prompt_tokens": prompt_tokens,
+        "chosen_tokens": chosen_tokens,
+        "rejected_tokens": rejected_tokens,
+        "prompt_len": len(prompt_tokens),
+    }
+
+
+def _run_prepare_dpo_mc_letter(
+    project_config: ProjectConfig,
+    *,
+    seed: int,
+    hf_token: str | None = None,
+) -> None:
+    """Build (correct-letter, wrong-letter) preference pairs from MC sources.
+
+    Reuses the SFT MC normalizers via `_normalize_source_record`: each source
+    must declare a `loader` field naming an SFT MC loader (e.g. "piqa", "sciq").
+    The normalizer yields a 2-message conversation [user_prompt, correct_letter];
+    we then sample a wrong letter from the same option set as the rejected
+    response. Output records share the HH-RLHF `pack_pair` shape, so the
+    existing DPO trainer consumes them unchanged.
+    """
+    from datasets import load_dataset
+
+    from configs.posttraining.sftConfig import SFTSourceConfig
+    from src.posttraining.prepare import _normalize_source_record
+
+    dpo = project_config.dpo
+    if dpo is None:
+        raise ValueError("project config has no `dpo` section")
+    if not dpo.sources:
+        raise ValueError("dpo.sources is empty; need at least one MC source")
+
+    out_dir = Path(dpo.prepared_dir)
+    out_dir.mkdir(parents=True, exist_ok=True)
+    train_path = out_dir / "train.jsonl"
+    dev_path = out_dir / "dev.jsonl"
+
+    tokenizer = build_tokenizer()
+    rng = random.Random(int(seed))
+
+    n_train = 0
+    n_dev = 0
+    n_dropped_invalid = 0
+    target_total = sum(s.target_pairs for s in dpo.sources)
+    train_target = max(0, target_total - dpo.dev_pairs)
+    per_source_counts: dict[str, int] = {}
+
+    with train_path.open("w", encoding="utf-8") as f_train, dev_path.open("w", encoding="utf-8") as f_dev:
+        for source in dpo.sources:
+            if not source.loader:
+                raise ValueError(
+                    f"DPO source {source.name!r} requires a `loader` when "
+                    f"preference_format=mc_letter (e.g. 'piqa', 'sciq', 'ai2_arc')."
+                )
+            log.info("Loading DPO MC source: %s (%s)", source.name, source.path)
+
+            # Build a SFTSourceConfig-shaped object so the SFT normalizer
+            # dispatch works.  We only need the fields the normalizers read.
+            sft_like = SFTSourceConfig(
+                name=source.name,
+                loader=source.loader,
+                path=source.path,
+                subset=source.subset,
+                split=source.split,
+                target_examples=source.target_pairs,
+                language=source.language,
+                rationale="",
+            )
+
+            ds = load_dataset(
+                source.path,
+                source.subset,
+                split=source.split,
+                cache_dir=str(dpo.cache_dir) if dpo.cache_dir else None,
+                token=hf_token,
+            )
+
+            count_for_source = 0
+            target_for_source = source.target_pairs
+
+            for raw in ds:
+                if count_for_source >= target_for_source:
+                    break
+                if n_train >= train_target and n_dev >= dpo.dev_pairs:
+                    break
+                normalized = _normalize_source_record(raw, source_cfg=sft_like)
+                if normalized is None:
+                    n_dropped_invalid += 1
+                    continue
+                messages, _meta = normalized
+                if (
+                    len(messages) != 2
+                    or messages[0].get("role") != "user"
+                    or messages[1].get("role") != "assistant"
+                ):
+                    n_dropped_invalid += 1
+                    continue
+                user_prompt = str(messages[0].get("content") or "")
+                correct_letter = str(messages[1].get("content") or "").strip().upper()
+                if len(correct_letter) != 1 or not correct_letter.isalpha():
+                    n_dropped_invalid += 1
+                    continue
+
+                # Discover candidate letters by scanning the rendered option lines.
+                # SFT MC normalizers use two prompt formats:
+                #   - `_format_mc_prompt`  -> "A) ..." / "B) ..." (sciq, cqa, mmlu, race, boolq, piqa, wsc273)
+                #   - `_normalize_ai2_arc_record` -> "A. ..." / "B. ..." (ARC easy/challenge)
+                candidate_letters: list[str] = []
+                for letter in "ABCDEFGHIJ":
+                    paren = f"{letter}) "
+                    dot = f"{letter}. "
+                    if (
+                        f"\n{paren}" in user_prompt
+                        or user_prompt.startswith(paren)
+                        or f"\n{dot}" in user_prompt
+                        or user_prompt.startswith(dot)
+                    ):
+                        candidate_letters.append(letter)
+                if correct_letter not in candidate_letters:
+                    n_dropped_invalid += 1
+                    continue
+
+                packed = _build_letter_dpo_pair(
+                    user_prompt=user_prompt,
+                    correct_letter=correct_letter,
+                    candidate_letters=candidate_letters,
+                    tokenizer=tokenizer,
+                    system_prompt=dpo.system_prompt,
+                    max_seq_length=dpo.max_seq_length,
+                    rng=rng,
+                )
+                if packed is None:
+                    n_dropped_invalid += 1
+                    continue
+
+                # Fill dev first so smoke configs (small totals) still get a
+                # nonzero dev split. After dev_pairs is met, all remaining
+                # records flow to train until train_target is reached.
+                if n_dev < dpo.dev_pairs:
+                    f_dev.write(json.dumps(packed) + "\n")
+                    n_dev += 1
+                else:
+                    f_train.write(json.dumps(packed) + "\n")
+                    n_train += 1
+                count_for_source += 1
+
+            per_source_counts[source.name] = count_for_source
+            log.info("Source %s: built %d letter pairs", source.name, count_for_source)
+            if n_dev >= dpo.dev_pairs and n_train >= train_target:
+                break
+
+    manifest = {
+        "preference_format": "mc_letter",
+        "n_train": n_train,
+        "n_dev": n_dev,
+        "n_dropped_invalid": n_dropped_invalid,
+        "per_source": per_source_counts,
+        "train_path": str(train_path),
+        "dev_path": str(dev_path),
+    }
+    (out_dir / "manifest.json").write_text(json.dumps(manifest, indent=2))
+    log.info("DPO mc_letter prepare finished: %s", manifest)

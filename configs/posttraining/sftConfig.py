@@ -26,6 +26,8 @@ class SFTSourceConfig(BaseModel):
         "race",
         "mmlu",
         "boolq",
+        "piqa",
+        "wsc273",
     ] = Field(...)
     path: str = Field(...)
     subset: str | None = Field(default=None)

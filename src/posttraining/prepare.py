@@ -530,6 +530,53 @@ def _normalize_boolq_record(record: Mapping[str, Any], source_cfg: SFTSourceConf
     }
 
 
+def _normalize_piqa_record(record: Mapping[str, Any], source_cfg: SFTSourceConfig) -> tuple[list[dict[str, str]], dict[str, Any]] | None:
+    goal = str(record.get("goal") or "").strip()
+    sol1 = str(record.get("sol1") or "").strip()
+    sol2 = str(record.get("sol2") or "").strip()
+    label = record.get("label")
+    if not goal or not sol1 or not sol2 or label is None:
+        return None
+    try:
+        answer_index = int(label)
+    except (TypeError, ValueError):
+        return None
+    if answer_index not in (0, 1):
+        return None
+    options = [sol1, sol2]
+    answer_letter = "AB"[answer_index]
+    prompt = _format_mc_prompt(goal, options)
+    return _build_mc_messages(prompt, answer_letter), {
+        "record_id": record.get("id"),
+        "rationale": source_cfg.rationale,
+    }
+
+
+def _normalize_wsc273_record(record: Mapping[str, Any], source_cfg: SFTSourceConfig) -> tuple[list[dict[str, str]], dict[str, Any]] | None:
+    text = str(record.get("text") or "").strip()
+    pronoun = str(record.get("pronoun") or "").strip()
+    options = record.get("options") or []
+    label = record.get("label")
+    if not text or not pronoun or not isinstance(options, list) or len(options) != 2 or label is None:
+        return None
+    cleaned = [str(o).strip() for o in options]
+    if any(not c for c in cleaned):
+        return None
+    try:
+        answer_index = int(label)
+    except (TypeError, ValueError):
+        return None
+    if answer_index not in (0, 1):
+        return None
+    question = f'{text}\nIn the above sentence, the pronoun "{pronoun}" refers to:'
+    prompt = _format_mc_prompt(question, cleaned)
+    answer_letter = "AB"[answer_index]
+    return _build_mc_messages(prompt, answer_letter), {
+        "record_id": record.get("source") or "wsc273",
+        "rationale": source_cfg.rationale,
+    }
+
+
 def _normalize_wildchat_record(record: Mapping[str, Any], source_cfg: SFTSourceConfig) -> tuple[list[dict[str, str]], dict[str, Any]] | None:
     model_name = str(record.get("model") or record.get("model_name") or "").lower()
     if source_cfg.require_model_substring and source_cfg.require_model_substring.lower() not in model_name:
@@ -765,6 +812,10 @@ def _normalize_source_record(
         return _normalize_mmlu_record(record, source_cfg)
     if source_cfg.loader == "boolq":
         return _normalize_boolq_record(record, source_cfg)
+    if source_cfg.loader == "piqa":
+        return _normalize_piqa_record(record, source_cfg)
+    if source_cfg.loader == "wsc273":
+        return _normalize_wsc273_record(record, source_cfg)
     raise ValueError(f"Unsupported loader for record-level normalization: {source_cfg.loader}")
 
 

@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from pathlib import Path
+from typing import Literal
 
 from pydantic import BaseModel, ConfigDict, Field
 
@@ -16,6 +17,8 @@ class DPOSourceConfig(BaseModel):
     split: str = Field(default="train")
     target_pairs: int = Field(..., ge=1)
     language: str | None = Field(default="en")
+    # SFT loader name (e.g. "piqa", "sciq"); required when DPOConfig.preference_format == "mc_letter".
+    loader: str | None = Field(default=None)
 
 
 class DPOConfig(BaseModel):
@@ -53,6 +56,7 @@ class DPOConfig(BaseModel):
     keep_best_checkpoints: int = Field(default=2, ge=1)
 
     # Data.
+    preference_format: Literal["hh_rlhf", "mc_letter"] = Field(default="hh_rlhf")
     sources: list[DPOSourceConfig] = Field(default_factory=list)
     decontam_datasets: list = Field(default_factory=list)
     dev_pairs: int = Field(default=500, ge=1)

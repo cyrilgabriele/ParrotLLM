@@ -75,7 +75,7 @@ sft:
     loader: local_jsonl
     path: data/posttraining/custom/benchmark_format.jsonl
     split: train
-    target_examples: 7000
+    target_examples: 12000
     candidate_multiplier: 1
     language: en
     min_turns: 2

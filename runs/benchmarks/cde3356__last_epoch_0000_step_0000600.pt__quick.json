@@ -1,0 +1,13 @@
+{
+  "checkpoint_basename": "last_epoch_0000_step_0000600.pt",
+  "git_sha": "cde3356",
+  "pii_named": 92.0,
+  "scores": {
+    "hellaswag": 20.5,
+    "lambada": 3.0,
+    "openbookqa": 18.0,
+    "winogrande": 50.5
+  },
+  "tier": "quick",
+  "wall_clock_seconds": 3399.6434292793274
+}

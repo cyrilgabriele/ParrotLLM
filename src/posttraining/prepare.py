@@ -577,6 +577,52 @@ def _normalize_wsc273_record(record: Mapping[str, Any], source_cfg: SFTSourceCon
     }
 
 
+def _normalize_hellaswag_record(record: Mapping[str, Any], source_cfg: SFTSourceConfig) -> tuple[list[dict[str, str]], dict[str, Any]] | None:
+    ctx = str(record.get("ctx") or record.get("ctx_a") or "").strip()
+    endings = record.get("endings") or []
+    label = record.get("label")
+    if not ctx or not isinstance(endings, list) or len(endings) != 4 or label in (None, ""):
+        return None
+    cleaned = [str(e).strip() for e in endings]
+    if any(not c for c in cleaned):
+        return None
+    try:
+        answer_index = int(label)
+    except (TypeError, ValueError):
+        return None
+    if answer_index not in (0, 1, 2, 3):
+        return None
+    question = f"{ctx}\nWhich is the most likely continuation?"
+    prompt = _format_mc_prompt(question, cleaned)
+    answer_letter = "ABCD"[answer_index]
+    return _build_mc_messages(prompt, answer_letter), {
+        "record_id": record.get("ind") or record.get("source_id"),
+        "rationale": source_cfg.rationale,
+    }
+
+
+def _normalize_winogrande_record(record: Mapping[str, Any], source_cfg: SFTSourceConfig) -> tuple[list[dict[str, str]], dict[str, Any]] | None:
+    sentence = str(record.get("sentence") or "").strip()
+    option1 = str(record.get("option1") or "").strip()
+    option2 = str(record.get("option2") or "").strip()
+    answer = record.get("answer")
+    if not sentence or not option1 or not option2 or answer in (None, ""):
+        return None
+    try:
+        answer_index = int(answer) - 1  # WinoGrande uses 1-based labels
+    except (TypeError, ValueError):
+        return None
+    if answer_index not in (0, 1):
+        return None
+    question = f"{sentence}\nWhich option fills the blank?"
+    prompt = _format_mc_prompt(question, [option1, option2])
+    answer_letter = "AB"[answer_index]
+    return _build_mc_messages(prompt, answer_letter), {
+        "record_id": record.get("qID"),
+        "rationale": source_cfg.rationale,
+    }
+
+
 def _normalize_wildchat_record(record: Mapping[str, Any], source_cfg: SFTSourceConfig) -> tuple[list[dict[str, str]], dict[str, Any]] | None:
     model_name = str(record.get("model") or record.get("model_name") or "").lower()
     if source_cfg.require_model_substring and source_cfg.require_model_substring.lower() not in model_name:
@@ -816,6 +862,10 @@ def _normalize_source_record(
         return _normalize_piqa_record(record, source_cfg)
     if source_cfg.loader == "wsc273":
         return _normalize_wsc273_record(record, source_cfg)
+    if source_cfg.loader == "hellaswag":
+        return _normalize_hellaswag_record(record, source_cfg)
+    if source_cfg.loader == "winogrande":
+        return _normalize_winogrande_record(record, source_cfg)
     raise ValueError(f"Unsupported loader for record-level normalization: {source_cfg.loader}")
 
 

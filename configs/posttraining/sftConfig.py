@@ -28,6 +28,8 @@ class SFTSourceConfig(BaseModel):
         "boolq",
         "piqa",
         "wsc273",
+        "hellaswag",
+        "winogrande",
     ] = Field(...)
     path: str = Field(...)
     subset: str | None = Field(default=None)

@@ -33,6 +33,12 @@ class DPOConfig(BaseModel):
     checkpoint_dir: str = Field(default="checkpoints")
     system_prompt: str = Field(default="You are ParrotLLM, a helpful assistant.")
     max_seq_length: int = Field(default=1024, ge=32)
+    # Per-pair length filter applied at trainer load time. Pairs whose chosen
+    # or rejected token length exceeds this are dropped before training.
+    # Used to bound peak MPSGraph workspace per step on Apple Silicon, where
+    # a single long-padded batch can hit the unified-memory ceiling. None =
+    # keep all pairs.
+    max_train_pair_tokens: int | None = Field(default=None, ge=32)
 
     # Hyperparameters (per spec, Phase 1).
     beta: float = Field(default=0.1, gt=0.0)

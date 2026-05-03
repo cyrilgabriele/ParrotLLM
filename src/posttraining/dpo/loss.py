@@ -22,13 +22,16 @@ def sequence_logprob_from_labels(logits: torch.Tensor, labels: torch.Tensor) -> 
     Returns:
         [B] float tensor of per-sequence summed log-probs.
     """
-    log_probs = F.log_softmax(logits, dim=-1)
-
+    # log p(t) = logits[t] - logsumexp(logits) — avoids materialising the
+    # [B, S, V] log_softmax tensor (~800 MB at our shapes) and the matching
+    # autograd activation. Mathematically identical to F.log_softmax + gather.
     safe_labels = labels.clone()
     safe_labels[safe_labels == -100] = 0  # placeholder index for gather
 
-    token_log_probs = log_probs.gather(dim=-1, index=safe_labels.unsqueeze(-1)).squeeze(-1)
-    mask = (labels != -100).to(log_probs.dtype)
+    token_logits = logits.gather(dim=-1, index=safe_labels.unsqueeze(-1)).squeeze(-1)
+    log_partition = torch.logsumexp(logits, dim=-1)
+    token_log_probs = token_logits - log_partition
+    mask = (labels != -100).to(token_log_probs.dtype)
     return (token_log_probs * mask).sum(dim=-1)
 
 

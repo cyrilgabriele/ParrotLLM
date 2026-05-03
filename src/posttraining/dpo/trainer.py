@@ -277,8 +277,20 @@ def run_dpo(project_config: ProjectConfig, *, device: torch.device, checkpoint: 
             f"`uv run python main.py --stage dpo-prepare --config <yaml>` first."
         )
     pad_id = int(project_config.model.pad_token_id)
+    train_dataset = PreferencePackedDataset(train_path)
+    if dpo_cfg.max_train_pair_tokens is not None:
+        cap = int(dpo_cfg.max_train_pair_tokens)
+        before = len(train_dataset._records)
+        train_dataset._records = [
+            r for r in train_dataset._records
+            if max(len(r["chosen_tokens"]), len(r["rejected_tokens"])) <= cap
+        ]
+        log.info(
+            "Filtered train pairs by max_train_pair_tokens=%d: kept %d / %d (dropped %d)",
+            cap, len(train_dataset._records), before, before - len(train_dataset._records),
+        )
     train_loader = DataLoader(
-        PreferencePackedDataset(train_path),
+        train_dataset,
         batch_size=dpo_cfg.train_batch_size,
         shuffle=True,
         collate_fn=build_dpo_collator(pad_token_id=pad_id),
@@ -334,6 +346,20 @@ def run_dpo(project_config: ProjectConfig, *, device: torch.device, checkpoint: 
         elif device.type == "cuda":
             torch.cuda.empty_cache()
 
+    # Diagnostic: split allocator pool from driver-tracked memory so we can tell
+    # whether a future OOM is caused by tensors PyTorch knows about (allocator)
+    # vs MPSGraph workspace / other process memory (driver - allocator).
+    def _device_memory_gib() -> dict[str, float] | None:
+        if device.type == "mps":
+            alloc = torch.mps.current_allocated_memory() / (1024 ** 3)
+            driver = torch.mps.driver_allocated_memory() / (1024 ** 3)
+            return {"mps_alloc_gib": alloc, "mps_driver_gib": driver}
+        if device.type == "cuda":
+            alloc = torch.cuda.memory_allocated() / (1024 ** 3)
+            reserved = torch.cuda.memory_reserved() / (1024 ** 3)
+            return {"cuda_alloc_gib": alloc, "cuda_reserved_gib": reserved}
+        return None
+
     step = 0
     pbar = tqdm(total=total_steps, desc="dpo")
     done = False
@@ -372,6 +398,9 @@ def run_dpo(project_config: ProjectConfig, *, device: torch.device, checkpoint: 
             # Periodic cache release — bounds MPS allocator growth.
             if step % 25 == 0:
                 _empty_device_cache()
+                mem = _device_memory_gib()
+                if mem is not None:
+                    metrics_logger.log("dpo", "memory", step=step, epoch=epoch, **mem)
 
             if step % dpo_cfg.eval_every == 0:
                 acc = _evaluate_chosen_token_accuracy(

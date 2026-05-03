@@ -29,6 +29,11 @@ dpo:
   runs_dir: runs/posttraining/dpo_letter
   system_prompt: "You are ParrotLLM, a helpful assistant."
   max_seq_length: 1024
+  # Cap per-pair length to keep peak MPSGraph workspace below the 42 GiB
+  # unified-memory ceiling on Apple Silicon. p99.5 of our prepared pairs is
+  # 449 tokens; cap=512 drops 32 of 18,750 pairs (0.17%) and eliminates the
+  # long-tail batch that OOM'd both prior runs at step 3439.
+  max_train_pair_tokens: 512
 
   beta: 0.1
   learning_rate: 5.0e-7

@@ -1,0 +1,13 @@
+{
+  "checkpoint_basename": "best_loss_0p4540_epoch_0000_step_0003300.pt",
+  "git_sha": "8dae159",
+  "pii_named": 101.5,
+  "scores": {
+    "hellaswag": 23.0,
+    "lambada": 3.5000000000000004,
+    "openbookqa": 26.5,
+    "winogrande": 48.5
+  },
+  "tier": "quick",
+  "wall_clock_seconds": 4148.992803812027
+}

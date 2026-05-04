@@ -109,6 +109,79 @@ def letter_token_ids(tokenizer, letters: list[str]) -> list[int]:
     return matched
 
 
+@torch.no_grad()
+def score_continuation_logprob(
+    model,
+    *,
+    prefix_ids: list[int],
+    continuation_ids: list[int],
+    device,
+    context_length: int,
+) -> float:
+    """Length-normalized log P(continuation | prefix).
+
+    Concatenates prefix+continuation, runs one forward pass, and sums the
+    log-prob of each continuation token at its predicted position. Truncates
+    from the LEFT if combined length exceeds context_length so the
+    continuation tokens stay inside the window.
+    """
+    if not continuation_ids:
+        return 0.0
+    full = list(prefix_ids) + list(continuation_ids)
+    if len(full) > context_length:
+        full = full[-context_length:]
+    full_t = torch.tensor([full], dtype=torch.long, device=device)
+    logits, _ = model(full_t)
+    log_probs = F.log_softmax(logits[0].float(), dim=-1)
+
+    cont_len = len(continuation_ids)
+    target_positions = list(range(len(full) - cont_len, len(full)))
+    total = 0.0
+    for pos in target_positions:
+        target_id = full[pos]
+        total += float(log_probs[pos - 1, target_id].item())
+    return total / cont_len
+
+
+def cloze_score_options(
+    model,
+    tokenizer,
+    *,
+    prefix_text: str,
+    option_texts: list[str],
+    device,
+    context_length: int,
+    leading_space: bool = True,
+    scorer=None,
+) -> int:
+    """Return the index of the highest-scoring option.
+
+    Scores log P(" <option_text>" | prefix_text) for each option, length-
+    normalized by tokenized continuation length. Leading-space matches
+    lm-eval-harness convention (prompt ends without whitespace, completion
+    is scored with a leading space).
+    """
+    if scorer is None:
+        scorer = score_continuation_logprob
+    prefix_ids = tokenizer.encode(prefix_text, add_special_tokens=False)
+    best_idx = 0
+    best_score = float("-inf")
+    for i, opt in enumerate(option_texts):
+        cont = (" " + opt) if leading_space else opt
+        cont_ids = tokenizer.encode(cont, add_special_tokens=False)
+        score = scorer(
+            model,
+            prefix_ids=prefix_ids,
+            continuation_ids=cont_ids,
+            device=device,
+            context_length=context_length,
+        )
+        if score > best_score:
+            best_score = score
+            best_idx = i
+    return best_idx
+
+
 def wino_substitute(stem: str, option: str) -> tuple[str, str]:
     """Substitute `option` into the first `_` in `stem`. Return (head, tail).
 

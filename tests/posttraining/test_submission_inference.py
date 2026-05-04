@@ -218,3 +218,70 @@ def test_letter_token_ids_excludes_unrelated(submission_inference, gpt2_tokenize
     one_ids = set(gpt2_tokenizer.encode(" 1", add_special_tokens=False)[:1])
     assert not (ids & c_ids)
     assert not (ids & one_ids)
+
+
+def test_score_continuation_logprob_is_finite(
+    submission_inference, gpt2_tokenizer, tiny_model
+):
+    """Smoke: scoring runs end-to-end and returns a finite scalar.
+    Exact values depend on model init; we just need monotonic, finite output."""
+    model, config = tiny_model
+    # Use small token ids that fit the tiny model's vocab=64.
+    prefix_ids = [1, 2, 3, 4]
+    cont_a = [5, 6]
+    cont_b = [7, 8, 9]
+
+    score_a = submission_inference.score_continuation_logprob(
+        model,
+        prefix_ids=prefix_ids,
+        continuation_ids=cont_a,
+        device=torch.device("cpu"),
+        context_length=config["model"]["context_length"],
+    )
+    score_b = submission_inference.score_continuation_logprob(
+        model,
+        prefix_ids=prefix_ids,
+        continuation_ids=cont_b,
+        device=torch.device("cpu"),
+        context_length=config["model"]["context_length"],
+    )
+    assert torch.isfinite(torch.tensor([score_a, score_b])).all()
+
+
+def test_score_continuation_logprob_empty_continuation_returns_zero(
+    submission_inference, tiny_model
+):
+    model, config = tiny_model
+    score = submission_inference.score_continuation_logprob(
+        model,
+        prefix_ids=[1, 2, 3],
+        continuation_ids=[],
+        device=torch.device("cpu"),
+        context_length=config["model"]["context_length"],
+    )
+    assert score == 0.0
+
+
+def test_cloze_score_options_picks_best(submission_inference, gpt2_tokenizer, tiny_model):
+    """Inject a fake scorer so we know which index 'wins' regardless of model state."""
+    model, _ = tiny_model
+    options = ["alpha", "beta", "gamma", "delta"]
+    fake_scores = {0: -10.0, 1: -5.0, 2: -1.0, 3: -3.0}
+    call_count = {"n": 0}
+
+    def fake_score(_model, *, prefix_ids, continuation_ids, device, context_length):
+        i = call_count["n"]
+        call_count["n"] += 1
+        return fake_scores[i]
+
+    pick = submission_inference.cloze_score_options(
+        model,
+        gpt2_tokenizer,
+        prefix_text="The best letter is:",
+        option_texts=options,
+        device=torch.device("cpu"),
+        context_length=64,
+        scorer=fake_score,
+    )
+    assert pick == 2
+    assert call_count["n"] == 4

@@ -6,12 +6,21 @@ from __future__ import annotations
 import argparse
 import random
 import sys
+from dataclasses import dataclass, field
 from pathlib import Path
 
 import numpy as np
 import torch
 from transformers import GPT2TokenizerFast
 
+from src.inference import (
+    cloze_score_options,
+    detect_mc_prompt,
+    is_lambada_shape,
+    letter_token_ids,
+    score_continuation_logprob,
+    wino_substitute,
+)
 from src.model.transformer import ParrotLLM
 
 
@@ -63,6 +72,48 @@ def alpaca_wrap(user_prompt: str, system_prompt: str) -> str:
     if sys:
         user = f"{sys}\n\n{user}"
     return f"### Instruction:\n{user}\n\n### Response:\n"
+
+
+@dataclass
+class RenderedPrompt:
+    kind: str  # "mc" | "lambada" | "chat"
+    text: str
+    mc_options: list[str] = field(default_factory=list)
+    mc_header: str = ""
+    mc_stem: str = ""
+
+
+def render_prompt_for_inference(
+    *,
+    raw_prompt: str,
+    template: str,
+    system_prompt: str,
+    leaderboard: bool,
+) -> RenderedPrompt:
+    """Decide which inference path to take for `raw_prompt`.
+
+    In leaderboard mode the leaderboard sends raw benchmark prompts and reads
+    STDOUT directly, so the Alpaca wrapper MUST NOT be applied to MC/LAMBADA
+    inputs (it would destroy the surface form). Only chat-shaped prompts (or
+    non-leaderboard runs) get wrapped.
+    """
+    if leaderboard:
+        mc = detect_mc_prompt(raw_prompt)
+        if mc is not None:
+            stem, options, header = mc
+            return RenderedPrompt(
+                kind="mc",
+                text=raw_prompt,
+                mc_options=options,
+                mc_header=header,
+                mc_stem=stem,
+            )
+        if is_lambada_shape(raw_prompt):
+            return RenderedPrompt(kind="lambada", text=raw_prompt.rstrip())
+
+    if template == "alpaca":
+        return RenderedPrompt(kind="chat", text=alpaca_wrap(raw_prompt, system_prompt))
+    return RenderedPrompt(kind="chat", text=raw_prompt)
 
 
 def set_seed(seed: int) -> None:
@@ -173,6 +224,57 @@ def generate(
     return idx
 
 
+def _score_mc(
+    *,
+    model,
+    tokenizer,
+    rendered: RenderedPrompt,
+    device,
+    context_length: int,
+) -> int:
+    """Run cloze scoring for an MC prompt and return the chosen option index."""
+    n_opts = len(rendered.mc_options)
+    if rendered.mc_header == "Context" and n_opts == 2 and "_" in rendered.mc_stem:
+        # WinoGrande: substitute the option into the blank, score the post-blank tail.
+        best_idx, best_score = 0, float("-inf")
+        for i, opt in enumerate(rendered.mc_options):
+            head, tail = wino_substitute(rendered.mc_stem, opt)
+            head_ids = tokenizer.encode(head, add_special_tokens=False)
+            tail_ids = tokenizer.encode(tail, add_special_tokens=False) if tail else []
+            if not tail_ids:
+                # Degenerate: score the option itself given the prefix-only context.
+                prefix = rendered.mc_stem.split("_")[0].rstrip()
+                score = score_continuation_logprob(
+                    model,
+                    prefix_ids=tokenizer.encode(prefix, add_special_tokens=False),
+                    continuation_ids=tokenizer.encode(
+                        " " + opt, add_special_tokens=False
+                    ),
+                    device=device,
+                    context_length=context_length,
+                )
+            else:
+                score = score_continuation_logprob(
+                    model,
+                    prefix_ids=head_ids,
+                    continuation_ids=tail_ids,
+                    device=device,
+                    context_length=context_length,
+                )
+            if score > best_score:
+                best_score, best_idx = score, i
+        return best_idx
+    # HellaSwag / OpenBookQA: classic cloze on the full prompt + " <option>".
+    return cloze_score_options(
+        model,
+        tokenizer,
+        prefix_text=rendered.text,
+        option_texts=rendered.mc_options,
+        device=device,
+        context_length=context_length,
+    )
+
+
 def main() -> None:
     args = parse_args()
     set_seed(int(args.seed))
@@ -189,13 +291,38 @@ def main() -> None:
     tokenizer = load_tokenizer(submission_dir)
 
     raw_prompt = args.prompt if args.prompt is not None else "The answer is"
-    if args.template == "alpaca":
-        prompt = alpaca_wrap(raw_prompt, args.system_prompt)
-    else:
-        prompt = raw_prompt
-    input_ids = tokenizer.encode(prompt, add_special_tokens=False)
-    if not input_ids:
+    rendered = render_prompt_for_inference(
+        raw_prompt=raw_prompt,
+        template=args.template,
+        system_prompt=args.system_prompt,
+        leaderboard=bool(args.leaderboard),
+    )
+
+    context_length = int(config["model"].get("context_length", 1024))
+    eos_id = config["model"].get("eos_token_id")
+    if eos_id is None:
         eos_id = tokenizer.eos_token_id
+
+    # ── MC path: cloze-score the options, write the chosen letter and exit ──
+    if rendered.kind == "mc":
+        best_idx = _score_mc(
+            model=model,
+            tokenizer=tokenizer,
+            rendered=rendered,
+            device=device,
+            context_length=context_length,
+        )
+        letter = chr(ord("A") + best_idx)
+        if args.leaderboard:
+            sys.stdout.write(letter)
+            sys.stdout.flush()
+            return
+        print(letter)
+        return
+
+    # ── LAMBADA / chat path: greedy-generate, stop on EOS ──
+    input_ids = tokenizer.encode(rendered.text, add_special_tokens=False)
+    if not input_ids:
         if eos_id is None:
             raise ValueError("Prompt is empty and tokenizer has no EOS token.")
         input_ids = [eos_id]
@@ -208,10 +335,14 @@ def main() -> None:
         temperature=float(args.temperature),
         top_k=int(args.top_k),
         top_p=float(args.top_p),
-        context_length=int(config["model"].get("context_length", 1024)),
+        context_length=context_length,
+        eos_token_id=int(eos_id) if eos_id is not None else None,
     )
 
     generated_ids = output[0, len(input_ids):].tolist()
+    # Trim a trailing EOS so it doesn't pollute the leaderboard's parsing.
+    if eos_id is not None and generated_ids and generated_ids[-1] == eos_id:
+        generated_ids = generated_ids[:-1]
     generated_text = tokenizer.decode(
         generated_ids,
         clean_up_tokenization_spaces=False,

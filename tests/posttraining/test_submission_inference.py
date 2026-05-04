@@ -13,11 +13,18 @@ SUBMISSION_DIR = Path(__file__).resolve().parents[2] / "Submissions" / "PikoGPPT
 
 
 def _load_submission_module(name: str, path: Path):
-    """Load a module from the submission folder so tests can import its main/inference."""
+    """Load a module from the submission folder so tests can import its main/inference.
+
+    Registering the module in sys.modules BEFORE exec is required for @dataclass
+    annotations: dataclasses look up cls.__module__ in sys.modules to evaluate
+    forward refs, and that lookup fails with AttributeError if the module isn't
+    registered.
+    """
     if str(SUBMISSION_DIR) not in sys.path:
         sys.path.insert(0, str(SUBMISSION_DIR))
     spec = importlib.util.spec_from_file_location(name, path)
     module = importlib.util.module_from_spec(spec)
+    sys.modules[name] = module
     spec.loader.exec_module(module)
     return module
 
@@ -285,3 +292,68 @@ def test_cloze_score_options_picks_best(submission_inference, gpt2_tokenizer, ti
     )
     assert pick == 2
     assert call_count["n"] == 4
+
+
+def test_dispatch_lambada_rstrips_prompt(submission_main):
+    """LAMBADA path must rstrip the trailing space before tokenizing."""
+    rendered = submission_main.render_prompt_for_inference(
+        raw_prompt=LAMBADA_PROMPT,
+        template="alpaca",
+        system_prompt="ignored-in-leaderboard-mode",
+        leaderboard=True,
+    )
+    assert rendered.kind == "lambada"
+    assert not rendered.text.endswith(" ")
+    assert rendered.text == LAMBADA_PROMPT.rstrip()
+
+
+def test_dispatch_mc_uses_full_prompt(submission_main):
+    rendered = submission_main.render_prompt_for_inference(
+        raw_prompt=HELLASWAG_PROMPT,
+        template="alpaca",
+        system_prompt="ignored",
+        leaderboard=True,
+    )
+    assert rendered.kind == "mc"
+    assert rendered.mc_options == [
+        "is using wrap to wrap a pair of skis.",
+        "is ripping level tiles off.",
+        "is holding a rubik's cube.",
+        "starts pulling up roofing on a roof.",
+    ]
+
+
+def test_dispatch_chat_applies_alpaca_wrap(submission_main):
+    rendered = submission_main.render_prompt_for_inference(
+        raw_prompt=CHAT_PROMPT,
+        template="alpaca",
+        system_prompt="You are ParrotLLM, a helpful assistant.",
+        leaderboard=False,
+    )
+    assert rendered.kind == "chat"
+    assert "### Instruction:" in rendered.text
+    assert "### Response:" in rendered.text
+
+
+def test_dispatch_raw_template_skips_wrap(submission_main):
+    rendered = submission_main.render_prompt_for_inference(
+        raw_prompt=CHAT_PROMPT,
+        template="raw",
+        system_prompt="ignored",
+        leaderboard=False,
+    )
+    assert rendered.kind == "chat"
+    assert rendered.text == CHAT_PROMPT
+
+
+def test_dispatch_non_leaderboard_keeps_alpaca_wrap_for_mc(submission_main):
+    """Outside leaderboard mode, the user might be testing chat — even an
+    MC-shaped prompt should be alpaca-wrapped so it follows the chat path."""
+    rendered = submission_main.render_prompt_for_inference(
+        raw_prompt=HELLASWAG_PROMPT,
+        template="alpaca",
+        system_prompt="You are ParrotLLM, a helpful assistant.",
+        leaderboard=False,
+    )
+    assert rendered.kind == "chat"
+    assert "### Instruction:" in rendered.text

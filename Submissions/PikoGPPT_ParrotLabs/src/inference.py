@@ -86,6 +86,29 @@ def is_lambada_shape(prompt: str) -> bool:
     return len(prompt.strip()) >= 80
 
 
+def letter_token_ids(tokenizer, letters: list[str]) -> list[int]:
+    """Return token ids whose decoded form starts with one of `letters`.
+
+    Iterates the full vocab once. Used to mask the first-step logits so the
+    model can only emit a token that begins with an allowed answer letter
+    (after optional leading whitespace). Stable across runs for a fixed vocab.
+    """
+    allowed = {ch.upper() for ch in letters}
+    vocab_size = tokenizer.vocab_size
+    matched: list[int] = []
+    for tid in range(vocab_size):
+        try:
+            decoded = tokenizer.decode([tid], clean_up_tokenization_spaces=False)
+        except Exception:
+            continue
+        stripped = decoded.lstrip()
+        if not stripped:
+            continue
+        if stripped[0].upper() in allowed:
+            matched.append(tid)
+    return matched
+
+
 def wino_substitute(stem: str, option: str) -> tuple[str, str]:
     """Substitute `option` into the first `_` in `stem`. Return (head, tail).
 

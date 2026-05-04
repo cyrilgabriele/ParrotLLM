@@ -189,3 +189,32 @@ def test_wino_substitute_handles_missing_blank(submission_inference):
     head, tail = submission_inference.wino_substitute("no blank here", "Sarah")
     assert head == "no blank here Sarah"
     assert tail == ""
+
+
+@pytest.fixture(scope="module")
+def gpt2_tokenizer():
+    from transformers import GPT2TokenizerFast
+
+    return GPT2TokenizerFast.from_pretrained("openai-community/gpt2", use_fast=True)
+
+
+def test_letter_token_ids_includes_naked_letter(submission_inference, gpt2_tokenizer):
+    ids = submission_inference.letter_token_ids(gpt2_tokenizer, ["A", "B", "C", "D"])
+    plain = gpt2_tokenizer.encode("A", add_special_tokens=False)
+    assert plain[0] in ids
+    spaced = gpt2_tokenizer.encode(" A", add_special_tokens=False)
+    assert spaced[0] in ids
+    assert len(ids) == len(set(ids))
+    allowed = {"A", "B", "C", "D"}
+    for tid in ids:
+        decoded = gpt2_tokenizer.decode([tid], clean_up_tokenization_spaces=False)
+        stripped = decoded.lstrip()
+        assert stripped and stripped[0].upper() in allowed
+
+
+def test_letter_token_ids_excludes_unrelated(submission_inference, gpt2_tokenizer):
+    ids = set(submission_inference.letter_token_ids(gpt2_tokenizer, ["A", "B"]))
+    c_ids = set(gpt2_tokenizer.encode(" C", add_special_tokens=False)[:1])
+    one_ids = set(gpt2_tokenizer.encode(" 1", add_special_tokens=False)[:1])
+    assert not (ids & c_ids)
+    assert not (ids & one_ids)

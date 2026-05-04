@@ -383,15 +383,8 @@ def _normalize_ai2_arc_record(record: Mapping[str, Any], source_cfg: SFTSourceCo
     if answer_index is None:
         return None
 
-    labels = ["A", "B", "C", "D"]
-    options = "\n".join(
-        f"{label}. {text}" for label, text in zip(labels, cleaned_choices)
-    )
-    prompt = f"{question}\n{options}\nAnswer with only the letter."
-    messages = [
-        {"role": "user", "content": prompt},
-        {"role": "assistant", "content": labels[answer_index]},
-    ]
+    prompt = _format_mc_prompt(question, cleaned_choices, prefix="Question")
+    messages = _build_mc_messages(prompt, "ABCD"[answer_index])
     metadata = {
         "record_id": record.get("id"),
         "arc_subset": source_cfg.subset,
@@ -401,19 +394,17 @@ def _normalize_ai2_arc_record(record: Mapping[str, Any], source_cfg: SFTSourceCo
     return messages, metadata
 
 
-def _format_mc_prompt(question: str, choices: list[str]) -> str:
-    """Format an MC prompt in the leaderboard's expected shape.
+def _format_mc_prompt(question: str, choices: list[str], prefix: str | None = "Question") -> str:
+    """Format an MC prompt to match the PikoGPT leaderboard's eval template.
 
-    Output:
-      <question>
-      A) <choices[0]>
-      B) <choices[1]>
-      ...
-      Answer:
+    Eval prompts (from external/PikoGPT_Leaderboard/.../validation.jsonl):
+      HellaSwag/WinoGrande -> "Context: <text>\\nA) ...\\nAnswer:"
+      OpenBookQA           -> "Question: <stem>\\nA) ...\\nAnswer:"
     """
     labels = ["A", "B", "C", "D", "E"]
     options = "\n".join(f"{labels[i]}) {choices[i]}" for i in range(len(choices)))
-    return f"{question.strip()}\n{options}\nAnswer:"
+    head = f"{prefix}: {question.strip()}" if prefix else question.strip()
+    return f"{head}\n{options}\nAnswer:"
 
 
 def _build_mc_messages(prompt_text: str, answer_letter: str) -> list[dict[str, str]]:
@@ -480,7 +471,7 @@ def _normalize_race_record(record: Mapping[str, Any], source_cfg: SFTSourceConfi
         return None
     answer_index = "ABCD".index(answer)
     prompt_text = f"Passage: {article}\n\nQuestion: {question}"
-    prompt = _format_mc_prompt(prompt_text, cleaned)
+    prompt = _format_mc_prompt(prompt_text, cleaned, prefix=None)
     return _build_mc_messages(prompt, "ABCD"[answer_index]), {
         "record_id": record.get("example_id") or record.get("id"),
         "rationale": source_cfg.rationale,
@@ -523,7 +514,7 @@ def _normalize_boolq_record(record: Mapping[str, Any], source_cfg: SFTSourceConf
         return None
     answer_letter = "A" if bool(answer) else "B"
     prompt_text = f"Passage: {passage}\n\nQuestion: {question}"
-    prompt = _format_mc_prompt(prompt_text, ["Yes", "No"])
+    prompt = _format_mc_prompt(prompt_text, ["Yes", "No"], prefix=None)
     return _build_mc_messages(prompt, answer_letter), {
         "record_id": record.get("id") or record.get("idx"),
         "rationale": source_cfg.rationale,
@@ -569,7 +560,7 @@ def _normalize_wsc273_record(record: Mapping[str, Any], source_cfg: SFTSourceCon
     if answer_index not in (0, 1):
         return None
     question = f'{text}\nIn the above sentence, the pronoun "{pronoun}" refers to:'
-    prompt = _format_mc_prompt(question, cleaned)
+    prompt = _format_mc_prompt(question, cleaned, prefix="Context")
     answer_letter = "AB"[answer_index]
     return _build_mc_messages(prompt, answer_letter), {
         "record_id": record.get("source") or "wsc273",
@@ -592,11 +583,82 @@ def _normalize_hellaswag_record(record: Mapping[str, Any], source_cfg: SFTSource
         return None
     if answer_index not in (0, 1, 2, 3):
         return None
-    question = f"{ctx}\nWhich is the most likely continuation?"
-    prompt = _format_mc_prompt(question, cleaned)
+    prompt = _format_mc_prompt(ctx, cleaned, prefix="Context")
     answer_letter = "ABCD"[answer_index]
     return _build_mc_messages(prompt, answer_letter), {
         "record_id": record.get("ind") or record.get("source_id"),
+        "rationale": source_cfg.rationale,
+    }
+
+
+def _normalize_narrative_completion_record(record: Mapping[str, Any], source_cfg: SFTSourceConfig) -> tuple[list[dict[str, str]], dict[str, Any]] | None:
+    """Build a (passage_minus_last_word -> last_word) pair for LAMBADA-shape SFT.
+
+    Eval (LAMBADA test) prompts are raw narrative passages ending mid-sentence;
+    the model must produce the missing word. We mirror that shape: instruction
+    is the passage minus its final word, response is the final word. With the
+    Alpaca wrapper applied at training and inference (main.py:alpaca_wrap),
+    the surface form matches eval after the wrapper is added.
+
+    Picks a single trailing-word split from the END of the record text. Rejects
+    records that are too short, end on punctuation only, or whose last word is
+    a single character. Source `text` field is configurable via record key.
+    """
+    text = str(record.get("text") or record.get("story") or record.get("content") or "").strip()
+    if len(text) < 200:
+        return None
+    # Strip trailing whitespace/quotes; keep terminal punctuation for now.
+    body = text.rstrip()
+    # Split on the last whitespace before any trailing punctuation cluster.
+    # We want: "<prefix> <word><optional terminal punctuation>"
+    # Find the last word boundary.
+    import re
+
+    m = re.search(r"\s+([\w'-]+)\s*[\.\?!,]?\s*$", body)
+    if not m:
+        return None
+    last_word = m.group(1)
+    if len(last_word) < 2:
+        return None
+    prefix = body[: m.start()].rstrip()
+    if len(prefix) < 100:
+        return None
+    # Truncate prefix to a manageable length (chars; tokenizer-level cap is
+    # enforced later by trim_messages_to_token_limit).
+    if len(prefix) > 1500:
+        prefix = prefix[-1500:]
+        # Snap to the nearest leading sentence boundary so we don't start
+        # mid-word.
+        snap = re.search(r"[\.\?!]\s+(.*)", prefix, flags=re.DOTALL)
+        if snap:
+            prefix = snap.group(1).strip()
+    return _build_mc_messages(prefix, last_word), {
+        "record_id": record.get("id") or record.get("story_id"),
+        "rationale": source_cfg.rationale,
+    }
+
+
+def _normalize_openbookqa_record(record: Mapping[str, Any], source_cfg: SFTSourceConfig) -> tuple[list[dict[str, str]], dict[str, Any]] | None:
+    # allenai/openbookqa fields: question_stem, choices={text, label}, answerKey, id.
+    stem = str(record.get("question_stem") or "").strip()
+    raw_choices = record.get("choices")
+    answer_key = str(record.get("answerKey") or "").strip().upper()
+    if not stem or not isinstance(raw_choices, Mapping) or not answer_key:
+        return None
+    texts = raw_choices.get("text") or []
+    labels = raw_choices.get("label") or []
+    if not isinstance(texts, list) or len(texts) != 4 or not isinstance(labels, list) or len(labels) != 4:
+        return None
+    cleaned = [str(t).strip() for t in texts]
+    if any(not c for c in cleaned):
+        return None
+    try:
+        answer_index = [str(l).strip().upper() for l in labels].index(answer_key)
+    except ValueError:
+        return None
+    prompt = _format_mc_prompt(stem, cleaned, prefix="Question")
+    return _build_mc_messages(prompt, "ABCD"[answer_index]), {
+        "record_id": record.get("id"),
         "rationale": source_cfg.rationale,
     }
 
@@ -614,8 +676,7 @@ def _normalize_winogrande_record(record: Mapping[str, Any], source_cfg: SFTSourc
         return None
     if answer_index not in (0, 1):
         return None
-    question = f"{sentence}\nWhich option fills the blank?"
-    prompt = _format_mc_prompt(question, [option1, option2])
+    prompt = _format_mc_prompt(sentence, [option1, option2], prefix="Context")
     answer_letter = "AB"[answer_index]
     return _build_mc_messages(prompt, answer_letter), {
         "record_id": record.get("qID"),
@@ -866,6 +927,10 @@ def _normalize_source_record(
         return _normalize_hellaswag_record(record, source_cfg)
     if source_cfg.loader == "winogrande":
         return _normalize_winogrande_record(record, source_cfg)
+    if source_cfg.loader == "openbookqa":
+        return _normalize_openbookqa_record(record, source_cfg)
+    if source_cfg.loader == "narrative_completion":
+        return _normalize_narrative_completion_record(record, source_cfg)
     raise ValueError(f"Unsupported loader for record-level normalization: {source_cfg.loader}")
 
 
@@ -1254,6 +1319,10 @@ def run_prepare_sft(
     source_candidates: dict[str, list[PreparedExample]] = {}
     for source_cfg in sft_cfg.sources:
         snapshot_path = get_source_snapshot_path(raw_dir, source_cfg)
+        # Per-source template_format wins over the global default. Lets a
+        # narrative-completion source train as raw text (LAMBADA shape) while
+        # the rest of the recipe stays Alpaca-wrapped.
+        effective_template = source_cfg.template_format or sft_cfg.template_format
         candidates = _collect_candidates_for_source(
             source_cfg,
             tokenizer=tokenizer,
@@ -1261,7 +1330,7 @@ def run_prepare_sft(
             max_seq_length=sft_cfg.max_seq_length,
             lang_filter=lang_filter,
             snapshot_path=snapshot_path,
-            template_format=sft_cfg.template_format,
+            template_format=effective_template,
         )
         source_candidates[source_cfg.name] = candidates
         log.info("Collected %d candidates for %s", len(candidates), source_cfg.name)

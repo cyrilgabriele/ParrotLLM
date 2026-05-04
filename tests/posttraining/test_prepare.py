@@ -305,3 +305,78 @@ def test_sft_source_config_default_template_is_none():
         }
     )
     assert cfg.template_format is None
+
+
+def test_run_prepare_sft_forwards_per_source_template_format(monkeypatch, tmp_path: Path):
+    """`run_prepare_sft` must call _collect_candidates_for_source with the
+    per-source template_format when set, falling back to the global default
+    when None."""
+    from src.posttraining import prepare as prepare_mod
+
+    captured: list[tuple[str, str]] = []
+
+    def fake_collect(source_cfg, *, tokenizer, system_prompt, max_seq_length,
+                     lang_filter, snapshot_path=None, cache_dir=None,
+                     hf_token=None, template_format="alpaca"):
+        captured.append((source_cfg.name, template_format))
+        return []
+
+    def fake_build_decontam(_configs, **_kwargs):
+        return prepare_mod.PromptContaminationIndex()
+
+    def fake_build_tokenizer():
+        return DummyTokenizer()
+
+    monkeypatch.setattr(prepare_mod, "_collect_candidates_for_source", fake_collect)
+    monkeypatch.setattr(prepare_mod, "_build_decontam_index", fake_build_decontam)
+    monkeypatch.setattr(prepare_mod, "build_tokenizer", fake_build_tokenizer)
+
+    config = ProjectConfig.model_validate(
+        {
+            "model": {
+                "vocab_size": 1024,
+                "pad_token_id": 0,
+                "bos_token_id": 1,
+                "eos_token_id": 2,
+                "d_model": 32,
+                "n_layers": 2,
+                "n_heads": 2,
+                "d_ff": 64,
+                "context_length": 128,
+                "bias": False,
+                "dropout": 0.0,
+                "rope_theta": 10000.0,
+                "gradient_checkpointing": False,
+            },
+            "sft": {
+                "device": "cpu",
+                "base_checkpoint": str(tmp_path / "base.pt"),
+                "raw_dir": str(tmp_path / "raw"),
+                "prepared_dir": str(tmp_path / "prepared"),
+                "template_format": "alpaca",
+                "sources": [
+                    {
+                        "name": "chat_inherits",
+                        "loader": "alpaca",
+                        "path": "yahma/alpaca-cleaned",
+                        "target_examples": 1,
+                    },
+                    {
+                        "name": "raw_narrative",
+                        "loader": "narrative_completion",
+                        "path": "roneneldan/TinyStories",
+                        "target_examples": 1,
+                        "template_format": "raw",
+                    },
+                ],
+                "decontam_datasets": [],
+            },
+        }
+    )
+
+    prepare_mod.run_prepare_sft(config)
+    captured_dict = dict(captured)
+    assert captured_dict == {
+        "chat_inherits": "alpaca",       # inherits from sft_cfg.template_format
+        "raw_narrative": "raw",          # per-source override
+    }

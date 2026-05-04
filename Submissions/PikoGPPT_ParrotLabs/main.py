@@ -17,6 +17,11 @@ from src.model.transformer import ParrotLLM
 
 DEFAULT_TOKENIZER_NAME = "openai-community/gpt2"
 
+# Must match the system_prompt used during SFT/DPO training
+# (configs/posttraining/*.yaml). Course rule (VL07 slide 32):
+# the template at training MUST match the template at inference.
+DEFAULT_SYSTEM_PROMPT = "You are ParrotLLM, a helpful assistant."
+
 
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description="ParrotLLM leaderboard submission")
@@ -30,7 +35,34 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--seed", type=int, default=0)
     parser.add_argument("--top-k", type=int, default=50)
     parser.add_argument("--top-p", type=float, default=0.9)
+    parser.add_argument(
+        "--template",
+        choices=["alpaca", "raw"],
+        default="alpaca",
+        help="alpaca: wrap prompt in ### Instruction/### Response (matches SFT/DPO training). "
+        "raw: pass prompt unchanged (use only for base-model checkpoints).",
+    )
+    parser.add_argument(
+        "--system-prompt",
+        default=DEFAULT_SYSTEM_PROMPT,
+        help="System prompt prepended to user content under alpaca template. "
+        "Must match the value used during training.",
+    )
     return parser.parse_args()
+
+
+def alpaca_wrap(user_prompt: str, system_prompt: str) -> str:
+    """Wrap a raw prompt in the Alpaca template used at training time.
+
+    Mirrors src/posttraining/templates.py:render_conversation(template_format='alpaca')
+    with add_generation_prompt=True. The system prompt is folded into the first
+    user message exactly as normalize_messages() does it.
+    """
+    sys = (system_prompt or "").strip()
+    user = user_prompt if user_prompt is not None else ""
+    if sys:
+        user = f"{sys}\n\n{user}"
+    return f"### Instruction:\n{user}\n\n### Response:\n"
 
 
 def set_seed(seed: int) -> None:
@@ -100,11 +132,18 @@ def generate(
     top_k: int,
     top_p: float,
     context_length: int,
+    eos_token_id: int | None = None,
+    allowed_first_token_ids: list[int] | None = None,
 ) -> torch.Tensor:
-    for _ in range(max_new_tokens):
+    for step in range(max_new_tokens):
         idx_cond = idx[:, -context_length:]
         logits, _ = model(idx_cond)
         logits = logits[:, -1, :]
+
+        if step == 0 and allowed_first_token_ids:
+            mask = torch.full_like(logits, float("-inf"))
+            mask[:, allowed_first_token_ids] = 0.0
+            logits = logits + mask
 
         if temperature == 0.0:
             next_token = logits.argmax(dim=-1, keepdim=True)
@@ -128,6 +167,9 @@ def generate(
 
         idx = torch.cat([idx, next_token], dim=1)
 
+        if eos_token_id is not None and bool((next_token == eos_token_id).all()):
+            break
+
     return idx
 
 
@@ -146,7 +188,11 @@ def main() -> None:
     model, config = load_model(checkpoint_path, device)
     tokenizer = load_tokenizer(submission_dir)
 
-    prompt = args.prompt if args.prompt is not None else "The answer is"
+    raw_prompt = args.prompt if args.prompt is not None else "The answer is"
+    if args.template == "alpaca":
+        prompt = alpaca_wrap(raw_prompt, args.system_prompt)
+    else:
+        prompt = raw_prompt
     input_ids = tokenizer.encode(prompt, add_special_tokens=False)
     if not input_ids:
         eos_id = tokenizer.eos_token_id

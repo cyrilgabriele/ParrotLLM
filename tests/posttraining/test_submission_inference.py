@@ -92,3 +92,100 @@ def test_generate_respects_allowed_first_token_ids(submission_main, tiny_model):
     )
     # First newly emitted token must be one of the allowed ids.
     assert int(out[0, 3].item()) in allowed
+
+
+@pytest.fixture(scope="module")
+def submission_inference():
+    return _load_submission_module(
+        "submission_inference", SUBMISSION_DIR / "src" / "inference.py"
+    )
+
+
+HELLASWAG_PROMPT = (
+    "Context: A man is sitting on a roof. he\n"
+    "A) is using wrap to wrap a pair of skis.\n"
+    "B) is ripping level tiles off.\n"
+    "C) is holding a rubik's cube.\n"
+    "D) starts pulling up roofing on a roof.\n"
+    "Answer:"
+)
+WINOGRANDE_PROMPT = (
+    "Context: Sarah was a much better surgeon than Maria so _ always got the easier cases.\n"
+    "A) Sarah\n"
+    "B) Maria\n"
+    "Answer:"
+)
+OPENBOOKQA_PROMPT = (
+    "Question: Frilled sharks live deep in the ocean, which is why they are known as\n"
+    "A) Deep sea animals\n"
+    "B) fish\n"
+    "C) Long Sea Fish\n"
+    "D) Far Sea Animals\n"
+    "Answer:"
+)
+LAMBADA_PROMPT = (
+    "She walked through the door and her mouth curved in a confident grin, "
+    "I don't care about "  # ← trailing space, no Answer:
+)
+CHAT_PROMPT = "Tell me a short joke about cats."
+
+
+def test_detect_mc_prompt_hellaswag(submission_inference):
+    parsed = submission_inference.detect_mc_prompt(HELLASWAG_PROMPT)
+    assert parsed is not None
+    stem, options, header = parsed
+    assert header == "Context"
+    assert stem.strip() == "A man is sitting on a roof. he"
+    assert options == [
+        "is using wrap to wrap a pair of skis.",
+        "is ripping level tiles off.",
+        "is holding a rubik's cube.",
+        "starts pulling up roofing on a roof.",
+    ]
+
+
+def test_detect_mc_prompt_winogrande(submission_inference):
+    parsed = submission_inference.detect_mc_prompt(WINOGRANDE_PROMPT)
+    assert parsed is not None
+    stem, options, header = parsed
+    assert header == "Context"
+    assert "_" in stem
+    assert options == ["Sarah", "Maria"]
+
+
+def test_detect_mc_prompt_openbookqa(submission_inference):
+    parsed = submission_inference.detect_mc_prompt(OPENBOOKQA_PROMPT)
+    assert parsed is not None
+    stem, options, header = parsed
+    assert header == "Question"
+    assert len(options) == 4
+
+
+def test_detect_mc_prompt_rejects_lambada(submission_inference):
+    assert submission_inference.detect_mc_prompt(LAMBADA_PROMPT) is None
+
+
+def test_detect_mc_prompt_rejects_chat_with_answer_substring(submission_inference):
+    # A chat prompt that *mentions* "Answer:" in passing must not be classified as MC.
+    chat = "Hi! Could you give me the Answer: I am stuck on this problem."
+    assert submission_inference.detect_mc_prompt(chat) is None
+
+
+def test_is_lambada_shape(submission_inference):
+    assert submission_inference.is_lambada_shape(LAMBADA_PROMPT) is True
+    assert submission_inference.is_lambada_shape(HELLASWAG_PROMPT) is False
+    assert submission_inference.is_lambada_shape(CHAT_PROMPT) is False
+
+
+def test_wino_substitute(submission_inference):
+    stem = "Sarah was a much better surgeon than Maria so _ always got the easier cases."
+    head, tail = submission_inference.wino_substitute(stem, "Sarah")
+    assert head == "Sarah was a much better surgeon than Maria so Sarah"
+    assert tail == " always got the easier cases."
+
+
+def test_wino_substitute_handles_missing_blank(submission_inference):
+    # Falls back to ("<stem> <option>", "") when no _ is present.
+    head, tail = submission_inference.wino_substitute("no blank here", "Sarah")
+    assert head == "no blank here Sarah"
+    assert tail == ""

@@ -280,3 +280,28 @@ def test_pku_safe_rlhf_loader_keeps_safe_harmful_examples():
     }
     normalized = _normalize_pku_safe_rlhf_qa_record(record, source_cfg)
     assert normalized is not None
+
+
+def test_sft_source_config_accepts_template_override():
+    cfg = SFTSourceConfig.model_validate(
+        {
+            "name": "raw_narrative",
+            "loader": "narrative_completion",
+            "path": "roneneldan/TinyStories",
+            "target_examples": 10,
+            "template_format": "raw",
+        }
+    )
+    assert cfg.template_format == "raw"
+
+
+def test_sft_source_config_default_template_is_none():
+    cfg = SFTSourceConfig.model_validate(
+        {
+            "name": "x",
+            "loader": "alpaca",
+            "path": "yahma/alpaca-cleaned",
+            "target_examples": 10,
+        }
+    )
+    assert cfg.template_format is None

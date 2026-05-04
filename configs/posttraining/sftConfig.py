@@ -30,6 +30,8 @@ class SFTSourceConfig(BaseModel):
         "wsc273",
         "hellaswag",
         "winogrande",
+        "openbookqa",
+        "narrative_completion",
     ] = Field(...)
     path: str = Field(...)
     subset: str | None = Field(default=None)
@@ -51,6 +53,10 @@ class SFTSourceConfig(BaseModel):
     quality_weight: float = Field(default=1.0, gt=0.0)
     tags: list[str] = Field(default_factory=list)
     rationale: str = Field(default="")
+    # None = inherit SFTConfig.template_format (the global default).
+    # "raw" lets a single source (e.g. narrative_completion for LAMBADA) skip the
+    # Alpaca chat wrapper while the rest of the mix stays alpaca-wrapped.
+    template_format: Literal["alpaca", "raw"] | None = Field(default=None)
 
 
 class SFTDecontamConfig(BaseModel):

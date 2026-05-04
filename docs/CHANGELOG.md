@@ -21,6 +21,38 @@ Track what was changed, why it was changed, and any important notes.
 
 ## Unreleased
 
+### [2026-05-04] - Christof Steiner
+
+#### What
+- Implemented the VL07 SFT stage end-to-end under `src/post_training/sft/`: Alpaca-template renderer, masked-CE collator (`-100` on prompt tokens), lean trainer that re-uses the pretraining model + tokeniser without forking the 1664-line pretraining trainer
+- Decontamination against the four visible leaderboard benchmarks (LAMBADA / HellaSwag / WinoGrande / OpenBookQA) plus six hidden-bench-safe sets (ARC-Easy/Challenge, BoolQ, CommonsenseQA, SciQ, MMLU); SHA-1 hash intersection, drop-on-hit, count logged
+- Catastrophic-forgetting controls: 20 %-of-batches pretraining-token mix from the OWT `train.bin`, 5-eval early-stopping patience, baseline-relative Wikitext-103 perplexity tripwire that hard-stops the run if WT-103 PPL rises ≥ 10 % over the base checkpoint
+- Correctness fixes during SFT bring-up: decontam wiring, EOS preservation in the tokeniser path, NaN/Inf guard on loss before `.backward()` to avoid corrupting AdamW moment buffers
+- Performance: BF16 autocast on Ampere+, FP16 + GradScaler fallback otherwise, `torch.compile(mode="default")` (not `reduce-overhead` — its CUDA-graph backend breaks when the model is called in train, eval, and WT-103-probe modes within one run)
+- v6 synthetic raw-format SFT mixin: ~2.4 k synthetic rows (851 programmatic factual-trivia + 1500 reformatted from public Q&A train splits) routed through a `RawCompletionTemplate` alongside Alpaca, per-batch share 60 % Alpaca / 20 % raw / 20 % pretrain via `synthetic_oversample=7`; fixes the v5 "all-invalid" leaderboard MC parser failure (0 → 100 % valid letter on every MC bench, leaderboard mean ~3 % → 24.5 %)
+- v1–v6 SFT configs under `configs/post_training/`: smoketest, `sft_v2_cf_mitigated`, `sft_v3_higher_mix`, `sft_v5_8b`, `sft_v6_8b`; each config header records the single variable changed from its predecessor
+- Eval: `compare` and `benchmark` scripts, leaderboard inference contract with EOS-stop in `generate`, strict MC detection in `--leaderboard` mode (first-token logits constrained to `{A,B,C,D}` ids when prompt ends `\nAnswer:` and contains ≥ 2 `\n[A-Z]) ` lines), rubric-aligned eval suite, chat quick-load, interactive chat REPL via `format_sft_prompt`
+
+- Implemented the VL08 DPO stage end-to-end under `src/post_training/dpo/`, vanilla PyTorch (no TRL): policy + frozen reference initialised from the SFT checkpoint, four forward passes per batch (policy×{chosen, rejected} + reference×{chosen, rejected} under `no_grad`), Bradley-Terry loss `−log σ(β · ((π_θ_chosen − π_θ_rejected) − (π_ref_chosen − π_ref_rejected)))`, diagnostic metrics (policy/ref log-ratios, rewards, reward margin, accuracy)
+- DPO collator + data pipeline mirror the SFT shape; same Alpaca template (slide 32 critical rule applied to both completions), same decontamination set; v4 onward tightens the WT-103 tripwire to 5 % (vs SFT's 10 %) because the contrastive loss can move the policy off the SFT reference faster than masked CE
+- Length-normalised per-sequence log-probs (`length_normalize_logp: true`): mean over response tokens instead of sum, neutralising the orca_dpo_pairs length asymmetry (rejected ~51 % longer than chosen on 78.8 % of pairs); single-variable controlled experiment from v2→v3 documented in `docs/post_training/experiments_v3.md`
+- DPO hyperparameters arrived at by ablation: β raised 0.1 → 0.2 in v2 after v1 measurably over-drifted; LR 5e-6 → 1e-6 by v5 to bound CF further; weight decay 0.0 (KL leash already regularises); batch 4 × accum 8 = 32, 1 epoch with patience-2 early stop
+- v1–v6 DPO configs under `configs/post_training/`: smoketest, `dpo_v2_balanced`, `dpo_v3_length_norm`, `dpo_v4_length_norm_low_lr`, `dpo_v5_8b`, `dpo_v6_8b`
+
+- Documentation: `docs/post_training/DESIGN_DECISIONS.md` records each SFT/DPO knob on this branch with its source citation (VL07/VL08 slide, `file:line`, or experiment doc) and reason
+
+#### Why
+- A pretrained PikoGPT continues text rather than answering instructions (VL07 slide 6); SFT teaches the assistant format, DPO teaches answer quality on top of that base. The course requires both stages and Pair B (Christof + Gian) ships the DPO half
+- Alpaca is the lecture-recommended template (VL07 slide 32) because plain-text markers require no addition to the GPT-2 + `<\|pad\|>` tokeniser; full fine-tuning is recommended over LoRA at our scale (VL07 slide 35) because LoRA is "not ideal for large domain shifts" (slide 42) and adapter weights still count toward the 40 M cap (slide 48)
+- v1+v2 DPO val_loss collapsed to 0.0175 with val_acc 99 %+ — diagnosed as length-bias reward hacking on orca_dpo_pairs (`docs/post_training/experiments_v3.md` Experiment 1), not a genuine preference signal; length-normalisation in v3 brought val_acc back to ~80 % which matches Zephyr-7B numbers (VL08 slide 39)
+- v5 SFT submission scored ~3 % mean on the leaderboard because the model emitted prose where the runner expected a single letter; the v6 raw-format mixin closes this without breaking the chat path because each inference path now matches the format it was trained on
+
+#### Remarks
+- Submitted to upstream PikoGPT_Leaderboard as `ParrotLLM_llarotpm` via PR #4 (`unisg-ics-dsnlp/PikoGPT_Leaderboard`, currently open). Submission: v6 SFT, `run_20260428_211931_sft/final_step_0001966_epoch_01_valloss_2p4231.pt`. Limit=500 results: HellaSwag 32.2 %, WinoGrande 54.2 %, OpenBookQA 25.0 %, LAMBADA 24.9 %; PikoIntelligenceIndex (sum across visible + hidden benches) 290.40 — currently top of the leaderboard at submission time, ahead of the baseline (265.20) by 25.2 points. Public-bench lead offsets a 9.4-point deficit on the hidden cumulated (154.20 vs 163.60); ranking may shift as further teams submit
+- Local pre-submission v6 (limit=100) numbers in `docs/post_training/v6_results.md`: mean 24.5 %; the submitted checkpoint is a re-run of v6 (21:19 the same day) rather than the morning's `best_step_0002000_epoch_01_valloss_2p4211.pt` referenced there
+- DPO v6 brutal_test (chat usability): 12/27 (44 %), open-ended 3/3, no regression vs v5; math/counting/yes-no still 0/3 (deferred to v7)
+- Open follow-ups in `DESIGN_DECISIONS.md` §11: DPO data switch to UltraFeedback, OpenBookQA letter-bias, tightening SFT WT-103 bound to 5 %
+
 ### [2026-04-08] - Cyril Gabriele
 
 #### What

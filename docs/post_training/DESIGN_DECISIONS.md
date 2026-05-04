@@ -260,18 +260,59 @@ The trade-off is the length asymmetry that motivated ADR-0003. UltraFeedback wou
 - **Source:** SFT.md §8.7; `docs/post_training/v6_results.md`.
 - **Reason:** Course-mandated evaluation harness. Forking and PR-ing into the official repo means our scores are computed by the same code as the baseline's, with the same prompt format and decoding policy. `--limit 100` for fast iteration; `--limit 500` for the final reportable number.
 
-### 10.3 Submission checkpoint = SFT v6 (not DPO v6)
+### 10.3 Submission checkpoint = SFT v7 + PMI calibration (not v6, not DPO)
 
-- **Source:** `docs/post_training/v6_results.md` line 41 ("**SFT v6 outperforms DPO v6 on the leaderboard runner.** DPO was trained only on Alpaca-format pairs, so it slightly biases the model away from raw-format MC completion. sft_v6 is the right submission checkpoint").
-- **Reason:** Measured outcome. DPO trained only on Alpaca-rendered pairs (orca_dpo_pairs) so its generation distribution drifts slightly away from the raw format the leaderboard runner needs. SFT v6 was the last stage that saw the raw format, so its MC parsing accuracy is higher. This is a project-level decision documented in `v6_results.md` and revisitable in v7 if a length-balanced, raw-format-friendly preference dataset becomes available.
+- **Source:** `docs/post_training/v7_v8_results.md` line 103 ("Final winning checkpoint: `runs/run_20260428_211931_sft/checkpoints/final_step_0001966_epoch_01_valloss_2p4231.pt`"); `Submissions/ParrotLLM_llarotpm/` overview JSON in the leaderboard repo.
+- **Reason:** v6 was a stepping stone. v7 broadened the synthetic mix to cover all four visible task families (HellaSwag-train, OpenBookQA-train, WinoGrande-train, plus 800 cloze rows), and three inference-side fixes (§11 below) lifted the official-runner public_avg from ~25 % to **33.6 %** (HellaSwag 32.2, WinoGrande 54.0, OpenBookQA 25.0, LAMBADA 23.2). DPO v6 was rejected as the submission because Alpaca-only DPO de-emphasised raw-format MC. v8 was tried (v7 + 25 k Wikitext-103 auto-cloze rows) but tied v7 — auto-cloze targets had ~5–10 % BPE-subword noise that crowded out the signal.
 
 ---
 
-## 11. Open questions / future-work flags
+## 11. Inference-side fixes (where the headline lift came from)
 
-These are decisions that were *not* made on this branch but are worth flagging for any v7 revision:
+The official-runner numbers shipped to the leaderboard are dominated by three changes in `src/eval/inference.py`, not by training. The lift attributable to inference is roughly +8 pp on `public_avg` vs running the same v7 weights without these fixes.
 
-1. **Switch DPO data to UltraFeedback** (VL08 slide 40 explicit recommendation; would remove length-asymmetry root cause rather than patching it via length-normalisation). Cost: ~5× larger dataset → ~5× DPO wall-clock; uncertain whether 35.76 M model benefits from the additional 50 k pairs.
-2. **OpenBookQA letter bias** (`v6_results.md` "Open issue"): the v6 model never picks A on OBQA. Possible mitigations are listed in `v6_results.md` lines 73–80; not addressed in v6.
-3. **Tightening the SFT WT-103 bound to 5 %** to match DPO. SFT v2–v6 were healthy at 10 %; the question is whether 5 % would change v7's CF margin without aborting useful runs.
-4. **Multi-turn data**. Current pipeline is single-turn (Alpaca, orca_dpo_pairs). VL07 slide 30 covers multi-turn structure but the project does not need it. Out of scope for this submission; relevant if the chat REPL is extended post-deadline.
+### 11.1 LAMBADA prompt `rstrip`
+
+- **Source:** `src/eval/inference.py:469` (`input_text = input_text.rstrip()`); `docs/post_training/v7_v8_results.md` lines 40, 67.
+- **Reason:** Leaderboard LAMBADA prompts arrive with a trailing space. Trailing whitespace breaks GPT-2 BPE alignment and collapses argmax onto the literal `_` (underscore) token, producing 0 % LAMBADA. A one-line `.rstrip()` at the prompt boundary takes LAMBADA from 0 % to ~22 %.
+
+### 11.2 Cloze MC scoring instead of letter generation
+
+- **Source:** `src/eval/inference.py:349` `score_mc_options`; `docs/post_training/v7_v8_results.md` line 39.
+- **Reason:** Generating one letter and matching it to `{A,B,C,D}` is fragile (the v5 "all-invalid" failure mode). Cloze scoring instead computes the per-token log-likelihood of each option's *text* under the bare question stem and emits the letter of the highest-likelihood option. Aligns with the lm-eval-harness convention. WinoGrande's `_` placeholder uses a substitution-cloze variant that scores the post-blank tail per option.
+
+### 11.3 PMI (pointwise mutual information) calibration
+
+- **Source:** `src/eval/inference.py:356` (`pmi: bool = False`), line 393 (PMI subtraction), line 498 (`pmi=True` in `--leaderboard` mode); `docs/post_training/v7_v8_results.md` line 41.
+- **Reason:** Cloze scores are biased by per-option surface frequency: an option whose text is more frequent in English will score higher even when wrong. PMI subtracts each option's log-likelihood under a neutral `"Answer:"` prefix, cancelling the surface-frequency component. Empirically +0.4 pp on v7 and +0.7 pp on DPO v6; OpenBookQA moves from below-random (~23.8 %) to random (25 %) — the per-letter / option-text-frequency bias was actively harming OBQA before. PMI is gated off internally for the WinoGrande substitution-cloze path, where the bias does not apply.
+
+---
+
+## 12. SFT v7 and v8
+
+### 12.1 v7: broader synthetic mix targeting all four visible task families
+
+- **Source:** `configs/post_training/sft_v7_8b.yaml` (header lines 1–9); `data/synthetic/sft_v7_combined.jsonl` (~7 k rows).
+- **Reason:** v6's synthetic mixin was generic raw-format MC trivia (851 programmatic + 1500 public Q&A). v7 replaces / extends it with task-shaped data: 1500 HellaSwag-train, 1000 OpenBookQA-train, 1000 WinoGrande-train, 800 cloze, plus the 851 programmatic for diversity. `synthetic_oversample` drops to 2 (was 7 in v6) because the synthetic pool grew. Same model, base, LR, schedule, and decontamination set as v6. Measured gain: ~+0.5 pp `public_avg` on the harness over v6.
+
+### 12.2 v8: v7 plus 25 k Wikitext-103 auto-cloze (rejected, tied v7)
+
+- **Source:** `configs/post_training/sft_v8_8b.yaml` (header lines 1–13); `tools/build_auto_cloze.py`; `docs/post_training/v7_v8_results.md` line 76.
+- **Reason:** Specifically targeted LAMBADA (which v7 left at 22 %). Auto-cloze generator masked the last token of Wikitext-103 train passages, decontaminating against the four leaderboard validation files and Wikitext-103 test. Tied v7 at 33.4 % on the harness; LAMBADA stayed at 22.0–22.2 %. Diagnosed cause: ~5–10 % of generated rows had BPE sub-word targets (e.g. `guez` from `Rodríguez`); the noise crowded the signal. Stricter sub-word filtering would be the next iteration; not pursued before submission.
+
+### 12.3 Souping (rejected)
+
+- **Source:** `tools/soup_checkpoints.py`; `v7_v8_results.md` line 77.
+- **Reason:** Weight-averaging across late v7 checkpoints and across v6+v7 produced ≤ v7-alone. Souping needs ingredients close to the same loss-basin minimum; including v7's `best_step_900` (val_loss 2.47) dragged the average down from `final` (val_loss 2.42).
+
+---
+
+## 13. Open questions / future-work flags
+
+Items not addressed before submission that would be the next iteration:
+
+1. **OpenBookQA below baseline.** v7 + PMI lands OBQA at exactly 25 % (random for 4-way MC). The 40 M model has effectively no factual knowledge to discriminate options at this scale; for comparison GPT-2 small (124 M) reaches ~27 %. Beating random would need either distillation from a knowledge-rich teacher, more pretraining tokens, or a fundamentally different architecture — none viable in the project budget.
+2. **LAMBADA stuck at ~22 %.** v8 tried to lift it via auto-cloze and tied v7. Stricter sub-word filtering on auto-cloze targets is the obvious next try.
+3. **DPO not used for the submission.** DPO v6 trained on Alpaca-only pairs and slightly de-emphasises raw-format MC, so v7 SFT outperformed it on the runner. Switching DPO data to UltraFeedback (VL08 slide 40) would be the natural follow-up, but DPO would also need to inherit the v7 raw-format mixin to compete on MC parsing.
+4. **Tightening the SFT WT-103 bound to 5 %.** SFT v2–v7 were healthy at 10 %; whether 5 % would aboard useful runs at v8 scale is untested.
+5. **Multi-turn data.** Pipeline is single-turn end-to-end; out of scope for this submission.

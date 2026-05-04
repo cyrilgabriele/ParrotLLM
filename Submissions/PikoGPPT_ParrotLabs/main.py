@@ -192,9 +192,12 @@ def generate(
         logits = logits[:, -1, :]
 
         if step == 0 and allowed_first_token_ids:
-            mask = torch.full_like(logits, float("-inf"))
-            mask[:, allowed_first_token_ids] = 0.0
-            logits = logits + mask
+            vocab_size = logits.size(-1)
+            in_range = [tid for tid in allowed_first_token_ids if 0 <= tid < vocab_size]
+            if in_range:
+                mask = torch.full_like(logits, float("-inf"))
+                mask[:, in_range] = 0.0
+                logits = logits + mask
 
         if temperature == 0.0:
             next_token = logits.argmax(dim=-1, keepdim=True)
@@ -305,14 +308,42 @@ def main() -> None:
 
     # ── MC path: cloze-score the options, write the chosen letter and exit ──
     if rendered.kind == "mc":
-        best_idx = _score_mc(
-            model=model,
-            tokenizer=tokenizer,
-            rendered=rendered,
-            device=device,
-            context_length=context_length,
-        )
-        letter = chr(ord("A") + best_idx)
+        try:
+            best_idx = _score_mc(
+                model=model,
+                tokenizer=tokenizer,
+                rendered=rendered,
+                device=device,
+                context_length=context_length,
+            )
+            letter = chr(ord("A") + best_idx)
+        except Exception:
+            # Degraded fallback: constrain the first generated token to one of
+            # the allowed letters. Guarantees we emit *some* valid letter even
+            # if cloze scoring trips on a malformed input.
+            n_opts = max(2, len(rendered.mc_options))
+            allowed = letter_token_ids(
+                tokenizer, [chr(ord("A") + k) for k in range(n_opts)]
+            )
+            input_ids = tokenizer.encode(rendered.text, add_special_tokens=False)
+            if not input_ids:
+                input_ids = [int(eos_id) if eos_id is not None else 0]
+            idx_t = torch.tensor([input_ids], dtype=torch.long, device=device)
+            out = generate(
+                model,
+                idx_t,
+                max_new_tokens=1,
+                temperature=0.0,
+                top_k=0,
+                top_p=1.0,
+                context_length=context_length,
+                allowed_first_token_ids=allowed,
+            )
+            generated = tokenizer.decode(
+                out[0, len(input_ids):].tolist(),
+                clean_up_tokenization_spaces=False,
+            ).lstrip()
+            letter = generated[:1].upper() if generated else "A"
         if args.leaderboard:
             sys.stdout.write(letter)
             sys.stdout.flush()

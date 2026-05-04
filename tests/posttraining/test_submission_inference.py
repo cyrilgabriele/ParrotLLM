@@ -346,6 +346,35 @@ def test_dispatch_raw_template_skips_wrap(submission_main):
     assert rendered.text == CHAT_PROMPT
 
 
+def test_constrained_fallback_emits_allowed_letter(
+    submission_main, submission_inference, gpt2_tokenizer, tiny_model
+):
+    """When asked to generate with allowed_first_token_ids set, the first
+    new token MUST be one of the allowed ids regardless of model state."""
+    model, config = tiny_model
+    allowed = submission_inference.letter_token_ids(gpt2_tokenizer, ["A", "B", "C", "D"])
+    # Pick an arbitrary prompt; we only check that the constraint binds.
+    input_ids = [1, 2, 3]
+    idx = torch.tensor([input_ids], dtype=torch.long)
+    out = submission_main.generate(
+        model,
+        idx,
+        max_new_tokens=1,
+        temperature=0.0,
+        top_k=0,
+        top_p=1.0,
+        context_length=config["model"]["context_length"],
+        allowed_first_token_ids=allowed,
+    )
+    # tiny_model has vocab=64; many letter ids in GPT-2 are outside that range
+    # so we relax to: the picked id is the highest-scoring id within `allowed`
+    # that is < vocab_size. We just confirm the picked id is in the allowed set
+    # AND inside the model vocab (guarding against the mask producing nonsense).
+    new_token = int(out[0, -1].item())
+    assert new_token in allowed
+    assert 0 <= new_token < config["model"]["vocab_size"]
+
+
 def test_dispatch_non_leaderboard_keeps_alpaca_wrap_for_mc(submission_main):
     """Outside leaderboard mode, the user might be testing chat — even an
     MC-shaped prompt should be alpaca-wrapped so it follows the chat path."""

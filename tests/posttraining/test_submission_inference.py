@@ -19,9 +19,29 @@ def _load_submission_module(name: str, path: Path):
     annotations: dataclasses look up cls.__module__ in sys.modules to evaluate
     forward refs, and that lookup fails with AttributeError if the module isn't
     registered.
+
+    The submission's main.py does `from src.inference import ...`. Python caches
+    a `src` module from the FIRST `src/` package it finds on sys.path. If the
+    project's `src/` was imported earlier in the test session, that cached
+    module wins and `src.inference` won't exist (the project's src has no
+    inference.py). To make this loader robust regardless of test order:
+      1) Pre-load the submission's src.inference into sys.modules under both
+         its real name and as `src.inference` so main.py's import resolves.
+      2) When main.py is the target, also register `submission_main` so
+         dataclass annotations work (above).
     """
     if str(SUBMISSION_DIR) not in sys.path:
         sys.path.insert(0, str(SUBMISSION_DIR))
+
+    # Pre-load src.inference so main.py's `from src.inference import ...` works
+    # even when the project's `src` package is already cached in sys.modules.
+    inference_path = SUBMISSION_DIR / "src" / "inference.py"
+    if "src.inference" not in sys.modules and inference_path.exists():
+        inf_spec = importlib.util.spec_from_file_location("src.inference", inference_path)
+        inf_module = importlib.util.module_from_spec(inf_spec)
+        sys.modules["src.inference"] = inf_module
+        inf_spec.loader.exec_module(inf_module)
+
     spec = importlib.util.spec_from_file_location(name, path)
     module = importlib.util.module_from_spec(spec)
     sys.modules[name] = module

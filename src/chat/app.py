@@ -17,6 +17,7 @@ import glob
 import logging
 import os
 import re
+import time
 
 import torch
 
@@ -129,12 +130,17 @@ def run_chat(project_config: ProjectConfig, *, device: torch.device) -> None:
                 return text[:i], True
         return text, False
 
-    def chat_fn(message, history, temperature, max_tokens, no_repeat_ngram):
+    def chat_fn(
+        message, history,
+        temperature, top_p, top_k, repetition_penalty,
+        max_tokens, no_repeat_ngram,
+    ):
         """Streaming chat callback.
 
         Yields the running response after every generated token. Gradio's
         ChatInterface forwards each yielded string to the chat bubble,
-        producing the token-by-token typing effect.
+        producing the token-by-token typing effect. The bottom of the
+        message gets a small TTFT/throughput line (VL09 slide 10).
         """
         if state["model"] is None:
             yield "Please load a checkpoint first."
@@ -144,6 +150,9 @@ def run_chat(project_config: ProjectConfig, *, device: torch.device) -> None:
         stage = state.get("training_stage", "pretrain")
         max_tokens = int(max_tokens)
         temperature = float(temperature)
+        top_p = float(top_p)
+        top_k = int(top_k)
+        repetition_penalty = float(repetition_penalty)
 
         if stage in {"sft", "dpo"}:
             # Alpaca was trained single-turn — discard chat history and
@@ -170,16 +179,23 @@ def run_chat(project_config: ProjectConfig, *, device: torch.device) -> None:
         idx = torch.tensor([input_ids], dtype=torch.long, device=device)
         eos_id = tokenizer.eos_token_id if stage in {"sft", "dpo"} else None
 
+        # VL09 slide 10: TTFT (prompt → first token) and tokens/sec.
+        t_start = time.perf_counter()
+        ttft: float | None = None
+
         gen_ids: list[int] = []
         for tok_id in generate_stream(
             state["model"], idx, max_tokens,
             temperature=temperature,
-            top_k=chat_cfg.top_k,
-            top_p=chat_cfg.top_p,
+            top_k=top_k,
+            top_p=top_p,
+            repetition_penalty=repetition_penalty,
             context_length=mc["context_length"],
             eos_token_id=eos_id,
             no_repeat_ngram_size=int(no_repeat_ngram),
         ):
+            if ttft is None:
+                ttft = time.perf_counter() - t_start
             gen_ids.append(tok_id)
             # Re-decode the full id sequence each step. BPE tokens can
             # represent partial UTF-8 bytes, so per-token decoding may
@@ -188,7 +204,17 @@ def run_chat(project_config: ProjectConfig, *, device: torch.device) -> None:
             cleaned, hit_stop = _truncate_at_stop(text, stage)
             yield cleaned.strip()
             if hit_stop:
-                return
+                break
+
+        elapsed = time.perf_counter() - t_start
+        n_decoded = max(len(gen_ids) - 1, 1)
+        tps = n_decoded / max(elapsed - (ttft or 0.0), 1e-6)
+        footer = (
+            f"\n\n_TTFT {1000 * (ttft or 0):.0f} ms · "
+            f"{tps:.1f} tok/s · {len(gen_ids)} tokens_"
+        )
+        final_text, _ = _truncate_at_stop(tokenizer.decode(gen_ids), stage)
+        yield final_text.strip() + footer
 
     available = list_checkpoints()
     best_per_stage = _best_by_stage(available)
@@ -257,10 +283,28 @@ def run_chat(project_config: ProjectConfig, *, device: torch.device) -> None:
                         )
 
                 with gr.Accordion("Generation", open=True):
+                    # VL09 slide 30 PikoGPT defaults: τ=0.8, top-p=0.9,
+                    # rep.pen=1.1. ChatConfig values feed the initial
+                    # values so a config override propagates here.
                     temp_slider = gr.Slider(
-                        minimum=0.0, maximum=1.5, value=0.3, step=0.05,
-                        label="Temperature",
-                        info="0 = greedy. 0.2-0.5 is the sweet spot at this scale.",
+                        minimum=0.0, maximum=1.5, value=chat_cfg.temperature,
+                        step=0.05, label="Temperature (τ)",
+                        info="0 = greedy. PikoGPT default: 0.8.",
+                    )
+                    top_p_slider = gr.Slider(
+                        minimum=0.1, maximum=1.0, value=chat_cfg.top_p, step=0.05,
+                        label="Top-p (nucleus)",
+                        info="Adaptive cap on cumulative probability. VL09 default: 0.9.",
+                    )
+                    top_k_slider = gr.Slider(
+                        minimum=0, maximum=200, value=chat_cfg.top_k, step=1,
+                        label="Top-k",
+                        info="Hard cap on candidates. 0 = off. VL09 default: 50.",
+                    )
+                    rep_pen_slider = gr.Slider(
+                        minimum=1.0, maximum=2.0, value=chat_cfg.repetition_penalty,
+                        step=0.05, label="Repetition penalty (θ)",
+                        info="VL09 slide 25. 1.0 = off; PikoGPT default: 1.1.",
                     )
                     max_tokens_slider = gr.Slider(
                         minimum=16, maximum=400, value=120, step=8,
@@ -290,7 +334,10 @@ def run_chat(project_config: ProjectConfig, *, device: torch.device) -> None:
             with gr.Column(scale=3):
                 gr.ChatInterface(
                     chat_fn,
-                    additional_inputs=[temp_slider, max_tokens_slider, ngram_slider],
+                    additional_inputs=[
+                        temp_slider, top_p_slider, top_k_slider, rep_pen_slider,
+                        max_tokens_slider, ngram_slider,
+                    ],
                     chatbot=gr.Chatbot(
                         height=560,
                         layout="bubble",

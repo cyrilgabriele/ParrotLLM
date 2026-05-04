@@ -42,6 +42,8 @@ class InferenceConfig(BaseModel):
     temperature: float = Field(..., ge=0.0)
     top_k: PositiveInt = Field(...)
     top_p: float = Field(..., gt=0.0, le=1.0)
+    # VL09 slide 25 — θ=1.0 disables; PikoGPT default 1.1.
+    repetition_penalty: float = Field(default=1.0, ge=1.0, le=2.0)
 
 
 class ChatConfig(BaseModel):
@@ -52,6 +54,8 @@ class ChatConfig(BaseModel):
     temperature: float = Field(..., ge=0.0)
     top_k: PositiveInt = Field(...)
     top_p: float = Field(..., gt=0.0, le=1.0)
+    # VL09 slide 30 "PikoGPT default": θ=1.1.
+    repetition_penalty: float = Field(default=1.1, ge=1.0, le=2.0)
     system_prompt: str = Field(...)
     checkpoint_dir: Path = Field(...)
 

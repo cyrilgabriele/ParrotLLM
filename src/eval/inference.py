@@ -36,17 +36,38 @@ def _forbid_ngram_repeat(logits: torch.Tensor, seq: list[int],
         logits[:, list(forbidden)] = float("-inf")
 
 
+def _apply_repetition_penalty(
+    logits: torch.Tensor, seq_ids: list[int], penalty: float,
+) -> torch.Tensor:
+    """VL09 slide 25: ``z'_i = z_i / θ`` for tokens already in the sequence.
+
+    Positive logits are divided by θ (push-down), negative logits are
+    multiplied by θ (also push-down toward -∞). With θ=1.0 this is a no-op,
+    which is the off-state. PikoGPT default per VL09: θ=1.1.
+
+    Mutates ``logits`` in place and returns it for chaining.
+    """
+    if penalty == 1.0 or not seq_ids:
+        return logits
+    seen = torch.tensor(sorted(set(seq_ids)), dtype=torch.long, device=logits.device)
+    slice_ = logits[:, seen]
+    logits[:, seen] = torch.where(slice_ > 0, slice_ / penalty, slice_ * penalty)
+    return logits
+
+
 @torch.no_grad()
 def generate_stream(
     model: torch.nn.Module,
     idx: torch.Tensor,
     max_new_tokens: int,
-    temperature: float = 0.0,
+    temperature: float = 0.8,
     top_k: int = 50,
     top_p: float = 0.9,
     context_length: int = 1024,
     eos_token_id: int | None = None,
     no_repeat_ngram_size: int = 0,
+    repetition_penalty: float = 1.1,
+    use_cache: bool = True,
 ):
     """Token-streaming counterpart to ``generate``.
 
@@ -54,20 +75,48 @@ def generate_stream(
     time so the UI can display tokens as soon as they are produced.
     Stops on EOS like ``generate``; honours the same sampling controls.
 
+    Defaults follow VL09 slide 30 ("PikoGPT default"): τ=0.8, top-p=0.9,
+    rep.penalty=1.1.
+
     ``no_repeat_ngram_size`` (default 0 = off): if > 1, forbids any token
-    that would close an n-gram already present in the prompt+generated
-    sequence. Standard fix for the small-model "...blue with a blue with
-    a blue..." failure mode; matches HuggingFace generate semantics.
+    that would close an n-gram already present in the sequence. Stronger
+    than ``repetition_penalty`` (hard ban vs. logit divisor); the two
+    compose. Matches HuggingFace generate semantics.
+
+    ``repetition_penalty`` (VL09 slide 25): logits of tokens already in
+    the sequence are divided by θ (positive) or multiplied by θ (negative),
+    both pushing them down. θ=1.0 disables.
+
+    ``use_cache``: if True (default) and the model exposes
+    ``forward_with_cache``, generation runs with KV-cache for O(t) decode
+    instead of O(t²) (VL09 slides 33–35). Falls back automatically for
+    models without the cache method (e.g. HuggingFaceGPT2 wrapper).
     """
     model.eval()
     seq = idx[0].tolist()
     ngram_map = _build_ngram_map(seq, no_repeat_ngram_size)
 
-    for _ in range(max_new_tokens):
-        idx_cond = idx[:, -context_length:]
-        logits, _ = model(idx_cond)
-        logits = logits[:, -1, :]
+    has_cache_path = use_cache and hasattr(model, "forward_with_cache")
+    cache = None
 
+    for step in range(max_new_tokens):
+        if has_cache_path:
+            # Prefill once on the full prompt, then feed only the last token
+            # each subsequent step. Truncate the prefill to context_length.
+            if cache is None:
+                prefill_idx = idx[:, -context_length:]
+                logits_full, cache = model.forward_with_cache(prefill_idx, cache=None)
+                logits = logits_full[:, -1, :]
+            else:
+                last_tok = idx[:, -1:]
+                logits_full, cache = model.forward_with_cache(last_tok, cache=cache)
+                logits = logits_full[:, -1, :]
+        else:
+            idx_cond = idx[:, -context_length:]
+            logits, _ = model(idx_cond)
+            logits = logits[:, -1, :]
+
+        _apply_repetition_penalty(logits, seq, repetition_penalty)
         _forbid_ngram_repeat(logits, seq, ngram_map, no_repeat_ngram_size)
 
         if temperature == 0.0:
@@ -107,8 +156,14 @@ def generate(
     context_length: int = 1024,
     eos_token_id: int | None = None,
     allowed_first_token_ids: set[int] | None = None,
+    repetition_penalty: float = 1.0,
+    use_cache: bool = True,
 ) -> torch.Tensor:
     """Autoregressive generation. temp=0 for greedy, temp>0 for sampling.
+
+    Defaults preserve the legacy leaderboard-mode behaviour (greedy, no
+    repetition penalty); chat-style callers should pass
+    ``temperature=0.8, repetition_penalty=1.1`` per VL09 slide 30.
 
     If ``eos_token_id`` is provided, generation halts as soon as every
     sequence in the batch has emitted that token. SFT/DPO checkpoints are
@@ -122,13 +177,37 @@ def generate(
     token is forced to lie in that set (logits outside the set are masked
     to -inf at step 0 only). Used by leaderboard MC mode to guarantee the
     runner sees a letter as the first character of stdout.
+
+    ``use_cache`` (VL09 slide 34): when True and the model exposes
+    ``forward_with_cache``, decode runs in O(t) per step. Disable for
+    parity tests or models without the cache path (e.g. HF GPT-2 wrapper).
     """
     model.eval()
 
+    has_cache_path = (
+        use_cache
+        and hasattr(model, "forward_with_cache")
+        and idx.size(0) == 1  # batched cached decode not supported here
+    )
+    cache = None
+    seq_ids: list[int] = idx[0].tolist() if repetition_penalty != 1.0 else []
+
     for step in range(max_new_tokens):
-        idx_cond = idx[:, -context_length:]
-        logits, _ = model(idx_cond)
-        logits = logits[:, -1, :]  # (B, vocab)
+        if has_cache_path:
+            if cache is None:
+                prefill_idx = idx[:, -context_length:]
+                logits_full, cache = model.forward_with_cache(prefill_idx, cache=None)
+                logits = logits_full[:, -1, :]
+            else:
+                logits_full, cache = model.forward_with_cache(idx[:, -1:], cache=cache)
+                logits = logits_full[:, -1, :]
+        else:
+            idx_cond = idx[:, -context_length:]
+            logits, _ = model(idx_cond)
+            logits = logits[:, -1, :]  # (B, vocab)
+
+        if repetition_penalty != 1.0:
+            _apply_repetition_penalty(logits, seq_ids, repetition_penalty)
 
         if step == 0 and allowed_first_token_ids is not None and allowed_first_token_ids:
             mask = torch.full_like(logits, float("-inf"))
@@ -158,6 +237,8 @@ def generate(
             next_token = torch.multinomial(probs, num_samples=1)
 
         idx = torch.cat([idx, next_token], dim=1)
+        if repetition_penalty != 1.0:
+            seq_ids.append(int(next_token.item()))
 
         if eos_token_id is not None and bool((next_token == eos_token_id).all()):
             break

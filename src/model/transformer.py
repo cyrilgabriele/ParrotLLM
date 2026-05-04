@@ -96,6 +96,56 @@ class MultiHeadAttention(nn.Module):
         out = self.resid_dropout(self.o_proj(out))
         return out
 
+    def forward_with_cache(
+        self,
+        x: torch.Tensor,
+        freqs_cis_slice: torch.Tensor,
+        past_kv: tuple[torch.Tensor, torch.Tensor] | None = None,
+    ) -> tuple[torch.Tensor, tuple[torch.Tensor, torch.Tensor]]:
+        """Inference forward with optional KV-cache (VL09 slide 34).
+
+        Two operating modes:
+          - **Prefill** (``past_kv is None``): ``x`` is the full prompt;
+            standard causal self-attention. Returns the freshly-built
+            (k, v) for the next call.
+          - **Decode** (``past_kv`` provided): ``x`` is just the new tokens
+            (typically a single token, B=1). New k/v are concatenated with
+            the cached past, the new query attends to the entire history,
+            and the extended (k, v) is returned.
+
+        ``freqs_cis_slice`` must contain the RoPE frequencies for the
+        positions occupied by ``x`` (i.e. ``freqs_cis[past_T:past_T+T]``).
+        Caller (``ParrotLLM.forward_with_cache``) handles the slicing.
+        """
+        B, T, C = x.shape
+
+        q = self.q_proj(x).view(B, T, self.n_heads, self.d_head).transpose(1, 2)
+        k = self.k_proj(x).view(B, T, self.n_heads, self.d_head).transpose(1, 2)
+        v = self.v_proj(x).view(B, T, self.n_heads, self.d_head).transpose(1, 2)
+
+        # RoPE+QK-Norm only on the NEW slice; past_k is already rotated.
+        q = self.q_norm(apply_rope(q, freqs_cis_slice))
+        k = self.k_norm(apply_rope(k, freqs_cis_slice))
+
+        if past_kv is not None:
+            past_k, past_v = past_kv
+            k = torch.cat([past_k, k], dim=2)
+            v = torch.cat([past_v, v], dim=2)
+        new_kv = (k, v)
+
+        if past_kv is None:
+            # Square attention: q and k both length T.
+            out = F.scaled_dot_product_attention(q, k, v, is_causal=True)
+        else:
+            # Decode: q (length T, typically 1) attends to all of k. No
+            # mask needed when T==1; for T>1 with cache we do not support
+            # this path (no caller does it today).
+            out = F.scaled_dot_product_attention(q, k, v, is_causal=False)
+
+        out = out.transpose(1, 2).contiguous().view(B, T, C)
+        out = self.o_proj(out)
+        return out, new_kv
+
 
 # ── SwiGLU MLP ───────────────────────────────────────────────────────────────
 
@@ -150,6 +200,23 @@ class TransformerBlock(nn.Module):
             mlp_out = self.ln_2_out(mlp_out)
         x = x + mlp_out
         return x
+
+    def forward_with_cache(
+        self,
+        x: torch.Tensor,
+        freqs_cis_slice: torch.Tensor,
+        past_kv: tuple[torch.Tensor, torch.Tensor] | None = None,
+    ) -> tuple[torch.Tensor, tuple[torch.Tensor, torch.Tensor]]:
+        attn_out, new_kv = self.attn.forward_with_cache(
+            self.ln_1(x), freqs_cis_slice, past_kv,
+        )
+        x = x + self.ln_1_out(attn_out)
+        mlp_in = self.ln_2(x) if hasattr(self, "ln_2") else x
+        mlp_out = self.mlp(mlp_in)
+        if hasattr(self, "ln_2_out"):
+            mlp_out = self.ln_2_out(mlp_out)
+        x = x + mlp_out
+        return x, new_kv
 
 
 # ── ParrotLLM ────────────────────────────────────────────────────────────────
@@ -333,3 +400,45 @@ class ParrotLLM(nn.Module):
                 seen.add(p.data_ptr())
                 total += p.numel()
         return total
+
+    @torch.no_grad()
+    def forward_with_cache(
+        self,
+        idx: torch.Tensor,
+        cache: list[tuple[torch.Tensor, torch.Tensor]] | None = None,
+    ) -> tuple[torch.Tensor, list[tuple[torch.Tensor, torch.Tensor]]]:
+        """Inference forward pass with KV-cache (VL09 slides 33–35).
+
+        Args:
+            idx: ``(B, T_new)`` token ids. On the first call, ``T_new`` is
+                the prompt length (prefill). On subsequent calls, ``T_new``
+                is typically 1 (single-step decode).
+            cache: per-block list of ``(past_k, past_v)`` tensors of shape
+                ``(B, n_heads, past_T, d_head)``, or ``None`` for prefill.
+
+        Returns:
+            ``(logits, new_cache)`` where ``logits`` has shape
+            ``(B, T_new, vocab_size)`` and ``new_cache`` is the updated
+            list ready for the next call.
+
+        For PikoGPT (8 KB/token, 8 MB at T=1024) the cache is tiny, so we
+        keep it in the same dtype as the model and never offload. Drops
+        decode complexity from O(t²) to O(t) per the VL09 cheat sheet.
+        """
+        _, T_new = idx.shape
+        past_T = cache[0][0].size(-2) if cache is not None else 0
+
+        x = self.tok_emb(idx)
+
+        freqs_cis_slice = self.freqs_cis[past_T : past_T + T_new]
+
+        new_cache: list[tuple[torch.Tensor, torch.Tensor]] = []
+        for i, block in enumerate(self.blocks):
+            past_kv = cache[i] if cache is not None else None
+            x, new_kv = block.forward_with_cache(x, freqs_cis_slice, past_kv)
+            new_cache.append(new_kv)
+
+        if hasattr(self, "ln_f"):
+            x = self.ln_f(x)
+        logits = self.lm_head(x)
+        return logits, new_cache

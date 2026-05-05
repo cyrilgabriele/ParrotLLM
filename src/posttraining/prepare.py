@@ -525,6 +525,41 @@ def _normalize_cosmos_qa_record(
     return messages, metadata
 
 
+def _normalize_social_iqa_record(
+    record: Mapping[str, Any], source_cfg: SFTSourceConfig
+) -> tuple[list[dict[str, str]], dict[str, Any]] | None:
+    context = str(record.get("context") or "").strip()
+    question = str(record.get("question") or "").strip()
+    answers = [
+        str(record.get("answerA") or "").strip(),
+        str(record.get("answerB") or "").strip(),
+        str(record.get("answerC") or "").strip(),
+    ]
+    label_raw = record.get("label")
+    if not context or not question or any(not a for a in answers) or label_raw is None:
+        return None
+    # SocialIQa labels are 1-based strings ("1", "2", "3").
+    try:
+        answer_index = int(str(label_raw).strip()) - 1
+    except ValueError:
+        return None
+    if not (0 <= answer_index < 3):
+        return None
+
+    cleaned = [clean_message_content(a) for a in answers]
+    if any(not a for a in cleaned):
+        return None
+
+    seed_key = f"{context[:32]}|{question[:32]}"
+    cleaned, answer_index = _permute_choices(cleaned, answer_index, seed_key)
+
+    stem = f"{context}\n{question}"
+    prompt = _format_mc_prompt(stem, cleaned, prefix="Context")
+    messages = _build_mc_messages(prompt, "ABC"[answer_index])
+    metadata = {"rationale": source_cfg.rationale}
+    return messages, metadata
+
+
 def _normalize_race_record(record: Mapping[str, Any], source_cfg: SFTSourceConfig) -> tuple[list[dict[str, str]], dict[str, Any]] | None:
     article = str(record.get("article") or "").strip()
     question = str(record.get("question") or "").strip()
@@ -994,6 +1029,8 @@ def _normalize_source_record(
         return _normalize_commonsense_qa_record(record, source_cfg)
     if source_cfg.loader == "cosmos_qa":
         return _normalize_cosmos_qa_record(record, source_cfg)
+    if source_cfg.loader == "social_iqa":
+        return _normalize_social_iqa_record(record, source_cfg)
     if source_cfg.loader == "race":
         return _normalize_race_record(record, source_cfg)
     if source_cfg.loader == "mmlu":

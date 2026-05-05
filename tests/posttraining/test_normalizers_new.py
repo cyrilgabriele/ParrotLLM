@@ -88,3 +88,59 @@ def test_cosmos_qa_rejects_invalid(field: str, value):
     }
     rec[field] = value
     assert _normalize_cosmos_qa_record(rec, _src("cosmos_qa")) is None
+
+
+from src.posttraining.prepare import _normalize_social_iqa_record
+
+
+def test_social_iqa_basic_record():
+    rec = {
+        "context": "Alex helped his friend study for the exam.",
+        "question": "How would Alex feel afterwards?",
+        "answerA": "happy and proud",
+        "answerB": "sad and rejected",
+        "answerC": "angry",
+        "label": "1",  # SocialIQa uses 1-based string labels
+    }
+    result = _normalize_social_iqa_record(rec, _src("social_iqa"))
+    assert result is not None
+    messages, _meta = result
+    user_prompt = messages[0]["content"]
+    gold_letter = messages[1]["content"]
+
+    # 3-way MC -> letters are A, B, C only.
+    assert gold_letter in {"A", "B", "C"}
+    # Verify all 3 choices are present in the rendered prompt.
+    label_to_answer = _parse_choices(user_prompt)
+    assert set(label_to_answer.keys()) == {"A", "B", "C"}
+    assert sorted(label_to_answer.values()) == sorted(
+        [rec["answerA"], rec["answerB"], rec["answerC"]]
+    )
+    # The gold letter must map back to the original answerA (label "1" = index 0).
+    assert label_to_answer[gold_letter] == rec["answerA"]
+    assert user_prompt.endswith("Answer:")
+
+
+@pytest.mark.parametrize(
+    "field, value",
+    [
+        ("label", "0"),    # 1-based: "0" is invalid
+        ("label", "4"),    # out of range (only A/B/C)
+        ("label", "abc"),  # non-numeric
+        ("label", None),
+        ("context", ""),
+        ("question", ""),
+        ("answerA", ""),
+    ],
+)
+def test_social_iqa_rejects_invalid(field: str, value):
+    rec = {
+        "context": "ctx",
+        "question": "q",
+        "answerA": "a",
+        "answerB": "b",
+        "answerC": "c",
+        "label": "1",
+    }
+    rec[field] = value
+    assert _normalize_social_iqa_record(rec, _src("social_iqa")) is None

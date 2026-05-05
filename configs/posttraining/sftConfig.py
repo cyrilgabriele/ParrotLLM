@@ -24,6 +24,7 @@ class SFTSourceConfig(BaseModel):
         "sciq",
         "commonsense_qa",
         "cosmos_qa",
+        "social_iqa",
         "race",
         "mmlu",
         "boolq",

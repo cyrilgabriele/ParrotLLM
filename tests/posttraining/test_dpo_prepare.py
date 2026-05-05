@@ -177,3 +177,35 @@ def test_build_continuation_dpo_pair_rejects_no_distractors():
         rng=random.Random(0),
     )
     assert pair is None
+
+
+def test_extract_continuation_signals_hellaswag():
+    from src.posttraining.dpo.prepare import _extract_continuation_signals
+    rec = {
+        "ctx": "A man stands on a roof. He",
+        "endings": ["uses skis", "rips tiles", "holds a rubik's cube", "starts pulling up roofing"],
+        "label": 3,
+    }
+    out = _extract_continuation_signals(rec, "hellaswag")
+    assert out is not None
+    prompt, correct, distractors = out
+    assert prompt == "A man stands on a roof. He"
+    assert correct == "starts pulling up roofing"
+    assert len(distractors) == 3
+
+
+def test_extract_continuation_signals_sciq():
+    from src.posttraining.dpo.prepare import _extract_continuation_signals
+    rec = {
+        "question": "What is the unit of electric current?",
+        "correct_answer": "ampere",
+        "distractor1": "volt",
+        "distractor2": "ohm",
+        "distractor3": "watt",
+    }
+    out = _extract_continuation_signals(rec, "sciq")
+    assert out is not None
+    prompt, correct, distractors = out
+    assert "current" in prompt
+    assert correct == "ampere"
+    assert len(distractors) == 3

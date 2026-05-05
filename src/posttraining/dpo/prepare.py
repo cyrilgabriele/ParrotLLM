@@ -16,7 +16,7 @@ import logging
 import random
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any, Iterable
+from typing import Any, Iterable, Mapping
 
 from configs import ProjectConfig
 from src.posttraining.templates import normalize_messages, render_conversation
@@ -190,7 +190,10 @@ def run_prepare_dpo(project_config: ProjectConfig, *, seed: int, hf_token: str |
     dpo = project_config.dpo
     if dpo is None:
         raise ValueError("project config has no `dpo` section")
-    if dpo.preference_format == "mc_letter":
+    pref_format = (dpo.preference_format or "hh_rlhf").strip().lower()
+    if pref_format == "continuation":
+        return _run_prepare_dpo_continuation(project_config, seed=seed, hf_token=hf_token)
+    if pref_format == "mc_letter":
         return _run_prepare_dpo_mc_letter(project_config, seed=seed, hf_token=hf_token)
     return _run_prepare_dpo_hh_rlhf(project_config, seed=seed, hf_token=hf_token)
 
@@ -541,3 +544,253 @@ def _run_prepare_dpo_mc_letter(
         total_kept, total_kept + n_dropped_decontam, n_dropped_decontam,
     )
     log.info("DPO mc_letter prepare finished: %s", manifest)
+
+
+def _extract_continuation_signals(
+    record: Mapping[str, Any], loader: str
+) -> tuple[str, str, list[str]] | None:
+    """Extract (user_prompt, correct_continuation, distractor_continuations)
+    from a raw MC record for continuation-DPO."""
+    if loader == "hellaswag":
+        ctx = str(record.get("ctx") or "").strip()
+        endings = record.get("endings")
+        label = record.get("label")
+        if not ctx or not isinstance(endings, list) or len(endings) != 4 or label is None:
+            return None
+        try:
+            gold_idx = int(label)
+        except (TypeError, ValueError):
+            return None
+        if not (0 <= gold_idx < 4):
+            return None
+        cleaned = [str(e).strip() for e in endings]
+        if any(not e for e in cleaned):
+            return None
+        # Prompt is just the context; we want the model to score natural continuations.
+        return ctx, cleaned[gold_idx], [c for i, c in enumerate(cleaned) if i != gold_idx]
+
+    if loader == "winogrande":
+        sentence = str(record.get("sentence") or "").strip()
+        opt1 = str(record.get("option1") or "").strip()
+        opt2 = str(record.get("option2") or "").strip()
+        answer = str(record.get("answer") or "").strip()
+        if not sentence or not opt1 or not opt2 or answer not in {"1", "2"}:
+            return None
+        gold = opt1 if answer == "1" else opt2
+        wrong = opt2 if answer == "1" else opt1
+        # Replace the underscore in the sentence with the choice for both.
+        # Continuation here is just the option that fills the blank.
+        return sentence, gold, [wrong]
+
+    if loader == "ai2_arc":
+        question = str(record.get("question") or "").strip()
+        raw_choices = record.get("choices") or {}
+        answer_key = str(record.get("answerKey") or "").strip().upper()
+        texts = raw_choices.get("text") if isinstance(raw_choices, Mapping) else None
+        labels = raw_choices.get("label") if isinstance(raw_choices, Mapping) else None
+        if not question or not isinstance(texts, list) or not isinstance(labels, list):
+            return None
+        # Find gold index by label match.
+        gold_idx = None
+        for i, lab in enumerate(labels):
+            if str(lab).strip().upper() == answer_key:
+                gold_idx = i
+                break
+        if gold_idx is None or not (0 <= gold_idx < len(texts)):
+            return None
+        cleaned = [str(t).strip() for t in texts]
+        if any(not t for t in cleaned):
+            return None
+        return question, cleaned[gold_idx], [c for i, c in enumerate(cleaned) if i != gold_idx]
+
+    if loader == "openbookqa":
+        stem = str(record.get("question_stem") or "").strip()
+        raw_choices = record.get("choices") or {}
+        answer_key = str(record.get("answerKey") or "").strip().upper()
+        texts = raw_choices.get("text") if isinstance(raw_choices, Mapping) else None
+        labels = raw_choices.get("label") if isinstance(raw_choices, Mapping) else None
+        if not stem or not isinstance(texts, list) or not isinstance(labels, list):
+            return None
+        gold_idx = None
+        for i, lab in enumerate(labels):
+            if str(lab).strip().upper() == answer_key:
+                gold_idx = i
+                break
+        if gold_idx is None or not (0 <= gold_idx < len(texts)):
+            return None
+        cleaned = [str(t).strip() for t in texts]
+        if any(not t for t in cleaned):
+            return None
+        return stem, cleaned[gold_idx], [c for i, c in enumerate(cleaned) if i != gold_idx]
+
+    if loader == "sciq":
+        q = str(record.get("question") or "").strip()
+        correct = str(record.get("correct_answer") or "").strip()
+        distractors = [
+            str(record.get("distractor1") or "").strip(),
+            str(record.get("distractor2") or "").strip(),
+            str(record.get("distractor3") or "").strip(),
+        ]
+        if not q or not correct or any(not d for d in distractors):
+            return None
+        return q, correct, distractors
+
+    if loader == "commonsense_qa":
+        q = str(record.get("question") or "").strip()
+        raw_choices = record.get("choices") or {}
+        answer_key = str(record.get("answerKey") or "").strip().upper()
+        texts = raw_choices.get("text") if isinstance(raw_choices, Mapping) else None
+        labels = raw_choices.get("label") if isinstance(raw_choices, Mapping) else None
+        if not q or not isinstance(texts, list) or not isinstance(labels, list):
+            return None
+        gold_idx = None
+        for i, lab in enumerate(labels):
+            if str(lab).strip().upper() == answer_key:
+                gold_idx = i
+                break
+        if gold_idx is None or not (0 <= gold_idx < len(texts)):
+            return None
+        cleaned = [str(t).strip() for t in texts]
+        if any(not t for t in cleaned):
+            return None
+        return q, cleaned[gold_idx], [c for i, c in enumerate(cleaned) if i != gold_idx]
+
+    if loader == "mmlu":
+        q = str(record.get("question") or "").strip()
+        choices = record.get("choices")
+        answer = record.get("answer")
+        if not q or not isinstance(choices, list) or len(choices) != 4 or answer is None:
+            return None
+        try:
+            gold_idx = int(answer)
+        except (TypeError, ValueError):
+            return None
+        if not (0 <= gold_idx < 4):
+            return None
+        cleaned = [str(c).strip() for c in choices]
+        if any(not c for c in cleaned):
+            return None
+        return q, cleaned[gold_idx], [c for i, c in enumerate(cleaned) if i != gold_idx]
+
+    return None
+
+
+def _run_prepare_dpo_continuation(
+    project_config: ProjectConfig,
+    *,
+    seed: int,
+    hf_token: str | None = None,
+) -> None:
+    """Build (correct continuation, distractor continuation) preference pairs.
+
+    Mirrors `_run_prepare_dpo_mc_letter` but extracts raw MC choice texts via
+    `_extract_continuation_signals` and packs them through
+    `_build_continuation_dpo_pair`. Reuses the same MinHash + 5-gram + Jaccard
+    0.8 eval-split decontamination machinery (`_build_dpo_decontam_index`).
+    """
+    from datasets import load_dataset
+
+    dpo = project_config.dpo
+    if dpo is None:
+        raise ValueError("project config has no `dpo` section")
+    if not dpo.sources:
+        raise ValueError("dpo.sources is empty; need at least one MC source")
+
+    out_dir = Path(dpo.prepared_dir)
+    out_dir.mkdir(parents=True, exist_ok=True)
+    train_path = out_dir / "train.jsonl"
+    dev_path = out_dir / "dev.jsonl"
+
+    tokenizer = build_tokenizer()
+    decontam_index = _build_dpo_decontam_index(dpo.decontam_datasets)
+    rng = random.Random(int(seed))
+
+    target_total = sum(s.target_pairs for s in dpo.sources)
+    train_target = max(0, target_total - dpo.dev_pairs)
+
+    n_pairs = 0
+    n_train = 0
+    n_dev = 0
+    n_dropped_decontam = 0
+    n_dropped_invalid = 0
+    per_source_counts: dict[str, int] = {}
+
+    with train_path.open("w", encoding="utf-8") as f_train, dev_path.open("w", encoding="utf-8") as f_dev:
+        for source in dpo.sources:
+            if not source.loader:
+                raise ValueError(
+                    f"DPO source {source.name!r} requires a `loader` when "
+                    f"preference_format=continuation (e.g. 'hellaswag', 'sciq', 'ai2_arc')."
+                )
+            log.info("Loading DPO continuation source: %s (%s)", source.name, source.path)
+            ds = load_dataset(
+                source.path,
+                source.subset,
+                split=source.split,
+                cache_dir=str(dpo.cache_dir) if dpo.cache_dir else None,
+                token=hf_token,
+            )
+            count_for_source = 0
+            target_for_source = source.target_pairs
+
+            for raw in ds:
+                if count_for_source >= target_for_source:
+                    break
+                if n_pairs >= target_total:
+                    break
+                signals = _extract_continuation_signals(raw, source.loader)
+                if signals is None:
+                    n_dropped_invalid += 1
+                    continue
+                user_prompt, correct, distractors = signals
+                if decontam_index.contains(user_prompt):
+                    n_dropped_decontam += 1
+                    continue
+                packed = _build_continuation_dpo_pair(
+                    user_prompt=user_prompt,
+                    correct_continuation=correct,
+                    distractor_continuations=distractors,
+                    tokenizer=tokenizer,
+                    system_prompt=dpo.system_prompt,
+                    max_seq_length=dpo.max_seq_length,
+                    rng=rng,
+                )
+                if packed is None:
+                    n_dropped_invalid += 1
+                    continue
+                # Fill dev first so smoke configs (small totals) still get a
+                # nonzero dev split. After dev_pairs is met, all remaining
+                # records flow to train until train_target is reached.
+                if n_dev < dpo.dev_pairs:
+                    f_dev.write(json.dumps(packed) + "\n")
+                    n_dev += 1
+                else:
+                    f_train.write(json.dumps(packed) + "\n")
+                    n_train += 1
+                n_pairs += 1
+                count_for_source += 1
+                if n_train >= train_target and n_dev >= dpo.dev_pairs:
+                    break
+
+            per_source_counts[source.name] = count_for_source
+            log.info("Source %s: built %d continuation pairs", source.name, count_for_source)
+            if n_dev >= dpo.dev_pairs and n_train >= train_target:
+                break
+
+    manifest = {
+        "preference_format": "continuation",
+        "n_train": n_train,
+        "n_dev": n_dev,
+        "n_dropped_decontam": n_dropped_decontam,
+        "n_dropped_invalid": n_dropped_invalid,
+        "per_source": per_source_counts,
+        "train_path": str(train_path),
+        "dev_path": str(dev_path),
+    }
+    (out_dir / "manifest.json").write_text(json.dumps(manifest, indent=2))
+    total_kept = n_train + n_dev
+    log.info(
+        "DPO decontam: kept %d / %d pairs (%d dropped)",
+        total_kept, total_kept + n_dropped_decontam, n_dropped_decontam,
+    )
+    log.info("DPO continuation prepare finished: %s", manifest)

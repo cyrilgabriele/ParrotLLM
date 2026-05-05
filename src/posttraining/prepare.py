@@ -383,6 +383,10 @@ def _normalize_ai2_arc_record(record: Mapping[str, Any], source_cfg: SFTSourceCo
     if answer_index is None:
         return None
 
+    seed_key = str(record.get("id") or question)
+    cleaned_choices, answer_index = _permute_choices(
+        cleaned_choices, answer_index, seed_key
+    )
     prompt = _format_mc_prompt(question, cleaned_choices, prefix="Question")
     messages = _build_mc_messages(prompt, "ABCD"[answer_index])
     metadata = {
@@ -392,6 +396,27 @@ def _normalize_ai2_arc_record(record: Mapping[str, Any], source_cfg: SFTSourceCo
         "rationale": source_cfg.rationale,
     }
     return messages, metadata
+
+
+def _permute_choices(
+    choices: list[str], answer_index: int, seed_key: str
+) -> tuple[list[str], int]:
+    """Deterministically permute MC choices so the gold answer's position
+    is uniform across the dataset rather than tracking the source's bias.
+
+    The permutation is keyed on `seed_key` (typically the example id or
+    question stem) so the same example always permutes to the same order
+    across data-prep runs — the prepared SFT files are reproducible.
+    """
+    import random
+
+    seed = int(hashlib.sha1(seed_key.encode("utf-8")).hexdigest(), 16) % (2**31)
+    rng = random.Random(seed)
+    indices = list(range(len(choices)))
+    rng.shuffle(indices)
+    new_choices = [choices[i] for i in indices]
+    new_answer_index = indices.index(answer_index)
+    return new_choices, new_answer_index
 
 
 def _format_mc_prompt(question: str, choices: list[str], prefix: str | None = "Question") -> str:
@@ -452,6 +477,8 @@ def _normalize_commonsense_qa_record(record: Mapping[str, Any], source_cfg: SFTS
         answer_index = [str(l).strip().upper() for l in labels].index(answer_key)
     except ValueError:
         return None
+    seed_key = str(record.get("id") or question)
+    cleaned, answer_index = _permute_choices(cleaned, answer_index, seed_key)
     prompt = _format_mc_prompt(question, cleaned)
     return _build_mc_messages(prompt, "ABCDE"[answer_index]), {
         "record_id": record.get("id"),
@@ -471,6 +498,8 @@ def _normalize_race_record(record: Mapping[str, Any], source_cfg: SFTSourceConfi
         return None
     answer_index = "ABCD".index(answer)
     prompt_text = f"Passage: {article}\n\nQuestion: {question}"
+    seed_key = str(record.get("example_id") or record.get("id") or prompt_text[:64])
+    cleaned, answer_index = _permute_choices(cleaned, answer_index, seed_key)
     prompt = _format_mc_prompt(prompt_text, cleaned, prefix=None)
     return _build_mc_messages(prompt, "ABCD"[answer_index]), {
         "record_id": record.get("example_id") or record.get("id"),
@@ -498,6 +527,8 @@ def _normalize_mmlu_record(record: Mapping[str, Any], source_cfg: SFTSourceConfi
         return None
     if not (0 <= answer_index < 4):
         return None
+    seed_key = str(record.get("question") or "")[:128]
+    cleaned, answer_index = _permute_choices(cleaned, answer_index, seed_key)
     prompt = _format_mc_prompt(question, cleaned)
     return _build_mc_messages(prompt, "ABCD"[answer_index]), {
         "record_id": record.get("id"),
@@ -535,6 +566,8 @@ def _normalize_piqa_record(record: Mapping[str, Any], source_cfg: SFTSourceConfi
     if answer_index not in (0, 1):
         return None
     options = [sol1, sol2]
+    seed_key = str(record.get("goal") or "")
+    options, answer_index = _permute_choices(options, answer_index, seed_key)
     answer_letter = "AB"[answer_index]
     prompt = _format_mc_prompt(goal, options)
     return _build_mc_messages(prompt, answer_letter), {
@@ -583,6 +616,8 @@ def _normalize_hellaswag_record(record: Mapping[str, Any], source_cfg: SFTSource
         return None
     if answer_index not in (0, 1, 2, 3):
         return None
+    seed_key = str(record.get("ind") or record.get("source_id") or ctx[:64])
+    cleaned, answer_index = _permute_choices(cleaned, answer_index, seed_key)
     prompt = _format_mc_prompt(ctx, cleaned, prefix="Context")
     answer_letter = "ABCD"[answer_index]
     return _build_mc_messages(prompt, answer_letter), {
@@ -656,6 +691,8 @@ def _normalize_openbookqa_record(record: Mapping[str, Any], source_cfg: SFTSourc
         answer_index = [str(l).strip().upper() for l in labels].index(answer_key)
     except ValueError:
         return None
+    seed_key = str(record.get("id") or stem)
+    cleaned, answer_index = _permute_choices(cleaned, answer_index, seed_key)
     prompt = _format_mc_prompt(stem, cleaned, prefix="Question")
     return _build_mc_messages(prompt, "ABCD"[answer_index]), {
         "record_id": record.get("id"),
@@ -676,7 +713,10 @@ def _normalize_winogrande_record(record: Mapping[str, Any], source_cfg: SFTSourc
         return None
     if answer_index not in (0, 1):
         return None
-    prompt = _format_mc_prompt(sentence, [option1, option2], prefix="Context")
+    options = [option1, option2]
+    seed_key = str(record.get("qID") or sentence[:64])
+    options, answer_index = _permute_choices(options, answer_index, seed_key)
+    prompt = _format_mc_prompt(sentence, options, prefix="Context")
     answer_letter = "AB"[answer_index]
     return _build_mc_messages(prompt, answer_letter), {
         "record_id": record.get("qID"),

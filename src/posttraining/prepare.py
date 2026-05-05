@@ -33,6 +33,10 @@ _CHAIN_OF_THOUGHT_RE = re.compile(
     re.IGNORECASE,
 )
 _NON_ALNUM_RE = re.compile(r"[^a-z0-9]+")
+# Mirrors `normalize_lambada` in external/PikoGPT_Leaderboard/leaderboard/run_benchmarks.py
+# so the train-side cloze target uses the same stripping rule the eval-side
+# applies to the model's prediction. Reused by the BookCorpus normalizer.
+_LAMBADA_STRIP_CHARS = " \t\r\n\"'“”‘’.,;:!?()[]{}"
 
 
 @dataclass(slots=True)
@@ -750,15 +754,17 @@ def _normalize_narrative_completion_record(record: Mapping[str, Any], source_cfg
 def _normalize_cbt_record(
     record: Mapping[str, Any], source_cfg: SFTSourceConfig
 ) -> tuple[list[dict[str, str]], dict[str, Any]] | None:
-    """Render CBT examples as LAMBADA-shape (passage_minus_last_word, last_word).
+    """Render CBT examples as LAMBADA-shape (passage_minus_cloze, cloze_answer).
 
     The HF `cbt` schema provides:
       - sentences: 20 sentences of context
-      - question: a 21st sentence with the answer replaced by 'XXXXX'
-      - answer: the missing word
+      - question: a 21st sentence with the cloze position marked 'XXXXX'
+      - answer: the cloze word (typically a character name)
 
-    We build a coherent passage by joining sentences + the question with the
-    answer substituted, then strip the final word as the assistant target.
+    We build the prompt as <context> + <question_prefix_before_XXXXX> with a
+    trailing space, and use `answer` itself as the assistant target. Anything
+    after XXXXX in the question is discarded — the model learns to predict
+    the cloze answer from the long-range context, exactly as LAMBADA tests.
     """
     sentences = record.get("sentences")
     question = str(record.get("question") or "").strip()
@@ -766,37 +772,24 @@ def _normalize_cbt_record(
     if not isinstance(sentences, list) or not sentences or not question or not answer:
         return None
 
-    # Reconstruct the full final sentence with the answer in place of XXXXX.
     if "XXXXX" not in question:
         return None
-    completed = question.replace("XXXXX", answer)
-
-    # The LAMBADA-shape target is the LAST whitespace-separated word of `completed`.
-    parts = completed.rsplit(" ", 1)
-    if len(parts) != 2:
-        return None
-    final_prefix, last_word = parts
-    # Strip terminal punctuation from the target word (e.g. "snow." -> "snow")
-    # so the assistant produces a bare token, mirroring LAMBADA's word-level target.
-    last_word = last_word.rstrip(".,!?;:\"')")
-    if not last_word:
-        return None
+    head, _tail = question.split("XXXXX", 1)
 
     context = " ".join(str(s).strip() for s in sentences if str(s).strip())
     if not context:
         return None
 
-    # Prompt is "<context> <final_sentence_minus_last_word> " — trailing space
-    # mirrors the LAMBADA benchmark prompt shape.
-    prompt = f"{context} {final_prefix} "
+    # Trailing space mirrors the LAMBADA benchmark prompt shape.
+    prompt = f"{context} {head.rstrip()} "
 
-    cleaned_word = clean_message_content(last_word)
-    if not cleaned_word:
+    cleaned_answer = clean_message_content(answer).strip(_LAMBADA_STRIP_CHARS)
+    if not cleaned_answer:
         return None
 
     messages = [
         {"role": "user", "content": prompt},
-        {"role": "assistant", "content": cleaned_word},
+        {"role": "assistant", "content": cleaned_answer.lower()},
     ]
     metadata = {"rationale": source_cfg.rationale, "kind": "lambada_shape"}
     return messages, metadata

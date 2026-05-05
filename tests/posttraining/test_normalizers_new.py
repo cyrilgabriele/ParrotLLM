@@ -154,25 +154,31 @@ def test_cbt_basic_record():
             "The villagers were preparing for winter.",
             "Snow had begun to fall lightly.",
         ],
-        "question": "The children played happily in the XXXXX.",
-        "answer": "snow",
-        "options": ["village", "snow", "winter", "house", "field"],
+        "question": "Then XXXXX returned to the house.",
+        "answer": "Mary",
+        "options": ["village", "snow", "winter", "Mary", "field"],
     }
 
     result = _normalize_cbt_record(rec, _src("cbt"))
     assert result is not None
     messages, _meta = result
-    assert len(messages) == 2
-    assistant = messages[1]["content"]
     user = messages[0]["content"]
+    assistant = messages[1]["content"]
 
-    # The assistant target is the missing word.
-    assert assistant.strip().lower() == "snow"
-    # The user prompt is the passage with a trailing space, ready for greedy continuation.
-    assert user.endswith(" ") or user.endswith("\n")
-    # The original blank ("XXXXX") must NOT be in the prompt — it's been resolved
-    # into context preceding the predicted final word.
+    # The assistant target IS the cloze answer (lowercased per LAMBADA convention).
+    assert assistant.strip() == "mary"
+    # Prompt ends with a single trailing space, ready for greedy continuation.
+    assert user.endswith(" ")
+    assert not user.endswith("  ")
+    # Everything after the blank in the question must NOT appear in the prompt —
+    # only the head (before XXXXX) is included, so the model is genuinely
+    # predicting the cloze, not parroting the rest of the question.
+    assert "returned to the house" not in user
     assert "XXXXX" not in user
+    # The context sentences are present.
+    assert "Once upon a time" in user
+    # The question's prefix word is present.
+    assert "Then" in user
 
 
 @pytest.mark.parametrize(

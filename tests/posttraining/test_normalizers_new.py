@@ -296,3 +296,50 @@ def test_flan_mc_extracts_letter_from_leading_letter_response():
     assert result is not None
     messages, _meta = result
     assert messages[1]["content"] == "C"
+
+
+def test_flan_mc_anchored_answer_wins_over_leading_letter():
+    """A response starting with 'A long story' but stating 'answer is B'
+    must extract B, not A. This is the bug-1 regression test."""
+    rec = {
+        "question": (
+            "Which choice is correct?\n"
+            "A) one\nB) two\nC) three\nD) four\nAnswer:"
+        ),
+        "response": "A long story. After thinking, the answer is B.",
+    }
+    result = _normalize_flan_mc_record(rec, _src("flan_mc"))
+    assert result is not None
+    assert result[0][1]["content"] == "B"
+
+
+def test_flan_mc_rejects_leading_letter_in_prose():
+    """A bare leading 'A' embedded in prose (no anchored answer) must be
+    rejected — we don't trust prose-leading letters as gold labels."""
+    rec = {
+        "question": "Q?\nA) x\nB) y\nC) z\nD) w\nAnswer:",
+        "response": "A man walked into the room. He looked around.",
+    }
+    assert _normalize_flan_mc_record(rec, _src("flan_mc")) is None
+
+
+def test_flan_mc_rejects_gold_outside_question_choices():
+    """A binary question paired with a 'C' response must be rejected —
+    C isn't even one of the choices. This is the bug-2 regression test."""
+    rec = {
+        "question": "Yes or no?\nA) yes\nB) no\nAnswer:",
+        "response": "The answer is C.",
+    }
+    assert _normalize_flan_mc_record(rec, _src("flan_mc")) is None
+
+
+def test_flan_mc_accepts_punctuated_bare_letter():
+    """Bare-letter responses with trailing punctuation (e.g. 'B.') are
+    still accepted."""
+    rec = {
+        "question": "Q?\nA) x\nB) y\nC) z\nD) w\nAnswer:",
+        "response": "B.",
+    }
+    result = _normalize_flan_mc_record(rec, _src("flan_mc"))
+    assert result is not None
+    assert result[0][1]["content"] == "B"

@@ -830,12 +830,23 @@ def _normalize_bookcorpus_lambada_record(
     return messages, metadata
 
 
-_FLAN_MC_QUESTION_PATTERN = re.compile(
-    r"(?:^|\n)\s*[A-D]\)\s+\S",  # detects "A) ...", "B) ..."
-)
-_FLAN_MC_RESPONSE_LETTER_PATTERN = re.compile(
-    r"(?:answer\s*(?:is|:)\s*|^\s*)([A-D])\b",
+# Anchored "answer is X" / "answer: X" pattern. We try this first because it
+# disambiguates from leading-letter false positives like "A long story...".
+_FLAN_MC_RESPONSE_ANSWER_PATTERN = re.compile(
+    r"answer\s*(?:is|:)\s*([A-D])\b",
     re.IGNORECASE,
+)
+
+# Bare-letter response: "C", "B.", "A)" — only accepted as a full-response match
+# (not embedded in prose). Prevents "A long story." from being mislabeled.
+_FLAN_MC_BARE_LETTER_PATTERN = re.compile(
+    r"^\s*([A-D])\s*[.)\]]?\s*$",
+    re.IGNORECASE,
+)
+
+# Question-shape detector: a line starting with "A) ..." through "D) ...".
+_FLAN_MC_QUESTION_PATTERN = re.compile(
+    r"(?:^|\n)\s*([A-D])\)\s+\S",
 )
 
 
@@ -851,21 +862,28 @@ def _normalize_flan_mc_record(
         return None
 
     # Require the question to look MC-shaped (at least 2 lettered options).
-    matches = _FLAN_MC_QUESTION_PATTERN.findall(question)
-    if len(matches) < 2:
+    present_letters = {m.upper() for m in _FLAN_MC_QUESTION_PATTERN.findall(question)}
+    if len(present_letters) < 2:
         return None
 
-    # Parse the gold letter from the response. Look for "answer is X" / "answer: X"
-    # patterns, falling back to a leading single-letter line.
-    letter_match = _FLAN_MC_RESPONSE_LETTER_PATTERN.search(response)
-    if letter_match is None:
-        return None
-    gold_letter = letter_match.group(1).upper()
-    if gold_letter not in {"A", "B", "C", "D"}:
+    # Two-pass letter extraction: prefer "answer is X" / "answer: X" anchor,
+    # only fall back to bare-letter responses ("C", "B.") if no anchored
+    # match is found. The bare-letter fallback uses fullmatch semantics so
+    # it does not silently fire on prose that happens to start with A-D.
+    answer_match = _FLAN_MC_RESPONSE_ANSWER_PATTERN.search(response)
+    if answer_match is not None:
+        gold_letter = answer_match.group(1).upper()
+    else:
+        bare_match = _FLAN_MC_BARE_LETTER_PATTERN.match(response)
+        if bare_match is None:
+            return None
+        gold_letter = bare_match.group(1).upper()
+
+    # Reject responses whose gold letter isn't one of the question's actual
+    # choices (e.g. response says "C" on an A/B-only question).
+    if gold_letter not in present_letters:
         return None
 
-    # Don't re-render the question — preserve the source's MC layout to maximize
-    # format-distribution diversity. The model trains to emit just the letter.
     cleaned_question = clean_message_content(question)
     if not cleaned_question:
         return None

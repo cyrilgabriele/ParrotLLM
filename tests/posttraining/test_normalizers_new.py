@@ -7,7 +7,11 @@ import re
 import pytest
 
 from configs import SFTSourceConfig
-from src.posttraining.prepare import _normalize_cosmos_qa_record
+from src.posttraining.prepare import (
+    _normalize_cbt_record,
+    _normalize_cosmos_qa_record,
+    _normalize_social_iqa_record,
+)
 
 _CHOICE_RE = re.compile(r"^([A-Z])\) (.+?)$", re.MULTILINE)
 
@@ -90,9 +94,6 @@ def test_cosmos_qa_rejects_invalid(field: str, value):
     assert _normalize_cosmos_qa_record(rec, _src("cosmos_qa")) is None
 
 
-from src.posttraining.prepare import _normalize_social_iqa_record
-
-
 def test_social_iqa_basic_record():
     rec = {
         "context": "Alex helped his friend study for the exam.",
@@ -144,3 +145,51 @@ def test_social_iqa_rejects_invalid(field: str, value):
     }
     rec[field] = value
     assert _normalize_social_iqa_record(rec, _src("social_iqa")) is None
+
+
+def test_cbt_basic_record():
+    rec = {
+        "sentences": [
+            "Once upon a time there was a small village.",
+            "The villagers were preparing for winter.",
+            "Snow had begun to fall lightly.",
+        ],
+        "question": "The children played happily in the XXXXX.",
+        "answer": "snow",
+        "options": ["village", "snow", "winter", "house", "field"],
+    }
+
+    result = _normalize_cbt_record(rec, _src("cbt"))
+    assert result is not None
+    messages, _meta = result
+    assert len(messages) == 2
+    assistant = messages[1]["content"]
+    user = messages[0]["content"]
+
+    # The assistant target is the missing word.
+    assert assistant.strip().lower() == "snow"
+    # The user prompt is the passage with a trailing space, ready for greedy continuation.
+    assert user.endswith(" ") or user.endswith("\n")
+    # The original blank ("XXXXX") must NOT be in the prompt — it's been resolved
+    # into context preceding the predicted final word.
+    assert "XXXXX" not in user
+
+
+@pytest.mark.parametrize(
+    "field, value",
+    [
+        ("sentences", []),               # no context sentences
+        ("sentences", None),             # missing
+        ("question", ""),                # empty question
+        ("question", "no blank here."),  # no XXXXX marker
+        ("answer", ""),                  # empty answer
+    ],
+)
+def test_cbt_rejects_invalid(field, value):
+    rec = {
+        "sentences": ["Sentence one.", "Sentence two."],
+        "question": "The kids ran into the XXXXX.",
+        "answer": "field",
+    }
+    rec[field] = value
+    assert _normalize_cbt_record(rec, _src("cbt")) is None

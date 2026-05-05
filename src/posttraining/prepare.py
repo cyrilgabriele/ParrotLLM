@@ -747,6 +747,61 @@ def _normalize_narrative_completion_record(record: Mapping[str, Any], source_cfg
     }
 
 
+def _normalize_cbt_record(
+    record: Mapping[str, Any], source_cfg: SFTSourceConfig
+) -> tuple[list[dict[str, str]], dict[str, Any]] | None:
+    """Render CBT examples as LAMBADA-shape (passage_minus_last_word, last_word).
+
+    The HF `cbt` schema provides:
+      - sentences: 20 sentences of context
+      - question: a 21st sentence with the answer replaced by 'XXXXX'
+      - answer: the missing word
+
+    We build a coherent passage by joining sentences + the question with the
+    answer substituted, then strip the final word as the assistant target.
+    """
+    sentences = record.get("sentences")
+    question = str(record.get("question") or "").strip()
+    answer = str(record.get("answer") or "").strip()
+    if not isinstance(sentences, list) or not sentences or not question or not answer:
+        return None
+
+    # Reconstruct the full final sentence with the answer in place of XXXXX.
+    if "XXXXX" not in question:
+        return None
+    completed = question.replace("XXXXX", answer)
+
+    # The LAMBADA-shape target is the LAST whitespace-separated word of `completed`.
+    parts = completed.rsplit(" ", 1)
+    if len(parts) != 2:
+        return None
+    final_prefix, last_word = parts
+    # Strip terminal punctuation from the target word (e.g. "snow." -> "snow")
+    # so the assistant produces a bare token, mirroring LAMBADA's word-level target.
+    last_word = last_word.rstrip(".,!?;:\"')")
+    if not last_word:
+        return None
+
+    context = " ".join(str(s).strip() for s in sentences if str(s).strip())
+    if not context:
+        return None
+
+    # Prompt is "<context> <final_sentence_minus_last_word> " — trailing space
+    # mirrors the LAMBADA benchmark prompt shape.
+    prompt = f"{context} {final_prefix} "
+
+    cleaned_word = clean_message_content(last_word)
+    if not cleaned_word:
+        return None
+
+    messages = [
+        {"role": "user", "content": prompt},
+        {"role": "assistant", "content": cleaned_word},
+    ]
+    metadata = {"rationale": source_cfg.rationale, "kind": "lambada_shape"}
+    return messages, metadata
+
+
 def _normalize_openbookqa_record(record: Mapping[str, Any], source_cfg: SFTSourceConfig) -> tuple[list[dict[str, str]], dict[str, Any]] | None:
     # allenai/openbookqa fields: question_stem, choices={text, label}, answerKey, id.
     stem = str(record.get("question_stem") or "").strip()
@@ -1049,6 +1104,8 @@ def _normalize_source_record(
         return _normalize_openbookqa_record(record, source_cfg)
     if source_cfg.loader == "narrative_completion":
         return _normalize_narrative_completion_record(record, source_cfg)
+    if source_cfg.loader == "cbt":
+        return _normalize_cbt_record(record, source_cfg)
     raise ValueError(f"Unsupported loader for record-level normalization: {source_cfg.loader}")
 
 

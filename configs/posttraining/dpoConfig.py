@@ -62,7 +62,7 @@ class DPOConfig(BaseModel):
     keep_best_checkpoints: int = Field(default=2, ge=1)
 
     # Data.
-    preference_format: Literal["hh_rlhf", "mc_letter"] = Field(default="hh_rlhf")
+    preference_format: Literal["hh_rlhf", "mc_letter", "continuation"] = Field(default="hh_rlhf")
     sources: list[DPOSourceConfig] = Field(default_factory=list)
     decontam_datasets: list = Field(default_factory=list)
     dev_pairs: int = Field(default=500, ge=1)

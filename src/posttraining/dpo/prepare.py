@@ -317,6 +317,53 @@ def _build_letter_dpo_pair(
     }
 
 
+def _build_continuation_dpo_pair(
+    *,
+    user_prompt: str,
+    correct_continuation: str,
+    distractor_continuations: list[str],
+    tokenizer,
+    system_prompt: str,
+    max_seq_length: int,
+    rng: random.Random,
+) -> dict[str, Any] | None:
+    """Build a (prompt, chosen=correct continuation, rejected=distractor continuation) pair.
+
+    Mirrors `_build_letter_dpo_pair`: same return shape so the existing DPO trainer
+    consumes it unchanged. The chosen response is the correct continuation text
+    (full text, not just a letter); the rejected response is a randomly-sampled
+    distractor continuation from the same MC option set.
+    """
+    if not distractor_continuations:
+        return None
+    rejected_continuation = rng.choice(distractor_continuations)
+
+    prompt_messages = normalize_messages(
+        [{"role": "user", "content": user_prompt}],
+        system_prompt=system_prompt,
+        require_final_assistant=False,
+    )
+    prompt_render = render_conversation(prompt_messages, add_generation_prompt=True)
+    prompt_text = prompt_render.text  # ends with "\n\n### Response:\n"
+
+    chosen_text = prompt_text + correct_continuation.strip()
+    rejected_text = prompt_text + rejected_continuation.strip()
+
+    prompt_tokens = tokenizer.encode(prompt_text)
+    chosen_tokens = tokenizer.encode(chosen_text)
+    rejected_tokens = tokenizer.encode(rejected_text)
+
+    if len(chosen_tokens) > max_seq_length or len(rejected_tokens) > max_seq_length:
+        return None
+
+    return {
+        "prompt_tokens": prompt_tokens,
+        "chosen_tokens": chosen_tokens,
+        "rejected_tokens": rejected_tokens,
+        "prompt_len": len(prompt_tokens),
+    }
+
+
 def _run_prepare_dpo_mc_letter(
     project_config: ProjectConfig,
     *,

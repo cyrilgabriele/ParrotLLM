@@ -129,3 +129,51 @@ def test_dpo_decontam_drops_leaked_pair() -> None:
     kept_idx = _filter_decontaminated([pair_clean, pair_leaked], index)
     assert len(kept_idx) == 1
     assert "leaked" not in kept_idx[0]["prompt"].lower()
+
+
+def test_build_continuation_dpo_pair_basic():
+    from src.posttraining.dpo.prepare import _build_continuation_dpo_pair
+    from src.utils import build_tokenizer
+    import random
+
+    tokenizer = build_tokenizer()
+    rng = random.Random(0)
+
+    pair = _build_continuation_dpo_pair(
+        user_prompt="Context: A man stands on a roof. He",
+        correct_continuation="starts pulling up roofing.",
+        distractor_continuations=[
+            "is using wrap to wrap a pair of skis.",
+            "is holding a rubik's cube.",
+            "starts pulling up tomatoes.",
+        ],
+        tokenizer=tokenizer,
+        system_prompt="You are ParrotLLM.",
+        max_seq_length=1024,
+        rng=rng,
+    )
+
+    assert pair is not None
+    assert "prompt_tokens" in pair
+    assert "chosen_tokens" in pair
+    assert "rejected_tokens" in pair
+    assert pair["chosen_tokens"] != pair["rejected_tokens"]
+    assert len(pair["chosen_tokens"]) > pair["prompt_len"]
+    assert len(pair["rejected_tokens"]) > pair["prompt_len"]
+
+
+def test_build_continuation_dpo_pair_rejects_no_distractors():
+    from src.posttraining.dpo.prepare import _build_continuation_dpo_pair
+    from src.utils import build_tokenizer
+    import random
+
+    pair = _build_continuation_dpo_pair(
+        user_prompt="Q?",
+        correct_continuation="answer",
+        distractor_continuations=[],
+        tokenizer=build_tokenizer(),
+        system_prompt="You are ParrotLLM.",
+        max_seq_length=1024,
+        rng=random.Random(0),
+    )
+    assert pair is None

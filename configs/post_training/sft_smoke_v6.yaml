@@ -1,0 +1,73 @@
+# SFT v6 SMOKE TEST — verifies the synthetic raw-format mixin pipeline
+# end-to-end before committing to the full overnight run.
+#
+# - Trains for ~1 epoch on a tiny Alpaca slice + the full synthetic JSONL
+# - Pass criterion: after training, the leaderboard runner sees the model
+#   emit A/B/C/D as the first generated character on ≥ 80% of MC prompts.
+#
+# Model + base unchanged from sft_v6_8b. Evals are dialed down so the
+# whole smoke fits inside a few minutes on the 5090.
+
+model:
+  vocab_size: 50258
+  pad_token_id: 50257
+  bos_token_id: 50256
+  eos_token_id: 50256
+  d_model: 384
+  n_layers: 14
+  n_heads: 6
+  d_ff: 768
+  context_length: 1024
+  bias: false
+  dropout: 0.0
+  rope_theta: 10000.0
+  gradient_checkpointing: false
+
+logging:
+  console_level: INFO
+  file_level: INFO
+
+sft:
+  hf_dataset_name: tatsu-lab/alpaca
+  hf_split: train
+  max_examples: 200          # tiny Alpaca slice
+  val_fraction: 0.05
+  decontam_benchmarks: []     # skip for speed; smoke is plumbing-only
+
+  synthetic_jsonl_path: data/synthetic/sft_v6_combined.jsonl
+  synthetic_oversample: 1     # 2.3k synthetic, 200 alpaca -> ~92% synthetic
+
+  max_length: 1024
+
+  learning_rate: 1.0e-5
+  min_lr: 1.0e-6
+  weight_decay: 0.1
+  beta1: 0.9
+  beta2: 0.95
+  grad_clip: 1.0
+
+  warmup_steps: 20
+  epochs: 1
+  lr_schedule: cosine
+
+  batch_size: 8
+  gradient_accumulation_steps: 4
+  num_workers: 0
+  pin_memory: true
+
+  pretraining_mix_ratio: 0.0  # off for smoke
+  pretraining_bin_path: null
+
+  wt103_eval_every_n_evals: 0
+  wt103_max_sequences: 32
+  wt103_hard_stop_pct: 100.0  # disabled
+
+  runs_dir: runs
+  eval_every: 50
+  save_every: 999999
+  log_every: 5
+  early_stopping_patience: 999
+
+  base_checkpoint: runs/big_run/exp_c_8b/run_20260410_044337/checkpoints/best_loss_3p2650_epoch_0000_step_0095500.pt
+  device: auto
+  torch_compile: false        # skip compile for fast iteration

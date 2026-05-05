@@ -1,0 +1,77 @@
+# SFT v2 — CF-mitigated. The v1 default run hit the WT-103 hard-stop
+# at step 1000 with PPL +19.6% above baseline. This config enables the
+# three mitigations from VL07 slide 25 / SFT.md §3.4 to keep CF in green:
+#   1. Pretraining-mix at 5% of batches
+#   2. Lower LR (half the default)
+#   3. WT-103 measured every SFT eval (not every 5th) so we see the curve
+
+model:
+  vocab_size: 50258
+  pad_token_id: 50257
+  bos_token_id: 50256
+  eos_token_id: 50256
+  d_model: 384
+  n_layers: 14
+  n_heads: 6
+  d_ff: 768
+  context_length: 1024
+  bias: false
+  dropout: 0.0
+  rope_theta: 10000.0
+  gradient_checkpointing: false
+
+logging:
+  console_level: INFO
+  file_level: INFO
+
+sft:
+  hf_dataset_name: tatsu-lab/alpaca
+  hf_split: train
+  max_examples: null
+  val_fraction: 0.05
+  decontam_benchmarks:
+    - lambada
+    - hellaswag
+    - winogrande
+    - openbookqa
+
+  max_length: 1024
+
+  # LR halved to slow the parameter drift that caused +19.6% WT-103 in v1
+  learning_rate: 1.0e-5
+  min_lr: 1.0e-6
+  weight_decay: 0.1
+  beta1: 0.9
+  beta2: 0.95
+  grad_clip: 1.0
+
+  warmup_steps: 50
+  epochs: 2
+  lr_schedule: cosine
+
+  batch_size: 8
+  gradient_accumulation_steps: 8
+  num_workers: 0
+  pin_memory: true
+
+  # CF mitigation #1 (VL07 slide 25): 5% of batches drawn from pretraining
+  # tokens, supervised on next-token loss like the base model was. This
+  # tethers the model to its original distribution while it learns the
+  # Alpaca format on the other 95%.
+  pretraining_mix_ratio: 0.05
+  pretraining_bin_path: data/exp_c/train.bin
+
+  # WT-103 every eval (not every 5th) so we see CF onset, not just bound.
+  wt103_eval_every_n_evals: 1
+  wt103_max_sequences: 64
+  wt103_hard_stop_pct: 10.0
+
+  runs_dir: runs
+  eval_every: 100         # halved from 200: more CF visibility
+  save_every: 999999      # disable mid-run "last" save spam; only best/final
+  log_every: 10
+  early_stopping_patience: 3   # plateau after 3 evals → stop; CF tripwire is the other guardrail
+
+  base_checkpoint: null
+  device: auto
+  torch_compile: true

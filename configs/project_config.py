@@ -12,6 +12,8 @@ from .preprocessing.preprocessConfig import PreprocessConfig
 from .training.trainingConfig import HfUploadConfig, ModelConfig, TrainingConfig
 from .tuning.tuneConfig import TuneConfig
 from .loggingConfig import LoggingConfig
+from .post_training.sftConfig import SFTConfig
+from .post_training.dpoConfig import DPOConfig
 
 
 class EvalDatasetConfig(BaseModel):
@@ -40,6 +42,8 @@ class InferenceConfig(BaseModel):
     temperature: float = Field(..., ge=0.0)
     top_k: PositiveInt = Field(...)
     top_p: float = Field(..., gt=0.0, le=1.0)
+    # VL09 slide 25 — θ=1.0 disables; PikoGPT default 1.1.
+    repetition_penalty: float = Field(default=1.0, ge=1.0, le=2.0)
 
 
 class ChatConfig(BaseModel):
@@ -50,6 +54,8 @@ class ChatConfig(BaseModel):
     temperature: float = Field(..., ge=0.0)
     top_k: PositiveInt = Field(...)
     top_p: float = Field(..., gt=0.0, le=1.0)
+    # VL09 slide 30 "PikoGPT default": θ=1.1.
+    repetition_penalty: float = Field(default=1.1, ge=1.0, le=2.0)
     system_prompt: str = Field(...)
     checkpoint_dir: Path = Field(...)
 
@@ -74,6 +80,8 @@ class ProjectConfig(BaseModel):
     eval: EvalConfig | None = None
     inference: InferenceConfig | None = None
     chat: ChatConfig | None = None
+    sft: SFTConfig | None = None  # VL07 post-training stage (see configs/post_training/sftConfig.py)
+    dpo: DPOConfig | None = None  # VL08 post-training stage (see configs/post_training/dpoConfig.py)
 
 
 def load_project_config(config_path: str | Path) -> ProjectConfig:
@@ -121,8 +129,10 @@ __all__ = [
     "EvalConfig",
     "EvalDatasetConfig",
     "HfUploadConfig",
+    "DPOConfig",
     "InferenceConfig",
     "ProjectConfig",
+    "SFTConfig",
     "load_project_config",
     "load_project_config_from_checkpoint",
 ]

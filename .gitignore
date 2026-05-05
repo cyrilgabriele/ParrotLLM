@@ -228,3 +228,5 @@ best_params.yaml
 .DS_Store
 src/parrotllm.egg-info
 local_files/
+local_files/.claude/
+.claude/

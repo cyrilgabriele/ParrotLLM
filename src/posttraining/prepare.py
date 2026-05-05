@@ -486,6 +486,45 @@ def _normalize_commonsense_qa_record(record: Mapping[str, Any], source_cfg: SFTS
     }
 
 
+def _normalize_cosmos_qa_record(
+    record: Mapping[str, Any], source_cfg: SFTSourceConfig
+) -> tuple[list[dict[str, str]], dict[str, Any]] | None:
+    context = str(record.get("context") or "").strip()
+    question = str(record.get("question") or "").strip()
+    answers = [
+        str(record.get("answer0") or "").strip(),
+        str(record.get("answer1") or "").strip(),
+        str(record.get("answer2") or "").strip(),
+        str(record.get("answer3") or "").strip(),
+    ]
+    label = record.get("label")
+    if not context or not question or any(not a for a in answers) or label is None:
+        return None
+    try:
+        answer_index = int(label)
+    except (TypeError, ValueError):
+        return None
+    if not (0 <= answer_index < 4):
+        return None
+
+    cleaned = [clean_message_content(a) for a in answers]
+    if any(not a for a in cleaned):
+        return None
+
+    seed_key = str(record.get("id") or f"{context[:32]}|{question[:32]}")
+    cleaned, answer_index = _permute_choices(cleaned, answer_index, seed_key)
+
+    # Render context + question together as the MC stem, headed "Context:".
+    stem = f"{context}\n{question}"
+    prompt = _format_mc_prompt(stem, cleaned, prefix="Context")
+    messages = _build_mc_messages(prompt, "ABCD"[answer_index])
+    metadata = {
+        "record_id": record.get("id"),
+        "rationale": source_cfg.rationale,
+    }
+    return messages, metadata
+
+
 def _normalize_race_record(record: Mapping[str, Any], source_cfg: SFTSourceConfig) -> tuple[list[dict[str, str]], dict[str, Any]] | None:
     article = str(record.get("article") or "").strip()
     question = str(record.get("question") or "").strip()
@@ -953,6 +992,8 @@ def _normalize_source_record(
         return _normalize_sciq_record(record, source_cfg)
     if source_cfg.loader == "commonsense_qa":
         return _normalize_commonsense_qa_record(record, source_cfg)
+    if source_cfg.loader == "cosmos_qa":
+        return _normalize_cosmos_qa_record(record, source_cfg)
     if source_cfg.loader == "race":
         return _normalize_race_record(record, source_cfg)
     if source_cfg.loader == "mmlu":

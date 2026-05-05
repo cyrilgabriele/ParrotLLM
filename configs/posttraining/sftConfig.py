@@ -23,6 +23,7 @@ class SFTSourceConfig(BaseModel):
         "local_jsonl",
         "sciq",
         "commonsense_qa",
+        "cosmos_qa",
         "race",
         "mmlu",
         "boolq",

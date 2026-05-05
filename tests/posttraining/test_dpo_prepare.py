@@ -87,3 +87,45 @@ def test_pack_pair_renders_user_question_into_prompt() -> None:
     assert decoded_prompt.rstrip().endswith("### Response:"), (
         f"Prompt should end with the assistant header. decoded prompt = {decoded_prompt!r}"
     )
+
+
+def test_dpo_decontam_drops_leaked_pair() -> None:
+    """A pair whose prompt matches a decontam-set entry must be dropped.
+
+    Verifies the `_filter_decontaminated` helper supports both:
+      - a flat `set[str]` of normalized eval-split prompt substrings, and
+      - a `PromptContaminationIndex` (MinHash + 5-gram + Jaccard 0.8).
+    """
+    from src.posttraining.dpo.prepare import _filter_decontaminated
+    from src.posttraining.prepare import PromptContaminationIndex
+
+    pair_clean = {
+        "prompt": "A clean MC question.\nA) one\nB) two\nAnswer:",
+        "prompt_tokens": [1, 2, 3],
+        "chosen_tokens": [1, 2, 3, 4],
+        "rejected_tokens": [1, 2, 3, 5],
+        "prompt_len": 3,
+    }
+    pair_leaked = {
+        "prompt": "this is the leaked context that should be dropped\nA) x\nB) y\nAnswer:",
+        "prompt_tokens": [1, 2, 3],
+        "chosen_tokens": [1, 2, 3, 4],
+        "rejected_tokens": [1, 2, 3, 5],
+        "prompt_len": 3,
+    }
+
+    # Path 1: flat set of normalized substrings.
+    decontam_set = {"this is the leaked context that should be dropped"}
+    kept = _filter_decontaminated([pair_clean, pair_leaked], decontam_set)
+    assert len(kept) == 1
+    assert "leaked" not in kept[0]["prompt"].lower()
+
+    # Path 2: PromptContaminationIndex (MinHash, used in production).
+    # Add the exact normalized prompt so the index's exact-hash short-circuit
+    # fires; the MinHash + Jaccard 0.8 path also covers near-duplicates but
+    # needs >= 0.8 shingle overlap, so we use exact-match here for determinism.
+    index = PromptContaminationIndex()
+    index.add(pair_leaked["prompt"])
+    kept_idx = _filter_decontaminated([pair_clean, pair_leaked], index)
+    assert len(kept_idx) == 1
+    assert "leaked" not in kept_idx[0]["prompt"].lower()

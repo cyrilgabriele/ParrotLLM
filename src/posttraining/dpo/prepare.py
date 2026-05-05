@@ -114,21 +114,75 @@ def pack_pair(
 
 
 def _decontam_set(decontam_specs: Iterable, tokenizer) -> set[str]:
-    """Phase 1 stub: returns empty set.
+    """Legacy HH-RLHF stub: returns empty set.
 
-    Real decontam against the SFT eval corpora (HellaSwag/WinoGrande/OBQA/LAMBADA)
-    would use src.posttraining.prepare._build_decontam_index + PromptContaminationIndex.
-    Skipped for Phase 1 because HH-RLHF prompts rarely overlap with cloze benchmarks
-    in practice. Re-enable here if Phase 1 acceptance turns up suspected contamination.
+    Kept for the HH-RLHF path which uses sha1(prompt) hash blocklist semantics.
+    The real eval-split decontam for the MC-letter path lives in
+    `_build_dpo_decontam_index` + `_filter_decontaminated`, which use the
+    same MinHash + 5-gram + Jaccard 0.8 machinery as the SFT side.
     """
     specs_list = list(decontam_specs)
     if specs_list:
         log.info(
-            "DPO decontam stub active — %d decontam_datasets entries ignored. "
-            "Wire to PromptContaminationIndex if benchmarks regress unexpectedly.",
+            "DPO HH-RLHF decontam stub active (%d decontam_datasets entries ignored). "
+            "MC-letter path uses _build_dpo_decontam_index instead.",
             len(specs_list),
         )
     return set()
+
+
+def _build_dpo_decontam_index(decontam_specs: Iterable):
+    """Build a `PromptContaminationIndex` from raw DPO decontam_datasets entries.
+
+    `dpo.decontam_datasets` is typed as `list` (raw dicts) in the config, so we
+    coerce each entry into an `SFTDecontamConfig` before delegating to the
+    SFT-side `_build_decontam_index`. DPO inherits the SFT-side decontam config
+    semantics because both protect the same eval splits
+    (HellaSwag/WinoGrande/OBQA/LAMBADA + Wikitext-103/OWT-eval).
+    """
+    from configs.posttraining.sftConfig import SFTDecontamConfig
+    from src.posttraining.prepare import PromptContaminationIndex, _build_decontam_index
+
+    parsed: list[SFTDecontamConfig] = []
+    for spec in decontam_specs:
+        if isinstance(spec, SFTDecontamConfig):
+            parsed.append(spec)
+        elif isinstance(spec, dict):
+            parsed.append(SFTDecontamConfig.model_validate(spec))
+        else:
+            # Pydantic-shaped object with the right fields; try to coerce via dict view.
+            try:
+                parsed.append(SFTDecontamConfig.model_validate(dict(spec)))
+            except Exception as exc:  # pragma: no cover - defensive path
+                log.warning("Skipping unrecognized DPO decontam spec %r: %s", spec, exc)
+    if not parsed:
+        return PromptContaminationIndex()  # empty index, contains() always False
+    return _build_decontam_index(parsed)
+
+
+def _filter_decontaminated(
+    pairs: list[dict[str, Any]],
+    decontam_prompts,  # set[str] for cheap exact-substring check, OR PromptContaminationIndex
+) -> list[dict[str, Any]]:
+    """Drop any pair whose prompt overlaps an eval-split entry.
+
+    Accepts either:
+      - a flat `set[str]` of normalized prompt strings (cheap substring check), or
+      - a `PromptContaminationIndex` (MinHash + 5-gram + Jaccard 0.8).
+    """
+    kept: list[dict[str, Any]] = []
+    for pair in pairs:
+        prompt = pair.get("prompt") or ""
+        if isinstance(decontam_prompts, set):
+            normalized = " ".join(prompt.lower().split())
+            if any(entry in normalized for entry in decontam_prompts):
+                continue
+        else:
+            # Duck-typed: PromptContaminationIndex.contains(text) -> bool
+            if decontam_prompts.contains(prompt):
+                continue
+        kept.append(pair)
+    return kept
 
 
 def run_prepare_dpo(project_config: ProjectConfig, *, seed: int, hf_token: str | None = None) -> None:
@@ -297,9 +351,16 @@ def _run_prepare_dpo_mc_letter(
     tokenizer = build_tokenizer()
     rng = random.Random(int(seed))
 
+    # Build the eval-split contamination index (same MinHash + 5-gram + Jaccard 0.8
+    # machinery the SFT pipeline uses). MC-letter prompts come from
+    # HellaSwag/WinoGrande/OBQA-train/MMLU-aux, where overlap with the matching
+    # eval splits IS plausible — unlike HH-RLHF, this path must filter.
+    decontam_index = _build_dpo_decontam_index(dpo.decontam_datasets)
+
     n_train = 0
     n_dev = 0
     n_dropped_invalid = 0
+    n_dropped_decontam = 0
     target_total = sum(s.target_pairs for s in dpo.sources)
     train_target = max(0, target_total - dpo.dev_pairs)
     per_source_counts: dict[str, int] = {}
@@ -360,6 +421,14 @@ def _run_prepare_dpo_mc_letter(
                     n_dropped_invalid += 1
                     continue
 
+                # Eval-split decontamination: drop pairs whose prompt overlaps
+                # an eval-split entry. Streaming pipeline -> check inline rather
+                # than buffering the full pair list. The same logic is exposed
+                # via `_filter_decontaminated` for tests / batch use.
+                if decontam_index.contains(user_prompt):
+                    n_dropped_decontam += 1
+                    continue
+
                 # Discover candidate letters by scanning the rendered option lines.
                 # SFT MC normalizers use two prompt formats:
                 #   - `_format_mc_prompt`  -> "A) ..." / "B) ..." (sciq, cqa, mmlu, race, boolq, piqa, wsc273)
@@ -413,9 +482,15 @@ def _run_prepare_dpo_mc_letter(
         "n_train": n_train,
         "n_dev": n_dev,
         "n_dropped_invalid": n_dropped_invalid,
+        "n_dropped_decontam": n_dropped_decontam,
         "per_source": per_source_counts,
         "train_path": str(train_path),
         "dev_path": str(dev_path),
     }
     (out_dir / "manifest.json").write_text(json.dumps(manifest, indent=2))
+    total_kept = n_train + n_dev
+    log.info(
+        "DPO decontam: kept %d / %d pairs (%d dropped)",
+        total_kept, total_kept + n_dropped_decontam, n_dropped_decontam,
+    )
     log.info("DPO mc_letter prepare finished: %s", manifest)

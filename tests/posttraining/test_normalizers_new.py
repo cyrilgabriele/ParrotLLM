@@ -11,6 +11,7 @@ from src.posttraining.prepare import (
     _normalize_bookcorpus_lambada_record,
     _normalize_cbt_record,
     _normalize_cosmos_qa_record,
+    _normalize_flan_mc_record,
     _normalize_social_iqa_record,
 )
 
@@ -246,3 +247,52 @@ def test_bookcorpus_lambada_rejects_invalid(field, value, reason):
     }
     rec[field] = value
     assert _normalize_bookcorpus_lambada_record(rec, _src("bookcorpus_lambada")) is None
+
+
+def test_flan_mc_extracts_letter_from_response():
+    """OpenOrca-style: question has MC structure, response has reasoning + final letter."""
+    rec = {
+        "system_prompt": "",
+        "question": (
+            "What is 2 + 2?\n"
+            "A) 3\n"
+            "B) 4\n"
+            "C) 5\n"
+            "D) 6\n"
+            "Answer:"
+        ),
+        "response": "We add 2 and 2 to get 4. The answer is B.",
+    }
+    result = _normalize_flan_mc_record(rec, _src("flan_mc"))
+    assert result is not None
+    messages, _meta = result
+    assert messages[1]["content"] == "B"
+    user = messages[0]["content"]
+    # The question is preserved verbatim — we don't re-render the MC structure.
+    assert "A) 3" in user
+    assert user.endswith("Answer:")
+
+
+def test_flan_mc_rejects_non_mc_questions():
+    rec = {"question": "What is the capital of France?", "response": "Paris."}
+    assert _normalize_flan_mc_record(rec, _src("flan_mc")) is None
+
+
+def test_flan_mc_rejects_unparseable_response():
+    rec = {
+        "question": "Q?\nA) x\nB) y\nAnswer:",
+        "response": "I'm not sure but maybe both could be valid...",
+    }
+    assert _normalize_flan_mc_record(rec, _src("flan_mc")) is None
+
+
+def test_flan_mc_extracts_letter_from_leading_letter_response():
+    """Some FLAN-MC responses are just the bare letter."""
+    rec = {
+        "question": "Q?\nA) yes\nB) no\nC) maybe\nD) unsure\nAnswer:",
+        "response": "C",
+    }
+    result = _normalize_flan_mc_record(rec, _src("flan_mc"))
+    assert result is not None
+    messages, _meta = result
+    assert messages[1]["content"] == "C"

@@ -830,6 +830,54 @@ def _normalize_bookcorpus_lambada_record(
     return messages, metadata
 
 
+_FLAN_MC_QUESTION_PATTERN = re.compile(
+    r"(?:^|\n)\s*[A-D]\)\s+\S",  # detects "A) ...", "B) ..."
+)
+_FLAN_MC_RESPONSE_LETTER_PATTERN = re.compile(
+    r"(?:answer\s*(?:is|:)\s*|^\s*)([A-D])\b",
+    re.IGNORECASE,
+)
+
+
+def _normalize_flan_mc_record(
+    record: Mapping[str, Any], source_cfg: SFTSourceConfig
+) -> tuple[list[dict[str, str]], dict[str, Any]] | None:
+    """Filter OpenOrca / OpenHermes / FLAN-shape records to keep only the
+    MC subset. Drops the response's chain-of-thought; keeps just the gold
+    letter."""
+    question = str(record.get("question") or "").strip()
+    response = str(record.get("response") or "").strip()
+    if not question or not response:
+        return None
+
+    # Require the question to look MC-shaped (at least 2 lettered options).
+    matches = _FLAN_MC_QUESTION_PATTERN.findall(question)
+    if len(matches) < 2:
+        return None
+
+    # Parse the gold letter from the response. Look for "answer is X" / "answer: X"
+    # patterns, falling back to a leading single-letter line.
+    letter_match = _FLAN_MC_RESPONSE_LETTER_PATTERN.search(response)
+    if letter_match is None:
+        return None
+    gold_letter = letter_match.group(1).upper()
+    if gold_letter not in {"A", "B", "C", "D"}:
+        return None
+
+    # Don't re-render the question — preserve the source's MC layout to maximize
+    # format-distribution diversity. The model trains to emit just the letter.
+    cleaned_question = clean_message_content(question)
+    if not cleaned_question:
+        return None
+
+    messages = [
+        {"role": "user", "content": cleaned_question},
+        {"role": "assistant", "content": gold_letter},
+    ]
+    metadata = {"rationale": source_cfg.rationale, "kind": "flan_mc"}
+    return messages, metadata
+
+
 def _normalize_openbookqa_record(record: Mapping[str, Any], source_cfg: SFTSourceConfig) -> tuple[list[dict[str, str]], dict[str, Any]] | None:
     # allenai/openbookqa fields: question_stem, choices={text, label}, answerKey, id.
     stem = str(record.get("question_stem") or "").strip()
@@ -1136,6 +1184,8 @@ def _normalize_source_record(
         return _normalize_cbt_record(record, source_cfg)
     if source_cfg.loader == "bookcorpus_lambada":
         return _normalize_bookcorpus_lambada_record(record, source_cfg)
+    if source_cfg.loader == "flan_mc":
+        return _normalize_flan_mc_record(record, source_cfg)
     raise ValueError(f"Unsupported loader for record-level normalization: {source_cfg.loader}")
 
 

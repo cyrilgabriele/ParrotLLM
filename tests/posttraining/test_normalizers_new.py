@@ -2,8 +2,19 @@
 
 from __future__ import annotations
 
+import re
+
+import pytest
+
 from configs import SFTSourceConfig
 from src.posttraining.prepare import _normalize_cosmos_qa_record
+
+_CHOICE_RE = re.compile(r"^([A-Z])\) (.+?)$", re.MULTILINE)
+
+
+def _parse_choices(prompt: str) -> dict[str, str]:
+    """Parse 'A) ... B) ...' lines from an MC prompt into a {letter: choice_text} map."""
+    return dict(_CHOICE_RE.findall(prompt))
 
 
 def _src(loader: str) -> SFTSourceConfig:
@@ -48,15 +59,32 @@ def test_cosmos_qa_basic_record():
     assert gold_letter in {"A", "B", "C", "D"}
 
     # Verify the gold letter actually maps back to the original gold answer text.
-    label_to_answer = {
-        "A": user_prompt.split("A) ")[1].split("\n")[0],
-        "B": user_prompt.split("B) ")[1].split("\n")[0],
-        "C": user_prompt.split("C) ")[1].split("\n")[0],
-        "D": user_prompt.split("D) ")[1].split("\n")[0],
-    }
+    label_to_answer = _parse_choices(user_prompt)
     assert label_to_answer[gold_letter] == rec["answer1"]
 
 
-def test_cosmos_qa_rejects_missing_field():
-    rec = {"id": "x", "context": "ctx", "question": "q"}  # no answers
+@pytest.mark.parametrize(
+    "field, value",
+    [
+        ("label", "not_an_int"),  # non-int label
+        ("label", 5),               # out-of-range label (>3)
+        ("label", -1),              # out-of-range label (<0)
+        ("label", None),            # missing label
+        ("context", ""),            # empty context
+        ("question", ""),           # empty question
+        ("answer0", ""),            # empty answer
+    ],
+)
+def test_cosmos_qa_rejects_invalid(field: str, value):
+    rec = {
+        "id": "cosmos_002",
+        "context": "ctx",
+        "question": "q",
+        "answer0": "a",
+        "answer1": "b",
+        "answer2": "c",
+        "answer3": "d",
+        "label": 0,
+    }
+    rec[field] = value
     assert _normalize_cosmos_qa_record(rec, _src("cosmos_qa")) is None

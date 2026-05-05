@@ -795,6 +795,41 @@ def _normalize_cbt_record(
     return messages, metadata
 
 
+def _normalize_bookcorpus_lambada_record(
+    record: Mapping[str, Any], source_cfg: SFTSourceConfig
+) -> tuple[list[dict[str, str]], dict[str, Any]] | None:
+    """Strip a BookCorpus passage's final word for LAMBADA-shape SFT.
+
+    Rejects passages that are too short to give the model real context.
+    Approximate threshold: 30 whitespace-separated tokens.
+    """
+    text = str(record.get("text") or "").strip()
+    if not text:
+        return None
+
+    words = text.split()
+    if len(words) < 30:
+        return None
+
+    last_word = words[-1].strip(_LAMBADA_STRIP_CHARS)
+    # Reject targets that are pure punctuation or contain digits (LAMBADA-style
+    # targets are content words; numbers/dates would distort the regularizer).
+    if not last_word or any(c.isdigit() for c in last_word):
+        return None
+
+    prompt_text = " ".join(words[:-1]) + " "
+    cleaned_word = clean_message_content(last_word)
+    if not cleaned_word:
+        return None
+
+    messages = [
+        {"role": "user", "content": prompt_text},
+        {"role": "assistant", "content": cleaned_word.lower()},
+    ]
+    metadata = {"rationale": source_cfg.rationale, "kind": "lambada_shape"}
+    return messages, metadata
+
+
 def _normalize_openbookqa_record(record: Mapping[str, Any], source_cfg: SFTSourceConfig) -> tuple[list[dict[str, str]], dict[str, Any]] | None:
     # allenai/openbookqa fields: question_stem, choices={text, label}, answerKey, id.
     stem = str(record.get("question_stem") or "").strip()
@@ -1099,6 +1134,8 @@ def _normalize_source_record(
         return _normalize_narrative_completion_record(record, source_cfg)
     if source_cfg.loader == "cbt":
         return _normalize_cbt_record(record, source_cfg)
+    if source_cfg.loader == "bookcorpus_lambada":
+        return _normalize_bookcorpus_lambada_record(record, source_cfg)
     raise ValueError(f"Unsupported loader for record-level normalization: {source_cfg.loader}")
 
 

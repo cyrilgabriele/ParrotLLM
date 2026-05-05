@@ -35,6 +35,7 @@ class SFTSourceConfig(BaseModel):
         "openbookqa",
         "narrative_completion",
         "cbt",
+        "bookcorpus_lambada",
     ] = Field(...)
     path: str = Field(...)
     subset: str | None = Field(default=None)

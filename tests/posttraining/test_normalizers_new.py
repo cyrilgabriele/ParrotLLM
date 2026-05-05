@@ -8,6 +8,7 @@ import pytest
 
 from configs import SFTSourceConfig
 from src.posttraining.prepare import (
+    _normalize_bookcorpus_lambada_record,
     _normalize_cbt_record,
     _normalize_cosmos_qa_record,
     _normalize_social_iqa_record,
@@ -199,3 +200,49 @@ def test_cbt_rejects_invalid(field, value):
     }
     rec[field] = value
     assert _normalize_cbt_record(rec, _src("cbt")) is None
+
+
+def test_bookcorpus_lambada_basic():
+    rec = {
+        "text": (
+            "She walked along the cobblestone street under the dim lamplight, "
+            "her footsteps echoing softly. The night air was crisp and the "
+            "shop windows glowed faintly behind their iron grilles. "
+            "She paused at the corner and looked back, but the alley was empty."
+        ),
+    }
+    result = _normalize_bookcorpus_lambada_record(rec, _src("bookcorpus_lambada"))
+    assert result is not None
+    messages, _meta = result
+    user = messages[0]["content"]
+    assistant = messages[1]["content"]
+
+    assert assistant.strip() == "empty"
+    assert user.endswith(" ")
+    assert not user.endswith("  ")
+    # The final word "empty" must NOT appear in the prompt — only the prefix.
+    # (Whole-word check, not substring, since "empty" could appear elsewhere.)
+    assert "empty " not in user
+    assert not user.endswith("empty ")
+
+
+@pytest.mark.parametrize(
+    "field, value, reason",
+    [
+        ("text", "", "empty text"),
+        ("text", "Too short to use.", "below minimum word count"),
+        ("text", None, "missing text"),
+    ],
+    ids=["empty", "short", "none"],
+)
+def test_bookcorpus_lambada_rejects_invalid(field, value, reason):
+    rec = {
+        "text": (
+            "She walked along the cobblestone street under the dim lamplight, "
+            "her footsteps echoing softly. The night air was crisp and the "
+            "shop windows glowed faintly behind their iron grilles. "
+            "She paused at the corner."
+        ),
+    }
+    rec[field] = value
+    assert _normalize_bookcorpus_lambada_record(rec, _src("bookcorpus_lambada")) is None

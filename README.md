@@ -114,7 +114,7 @@ uv run python main.py --stage sft --config configs/posttraining/sft.yaml
 If you want the original quality-maximizing recipe instead, use:
 
 ```bash
-uv run python main.py --stage sft --config configs/posttraining/sft_full_recipe.yaml
+uv run python main.py --stage sft --config configs/posttraining/sft_chat_demo.yaml
 ```
 
 The SFT config is already set up for the repo's recommended 20k-example mix:

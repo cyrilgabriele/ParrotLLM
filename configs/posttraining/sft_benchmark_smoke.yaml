@@ -80,8 +80,8 @@ sft:
     loader: hellaswag
     path: Rowan/hellaswag
     split: train
-    target_examples: 40000
-    candidate_multiplier: 1
+    target_examples: 50
+    candidate_multiplier: 2
     quality_weight: 1.3
     tags:
     - tier1
@@ -93,8 +93,8 @@ sft:
     path: allenai/winogrande
     subset: winogrande_xl
     split: train
-    target_examples: 40000
-    candidate_multiplier: 1
+    target_examples: 50
+    candidate_multiplier: 2
     quality_weight: 1.3
     tags:
     - tier1
@@ -107,8 +107,8 @@ sft:
     path: allenai/openbookqa
     subset: main
     split: train
-    target_examples: 25000
-    candidate_multiplier: 6
+    target_examples: 50
+    candidate_multiplier: 2
     quality_weight: 1.3
     tags:
     - tier1
@@ -120,8 +120,8 @@ sft:
     path: allenai/ai2_arc
     subset: ARC-Easy
     split: train
-    target_examples: 11000
-    candidate_multiplier: 6
+    target_examples: 50
+    candidate_multiplier: 2
     quality_weight: 1.2
     tags:
     - tier1
@@ -132,8 +132,8 @@ sft:
     path: allenai/ai2_arc
     subset: ARC-Challenge
     split: train
-    target_examples: 5500
-    candidate_multiplier: 6
+    target_examples: 50
+    candidate_multiplier: 2
     quality_weight: 1.25
     tags:
     - tier1
@@ -143,8 +143,8 @@ sft:
     loader: sciq
     path: allenai/sciq
     split: train
-    target_examples: 12000
-    candidate_multiplier: 1
+    target_examples: 50
+    candidate_multiplier: 2
     quality_weight: 1.15
     tags:
     - tier1
@@ -155,8 +155,8 @@ sft:
     loader: commonsense_qa
     path: tau/commonsense_qa
     split: train
-    target_examples: 9000
-    candidate_multiplier: 1
+    target_examples: 50
+    candidate_multiplier: 2
     quality_weight: 1.1
     tags:
     - tier2
@@ -167,8 +167,8 @@ sft:
     path: cais/mmlu
     subset: auxiliary_train
     split: train
-    target_examples: 30000
-    candidate_multiplier: 4
+    target_examples: 50
+    candidate_multiplier: 2
     quality_weight: 1.0
     tags:
     - tier5

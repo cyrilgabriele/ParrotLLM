@@ -1,0 +1,144 @@
+model:
+  vocab_size: 50258
+  pad_token_id: 50257
+  bos_token_id: 50256
+  eos_token_id: 50256
+  d_model: 384
+  n_layers: 14
+  n_heads: 6
+  d_ff: 768
+  context_length: 1024
+  bias: false
+  dropout: 0.0
+  rope_theta: 10000.0
+  gradient_checkpointing: false
+
+logging:
+  console_level: INFO
+  file_level: DEBUG
+  components:
+    posttraining: INFO
+    training: INFO
+
+dpo:
+  device: auto
+  # Continuation-preference DPO recipe (Plan B).
+  # `reference_checkpoint` is set by the calling overnight script after the
+  # SFT run finishes. Substitute the literal placeholder string below.
+  reference_checkpoint: PLACEHOLDER_TO_BE_SET_AFTER_SFT
+  cache_dir: data/posttraining/hf_cache
+  raw_dir: data/posttraining/dpo_raw
+  prepared_dir: data/posttraining/dpo_pairs_continuation
+  runs_dir: runs/posttraining/dpo_continuation
+  system_prompt: "You are ParrotLLM, a helpful assistant."
+  max_seq_length: 1024
+  # Per dpo_letter_v2: cap pair length to keep peak MPSGraph workspace below
+  # the 42 GiB unified-memory ceiling on Apple Silicon.
+  max_train_pair_tokens: 512
+
+  beta: 0.1
+  learning_rate: 2.0e-6
+  num_epochs: 1.0
+  train_batch_size: 4
+  gradient_accumulation_steps: 1
+  warmup_ratio: 0.03
+  min_lr_ratio: 0.1
+  weight_decay: 0.0
+  beta1: 0.9
+  beta2: 0.999
+  grad_clip: 1.0
+  seed: 42
+
+  save_every: 200
+  eval_every: 100
+  log_every: 1
+  keep_last_checkpoints: 2
+  keep_best_checkpoints: 2
+
+  preference_format: continuation
+  dev_pairs: 500
+
+  # Only loaders supported by `_extract_continuation_signals` are kept here:
+  # hellaswag, winogrande, ai2_arc, openbookqa, sciq, commonsense_qa, mmlu.
+  # Total target pairs: ~25k.
+  sources:
+    - name: hellaswag
+      loader: hellaswag
+      path: Rowan/hellaswag
+      split: train
+      target_pairs: 8000
+      language: en
+    - name: winogrande
+      loader: winogrande
+      path: allenai/winogrande
+      subset: winogrande_xl
+      split: train
+      target_pairs: 5000
+      language: en
+    - name: openbookqa
+      loader: openbookqa
+      path: allenai/openbookqa
+      subset: main
+      split: train
+      target_pairs: 3000
+      language: en
+    - name: arc_easy
+      loader: ai2_arc
+      path: allenai/ai2_arc
+      subset: ARC-Easy
+      split: train
+      target_pairs: 2000
+      language: en
+    - name: arc_challenge
+      loader: ai2_arc
+      path: allenai/ai2_arc
+      subset: ARC-Challenge
+      split: train
+      target_pairs: 1000
+      language: en
+    - name: sciq
+      loader: sciq
+      path: allenai/sciq
+      split: train
+      target_pairs: 3000
+      language: en
+    - name: commonsense_qa
+      loader: commonsense_qa
+      path: tau/commonsense_qa
+      split: train
+      target_pairs: 3000
+      language: en
+
+  decontam_datasets:
+    - name: wikitext103_test
+      loader: local_disk
+      path: data/wikitext-103-test
+      field: text
+      split: test
+    - name: nlp26_owt_eval
+      loader: local_disk
+      path: data/owt-eval/NLP26/NLP26_OWT_eval/test
+      field: text
+      split: test
+    - name: hellaswag
+      loader: huggingface
+      path: Rowan/hellaswag
+      field: ctx
+      split: validation
+    - name: winogrande
+      loader: huggingface
+      path: allenai/winogrande
+      subset: winogrande_xl
+      field: sentence
+      split: validation
+    - name: openbookqa
+      loader: huggingface
+      path: allenai/openbookqa
+      subset: main
+      field: question_stem
+      split: validation
+    - name: lambada
+      loader: huggingface
+      path: EleutherAI/lambada_openai
+      field: text
+      split: test

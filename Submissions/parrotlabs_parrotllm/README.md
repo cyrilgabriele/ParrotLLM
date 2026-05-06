@@ -31,14 +31,43 @@ Team submission for the HSG NLP FS26 PikoGPT public-benchmark leaderboard.
 ## Submission checkpoint
 
 - **Path:** `Submissions/parrotlabs_parrotllm/runs/parrotlabs_final.pt` (~458 MB)
+- **SHA-256:** `1c131cd13b088e875e0705f5a428fffac394005d8f61c947421c2be8c87bf888`
 - **Provenance:** continuation-pair DPO at step 2900 (training loss 0.4400)
 - **Reference SFT checkpoint:** Alpaca-template SFT, lr 5e-7, early-stopped at step 300 (loss 0.985 from base 6.79)
 - **DPO hyperparameters:** β=0.1, lr=2.0e-6, 1 epoch over 24.5k continuation pairs
 
-> **Note on checkpoint distribution:** the file is 458 MB and exceeds GitHub's 100 MB
-> per-file limit on the regular path. If git push is rejected, the file is mirrored
-> for the TA out-of-band (Drive/Releases) — see commit message of the staging commit
-> for the canonical hash, and the path above for the local working copy.
+### Downloading the checkpoint
+
+The checkpoint is 458 MB (over GitHub's 100 MB per-file limit) and is hosted publicly on
+Hugging Face at [`ParrotLabs/parrotlabs_parrotllm`](https://huggingface.co/ParrotLabs/parrotlabs_parrotllm).
+
+Fetch it into the path the leaderboard runner expects:
+
+```bash
+uv run python -c "
+from huggingface_hub import hf_hub_download
+p = hf_hub_download(
+    repo_id='ParrotLabs/parrotlabs_parrotllm',
+    filename='parrotlabs_final.pt',
+    local_dir='Submissions/parrotlabs_parrotllm/runs',
+)
+print(p)
+"
+```
+
+Or via the Hugging Face CLI:
+
+```bash
+hf download ParrotLabs/parrotlabs_parrotllm parrotlabs_final.pt \
+  --local-dir Submissions/parrotlabs_parrotllm/runs
+```
+
+Verify the download with:
+
+```bash
+shasum -a 256 Submissions/parrotlabs_parrotllm/runs/parrotlabs_final.pt
+# expected: 1c131cd13b088e875e0705f5a428fffac394005d8f61c947421c2be8c87bf888
+```
 
 ## Public-bench results (in-process harness, limit=200, temperature=0)
 

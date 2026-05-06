@@ -7,8 +7,17 @@ Submissions/parrotlabs_parrotllm/runs/parrotlabs_final.pt
 ```
 
 It is intentionally **not** tracked in git (458 MB, exceeds GitHub's 100 MB
-per-file limit). Distribute out-of-band (Releases / Drive / direct transfer)
-and drop into this directory before running the leaderboard.
+per-file limit). The canonical copy is hosted publicly on Hugging Face at
+[`ParrotLabs/parrotlabs_parrotllm`](https://huggingface.co/ParrotLabs/parrotlabs_parrotllm)
+— download it into this directory before running the leaderboard:
+
+```bash
+hf download ParrotLabs/parrotlabs_parrotllm parrotlabs_final.pt \
+  --local-dir Submissions/parrotlabs_parrotllm/runs
+```
+
+(or use `huggingface_hub.hf_hub_download` directly — see the submission README).
+Verify the SHA-256 against the value below before running the leaderboard.
 
 ## File metadata
 

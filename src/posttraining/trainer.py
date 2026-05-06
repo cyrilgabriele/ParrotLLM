@@ -32,8 +32,16 @@ from src.training.trainer import (
     estimate_loss,
     get_autocast_context,
     resolve_checkpoint_dir,
+    save_checkpoint,
 )
 from src.utils import build_tokenizer
+
+# Imported lazily-friendly aliases — the WT-103 tripwire mocks them in tests.
+# Keeping module-level handles makes the test stubs trivial (monkeypatch the
+# bound name) and avoids importing `datasets` / `src.eval.perplexity` at
+# trainer import time when the tripwire is disabled (the common case).
+from datasets import load_from_disk as _load_from_disk
+from src.eval.perplexity import compute_perplexity as _compute_perplexity
 
 
 log = logging.getLogger("parrotllm.posttraining")
@@ -253,6 +261,154 @@ def _evaluate_sft_loss(
     if denom <= 0:
         return float("inf")
     return total / denom
+
+
+@dataclass(slots=True)
+class WT103TripwireResult:
+    """Outcome of a single tripwire update (no exception path)."""
+
+    current: float
+    baseline: float
+    relative_rise: float
+    breached: bool
+
+
+class WT103TripwireBreached(RuntimeError):
+    """Raised when WT-103 perplexity has risen more than the configured
+    relative threshold over the step-0 baseline. The training loop catches
+    this, saves a `_wt103_tripwire`-suffixed checkpoint, and exits cleanly."""
+
+    def __init__(self, *, baseline: float, current: float, threshold: float, relative_rise: float) -> None:
+        self.baseline = float(baseline)
+        self.current = float(current)
+        self.threshold = float(threshold)
+        self.relative_rise = float(relative_rise)
+        super().__init__(
+            f"Wikitext-103 perplexity rose {relative_rise:.2%} (baseline={baseline:.3f} -> "
+            f"current={current:.3f}), exceeding threshold {threshold:.2%}. Training halted."
+        )
+
+
+class WT103Tripwire:
+    """Pure-logic tripwire: tracks a step-0 baseline ppl and raises when
+    subsequent measurements rise more than ``threshold`` (relative).
+
+    The first ``update`` call records the baseline and returns ``None`` so
+    callers can distinguish the baseline-recording call from a comparison.
+    Subsequent calls return a :class:`WT103TripwireResult` describing the
+    rise, and raise :class:`WT103TripwireBreached` when the rise *strictly*
+    exceeds the threshold (so a value exactly equal to the threshold is
+    treated as borderline-acceptable; this avoids halting on a one-test
+    flake right at the boundary).
+
+    Non-finite baselines (nan/inf, e.g. eval ran on an empty corpus) cause
+    all subsequent updates to short-circuit to ``None`` rather than producing
+    spurious comparisons.
+    """
+
+    def __init__(self, *, threshold: float) -> None:
+        self.threshold = float(threshold)
+        self.baseline: float | None = None
+
+    def update(self, current_ppl: float) -> WT103TripwireResult | None:
+        current = float(current_ppl)
+        if self.baseline is None:
+            self.baseline = current
+            return None
+        if not math.isfinite(self.baseline) or self.baseline <= 0.0:
+            return None
+        if not math.isfinite(current):
+            # Conservative: a nan/inf current ppl can stem from a transient
+            # eval-corpus tokenization glitch, not a real regression. Skip
+            # the comparison this round; the next eval will catch a true
+            # rise once measurement is sane again.
+            return None
+        relative_rise = (current - self.baseline) / self.baseline
+        breached = relative_rise > self.threshold
+        if breached:
+            raise WT103TripwireBreached(
+                baseline=self.baseline,
+                current=current,
+                threshold=self.threshold,
+                relative_rise=relative_rise,
+            )
+        return WT103TripwireResult(
+            current=current,
+            baseline=self.baseline,
+            relative_rise=relative_rise,
+            breached=False,
+        )
+
+
+def _compute_wt103_perplexity(
+    *,
+    model: torch.nn.Module,
+    tokenizer,
+    device: torch.device,
+    context_length: int,
+    eval_examples: int,
+    wikitext_path: Path,
+    eval_batch_size: int,
+) -> float:
+    """Reuse the local ``data/wikitext-103-test`` HF dataset (no re-download).
+
+    Concatenates the non-empty rows, tokenizes once, and runs the same
+    sliding-window perplexity estimator that ``src/eval/perplexity.py``
+    exposes — so tripwire numbers are directly comparable to the project's
+    standard WT-103 eval pipeline.
+
+    The module-level ``_load_from_disk`` and ``_compute_perplexity`` aliases
+    are deliberately patched-friendly so unit tests can stub them out.
+    """
+    if not wikitext_path.exists():
+        raise FileNotFoundError(
+            f"WT-103 tripwire enabled but local dataset not found at {wikitext_path}. "
+            "Run `uv run python src/scripts/download_data.py` to materialise the test split."
+        )
+    ds = _load_from_disk(str(wikitext_path))
+    text = "\n\n".join(t for t in ds["text"] if t and t.strip())
+    token_ids = torch.tensor(tokenizer.encode(text), dtype=torch.long)
+    return float(
+        _compute_perplexity(
+            model,
+            token_ids,
+            context_length,
+            device,
+            eval_batch_size,
+            int(eval_examples),
+            stride=None,
+        )
+    )
+
+
+def _save_tripwire_checkpoint(
+    *,
+    model: torch.nn.Module,
+    optimizer: torch.optim.Optimizer,
+    config: dict,
+    step: int,
+    epoch: int,
+    scaler,
+    scheduler,
+    trainer_state: dict | None,
+    checkpoint_dir: str,
+    suffix: str,
+) -> str:
+    """Persist a checkpoint with ``suffix`` baked into its filename so a
+    breach-stamped artifact is easy to find on disk after a halt."""
+    filename = f"halt_{suffix}_epoch_{epoch:04d}_step_{step:07d}.pt"
+    return save_checkpoint(
+        model,
+        optimizer,
+        config,
+        step,
+        epoch,
+        scaler,
+        checkpoint_dir,
+        filename=filename,
+        scheduler=scheduler,
+        trainer_state=trainer_state,
+    )
 
 
 def _load_manifest(prepared_dir: Path) -> dict[str, Any]:
@@ -603,6 +759,42 @@ def _run_single_sweep(
         generation_log_label="step 0",
     )
     _empty_device_cache(device)
+
+    # WT-103 tripwire (opt-in): on the first eval (here, pre-step-1), record
+    # the baseline ppl. Subsequent evals compare against it; a relative rise
+    # over the threshold raises WT103TripwireBreached, which the eval block
+    # catches to save a suffixed checkpoint and exit cleanly.
+    wt103_tripwire: WT103Tripwire | None = None
+    if sft_cfg.wt103_tripwire_enabled:
+        wt103_tripwire = WT103Tripwire(threshold=float(sft_cfg.wt103_tripwire_threshold))
+        baseline_ppl = _compute_wt103_perplexity(
+            model=model,
+            tokenizer=tokenizer,
+            device=device,
+            context_length=context_length,
+            eval_examples=int(sft_cfg.wt103_tripwire_eval_examples),
+            wikitext_path=Path(sft_cfg.wt103_tripwire_dataset_path),
+            eval_batch_size=eval_batch_size,
+        )
+        wt103_tripwire.update(baseline_ppl)
+        jlog.log(
+            "sft",
+            "wt103_tripwire_baseline",
+            step=0,
+            baseline_ppl=baseline_ppl,
+            threshold=float(sft_cfg.wt103_tripwire_threshold),
+            eval_examples=int(sft_cfg.wt103_tripwire_eval_examples),
+        )
+        log.info(
+            "WT-103 tripwire armed: baseline_ppl=%.4f threshold=%.2f%% eval_examples=%d",
+            baseline_ppl,
+            float(sft_cfg.wt103_tripwire_threshold) * 100.0,
+            int(sft_cfg.wt103_tripwire_eval_examples),
+        )
+        if device.type == "mps":
+            gc.collect()
+            _empty_device_cache(device)
+
     base_replay_ppl = base_metrics["replay_ppl"] if math.isfinite(base_metrics["replay_ppl"]) else None
     best_score = _composite_score(
         base_metrics,
@@ -642,6 +834,7 @@ def _run_single_sweep(
         disable=not sys.stderr.isatty(),
     )
     use_chunked_ce = _use_chunked_ce_for_device(device)
+    tripwire_breach: WT103TripwireBreached | None = None
     while micro_step < micro_batches:
         try:
             batch = next(train_iter)
@@ -781,6 +974,78 @@ def _run_single_sweep(
                 early_stopping_metric=sft_cfg.early_stopping_metric,
                 early_stopping_value=early_stop_value,
             )
+
+            # WT-103 tripwire (opt-in): re-measure perplexity on the local
+            # WT-103 test split and compare to the step-0 baseline. A relative
+            # rise > threshold raises WT103TripwireBreached; we save a
+            # `_wt103_tripwire`-suffixed checkpoint and exit cleanly.
+            if wt103_tripwire is not None:
+                try:
+                    current_wt103_ppl = _compute_wt103_perplexity(
+                        model=model,
+                        tokenizer=tokenizer,
+                        device=device,
+                        context_length=context_length,
+                        eval_examples=int(sft_cfg.wt103_tripwire_eval_examples),
+                        wikitext_path=Path(sft_cfg.wt103_tripwire_dataset_path),
+                        eval_batch_size=eval_batch_size,
+                    )
+                    tw_result = wt103_tripwire.update(current_wt103_ppl)
+                    jlog.log(
+                        "sft",
+                        "wt103_tripwire",
+                        step=step,
+                        current_ppl=current_wt103_ppl,
+                        baseline_ppl=wt103_tripwire.baseline,
+                        relative_rise=(
+                            tw_result.relative_rise if tw_result is not None else 0.0
+                        ),
+                        threshold=float(sft_cfg.wt103_tripwire_threshold),
+                        breached=False,
+                    )
+                except WT103TripwireBreached as breach:
+                    log.warning(
+                        "WT-103 tripwire BREACHED at step %d: baseline=%.4f current=%.4f "
+                        "rise=%.2f%% threshold=%.2f%%. Halting training.",
+                        step,
+                        breach.baseline,
+                        breach.current,
+                        breach.relative_rise * 100.0,
+                        breach.threshold * 100.0,
+                    )
+                    jlog.log(
+                        "sft",
+                        "wt103_tripwire",
+                        step=step,
+                        current_ppl=breach.current,
+                        baseline_ppl=breach.baseline,
+                        relative_rise=breach.relative_rise,
+                        threshold=breach.threshold,
+                        breached=True,
+                    )
+                    _save_tripwire_checkpoint(
+                        model=model,
+                        optimizer=optimizer,
+                        config=effective_config,
+                        step=step,
+                        epoch=0,
+                        scaler=scaler,
+                        scheduler=scheduler,
+                        trainer_state={
+                            "selection_metric": "composite_score",
+                            "wt103_tripwire": {
+                                "baseline_ppl": breach.baseline,
+                                "current_ppl": breach.current,
+                                "relative_rise": breach.relative_rise,
+                                "threshold": breach.threshold,
+                            },
+                        },
+                        checkpoint_dir=checkpoint_dir,
+                        suffix="wt103_tripwire",
+                    )
+                    tripwire_breach = breach
+                    break
+
             progress.set_postfix(
                 loss=f"{float(loss.detach().item()):.3f}",
                 opt=f"{step}/{optimizer_steps}",
@@ -872,6 +1137,14 @@ def _run_single_sweep(
                 break
 
     progress.close()
+    if tripwire_breach is not None:
+        log.warning(
+            "Sweep %s halted by WT-103 tripwire at step %d. "
+            "Suffixed checkpoint persisted under %s for inspection.",
+            tag,
+            step,
+            checkpoint_dir,
+        )
     checkpoint_manager.save_last(
         model,
         optimizer,

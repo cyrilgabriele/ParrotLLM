@@ -125,6 +125,15 @@ class SFTConfig(BaseModel):
     sources: list[SFTSourceConfig] = Field(default_factory=list)
     decontam_datasets: list[SFTDecontamConfig] = Field(default_factory=list)
 
+    # Forward-looking safety net: monitor Wikitext-103 perplexity at each
+    # SFT eval and halt training if it has risen by more than
+    # ``wt103_tripwire_threshold`` (relative) over the step-0 baseline.
+    # Defaults are off; opt in per-config to avoid changing existing runs.
+    wt103_tripwire_enabled: bool = Field(default=False)
+    wt103_tripwire_threshold: float = Field(default=0.10, ge=0.0)
+    wt103_tripwire_eval_examples: int = Field(default=512, ge=1)
+    wt103_tripwire_dataset_path: Path = Field(default=Path("data/wikitext-103-test"))
+
     @field_validator(
         "base_checkpoint",
         "cache_dir",
@@ -134,6 +143,7 @@ class SFTConfig(BaseModel):
         "replay_train_bin",
         "replay_val_bin",
         "prompt_suite_path",
+        "wt103_tripwire_dataset_path",
         mode="before",
     )
     @classmethod

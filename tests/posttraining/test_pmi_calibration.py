@@ -30,7 +30,7 @@ import pytest
 import torch
 
 
-SUBMISSION_DIR = Path(__file__).resolve().parents[2] / "Submissions" / "PikoGPPT_ParrotLabs"
+SUBMISSION_DIR = Path(__file__).resolve().parents[2] / "Submissions" / "parrotlabs_parrotllm"
 
 
 def _load_submission_inference():

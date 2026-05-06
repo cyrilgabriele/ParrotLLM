@@ -1,9 +1,9 @@
-# PikoGPPT_ParrotLabs — checkpoint manifest
+# parrotlabs_parrotllm — checkpoint manifest
 
 The submission checkpoint is a single file expected at:
 
 ```
-Submissions/PikoGPPT_ParrotLabs/runs/parrotlabs_final.pt
+Submissions/parrotlabs_parrotllm/runs/parrotlabs_final.pt
 ```
 
 It is intentionally **not** tracked in git (458 MB, exceeds GitHub's 100 MB
@@ -37,5 +37,5 @@ and drop into this directory before running the leaderboard.
 | LAMBADA    | 36.50% |
 | **Average** | **38.38%** |
 
-See `Submissions/PikoGPPT_ParrotLabs/README.md` for the full reproduction
+See `Submissions/parrotlabs_parrotllm/README.md` for the full reproduction
 recipe and inference contract.

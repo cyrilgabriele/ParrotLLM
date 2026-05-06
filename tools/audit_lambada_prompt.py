@@ -25,7 +25,7 @@ from pathlib import Path
 
 
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
-SUBMISSION_DIR = PROJECT_ROOT / "Submissions" / "PikoGPPT_ParrotLabs"
+SUBMISSION_DIR = PROJECT_ROOT / "Submissions" / "parrotlabs_parrotllm"
 LAMBADA_PATH = (
     PROJECT_ROOT
     / "external"

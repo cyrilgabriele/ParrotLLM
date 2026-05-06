@@ -9,7 +9,7 @@ import pytest
 import torch
 
 
-SUBMISSION_DIR = Path(__file__).resolve().parents[2] / "Submissions" / "PikoGPPT_ParrotLabs"
+SUBMISSION_DIR = Path(__file__).resolve().parents[2] / "Submissions" / "parrotlabs_parrotllm"
 
 
 def _load_submission_module(name: str, path: Path):
@@ -325,6 +325,43 @@ def test_dispatch_lambada_rstrips_prompt(submission_main):
     assert rendered.kind == "lambada"
     assert not rendered.text.endswith(" ")
     assert rendered.text == LAMBADA_PROMPT.rstrip()
+
+
+def test_lambada_rstrip_preserves_natural_bpe_continuation(submission_main, gpt2_tokenizer):
+    """Audit: with a real LAMBADA-shape prompt, rstrip(prompt) + tokenize(' ' + gold)
+    must produce the SAME token sequence as tokenize(prompt + gold).
+
+    This is the BPE invariant that justifies our rstrip: GPT-2 merges leading
+    whitespace into the next word's token, so dropping the prompt's trailing
+    space and prepending a leading space to the continuation is byte-clean.
+    Keeping the trailing space would force the model to emit a standalone-space
+    token (`Ġ` = 220) followed by a bare-word token — OOD because GPT-2 was
+    trained on text where leading whitespace is fused into the word token.
+    """
+    raw = LAMBADA_PROMPT  # ends with a single trailing space
+    gold = "signs"
+    rendered = submission_main.render_prompt_for_inference(
+        raw_prompt=raw,
+        template="alpaca",
+        system_prompt="ignored",
+        leaderboard=True,
+    )
+    rstripped = rendered.text  # what reaches the model
+
+    # Tokens emitted from (rstripped + " gold") must equal tokens emitted from
+    # tokenizing the rstripped prompt followed by " gold" separately.
+    cat_ids = (
+        gpt2_tokenizer.encode(rstripped, add_special_tokens=False)
+        + gpt2_tokenizer.encode(" " + gold, add_special_tokens=False)
+    )
+    fused_ids = gpt2_tokenizer.encode(rstripped + " " + gold, add_special_tokens=False)
+    assert cat_ids == fused_ids, "rstrip+space-prefix must be byte-clean for BPE"
+
+    # And the natural-continuation token (single ' signs' token = 5895) is what
+    # the model would predict — confirming we set up the right next-token target.
+    space_signs = gpt2_tokenizer.encode(" signs", add_special_tokens=False)
+    assert len(space_signs) == 1
+    assert fused_ids[-1] == space_signs[0]
 
 
 def test_dispatch_mc_uses_full_prompt(submission_main):

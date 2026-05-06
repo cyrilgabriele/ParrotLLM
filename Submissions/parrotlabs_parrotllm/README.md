@@ -1,11 +1,11 @@
-# PikoGPPT_ParrotLabs
+# parrotlabs_parrotllm
 
 Team submission for the HSG NLP FS26 PikoGPT public-benchmark leaderboard.
 
 ## Team
 
 - **Name:** ParrotLabs
-- **Submission folder:** `Submissions/PikoGPPT_ParrotLabs/`
+- **Submission folder:** `Submissions/parrotlabs_parrotllm/`
 - **Source repo:** `cyrilgabriele/ParrotLLM` (branch `sft-dpo-gian` for this submission)
 
 ## Model
@@ -30,7 +30,7 @@ Team submission for the HSG NLP FS26 PikoGPT public-benchmark leaderboard.
 
 ## Submission checkpoint
 
-- **Path:** `Submissions/PikoGPPT_ParrotLabs/runs/parrotlabs_final.pt` (~458 MB)
+- **Path:** `Submissions/parrotlabs_parrotllm/runs/parrotlabs_final.pt` (~458 MB)
 - **Provenance:** continuation-pair DPO at step 2900 (training loss 0.4400)
 - **Reference SFT checkpoint:** Alpaca-template SFT, lr 5e-7, early-stopped at step 300 (loss 0.985 from base 6.79)
 - **DPO hyperparameters:** β=0.1, lr=2.0e-6, 1 epoch over 24.5k continuation pairs
@@ -68,7 +68,7 @@ uv run python main.py --stage dpo         --config configs/posttraining/dpo_cont
 # 3) Bench (subprocess runner, full leaderboard contract)
 cd external/PikoGPT_Leaderboard
 uv run python -m leaderboard.run_benchmarks \
-  --submission PikoGPPT_ParrotLabs \
+  --submission parrotlabs_parrotllm \
   --checkpoint runs/parrotlabs_final.pt \
   --bench hellaswag winogrande openbookqa lambada \
   --limit 200 \
@@ -80,14 +80,14 @@ A faster in-process harness is available at `tools/run_bench_inproc.py`
 
 ```bash
 uv run python tools/run_bench_inproc.py \
-  --checkpoint Submissions/PikoGPPT_ParrotLabs/runs/parrotlabs_final.pt \
+  --checkpoint Submissions/parrotlabs_parrotllm/runs/parrotlabs_final.pt \
   --bench all --limit 200 --pmi off \
   --output runs/overnight_sft_dpo_bench/10_submission_pmi_off.json
 ```
 
 ## Inference contract
 
-Implemented in `Submissions/PikoGPPT_ParrotLabs/main.py` and `src/inference.py`:
+Implemented in `Submissions/parrotlabs_parrotllm/main.py` and `src/inference.py`:
 
 - **Prompt routing.** Inputs are inspected to decide one of three paths:
   1. `mc` — last non-blank line is exactly `Answer:` and ≥2 `^[A-Z]) ...` option lines.
@@ -125,7 +125,7 @@ leaderboard subprocess runner; 0 invalid outputs across 50-example slice.
 - SFT training log: `runs/overnight_sft_dpo_bench/03_sft_train.log`
 - DPO training log: `runs/overnight_sft_dpo_bench/06_dpo_train.log`
 - In-process bench (limit 200, PMI off): `runs/overnight_sft_dpo_bench/10_submission_pmi_off.json`
-- Subprocess runner results: `external/PikoGPT_Leaderboard/Results/PikoGPPT_ParrotLabs/parrotlabs_final/`
+- Subprocess runner results: `external/PikoGPT_Leaderboard/Results/parrotlabs_parrotllm/parrotlabs_final/`
 
 ## What we shipped vs. what we tried
 

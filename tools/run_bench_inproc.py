@@ -7,7 +7,7 @@ helpers as the leaderboard submission (cloze MC scoring, LAMBADA continuation
 generation), so when PMI is OFF the per-example output exactly matches the
 subprocess runner. With PMI ON (default for `--leaderboard`-style scoring),
 per-option scoring uses the unconditional-baseline correction implemented in
-``Submissions/PikoGPPT_ParrotLabs/src/inference.py``.
+``Submissions/parrotlabs_parrotllm/src/inference.py``.
 
 This harness is for fast local iteration only — the leaderboard contract
 remains the subprocess runner. Do NOT modify run_benchmarks.py from here.
@@ -41,7 +41,7 @@ import torch
 
 # ── Paths ────────────────────────────────────────────────────────────────────
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
-SUBMISSION_DIR = PROJECT_ROOT / "Submissions" / "PikoGPPT_ParrotLabs"
+SUBMISSION_DIR = PROJECT_ROOT / "Submissions" / "parrotlabs_parrotllm"
 BENCH_ROOT = PROJECT_ROOT / "external" / "PikoGPT_Leaderboard" / "leaderboard" / "benchmarks"
 
 DEFAULT_BENCH_PATHS = {

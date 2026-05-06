@@ -18,7 +18,7 @@ import torch
 
 PROJECT_ROOT = Path(__file__).resolve().parents[2]
 HARNESS_PATH = PROJECT_ROOT / "tools" / "run_bench_inproc.py"
-SUBMISSION_DIR = PROJECT_ROOT / "Submissions" / "PikoGPPT_ParrotLabs"
+SUBMISSION_DIR = PROJECT_ROOT / "Submissions" / "parrotlabs_parrotllm"
 BENCH_ROOT = PROJECT_ROOT / "external" / "PikoGPT_Leaderboard" / "leaderboard" / "benchmarks"
 
 

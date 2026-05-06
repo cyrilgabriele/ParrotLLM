@@ -105,7 +105,7 @@ log "  DPO checkpoint: ${DPO_CKPT:-<none>}"
 
 # ---------------- Step 7: Leaderboard benchmarks ----------------
 log "Step 7/7: Leaderboard benchmarks"
-SUBMISSION_DIR="$ROOT/Submissions/PikoGPPT_ParrotLabs"
+SUBMISSION_DIR="$ROOT/Submissions/parrotlabs_parrotllm"
 if [[ ! -d "$SUBMISSION_DIR" ]]; then
   log "WARN: submission dir not found at $SUBMISSION_DIR; skipping bench"
 else
@@ -120,10 +120,10 @@ else
     log "  benching $label: $ckpt"
     BENCH_OUT="$ROOT/$LOG_DIR/07_bench_${label}.log"
     # Copy checkpoint into the submission's runs/ for the runner to find.
-    target_path="Submissions/PikoGPPT_ParrotLabs/runs/overnight_${label}.pt"
+    target_path="Submissions/parrotlabs_parrotllm/runs/overnight_${label}.pt"
     cp "$ckpt" "$target_path" 2>/dev/null || true
     uv run python -m leaderboard.run_benchmarks \
-      --submission PikoGPPT_ParrotLabs \
+      --submission parrotlabs_parrotllm \
       --checkpoint "runs/overnight_${label}.pt" \
       --bench hellaswag winogrande openbookqa lambada \
       --limit 200 \

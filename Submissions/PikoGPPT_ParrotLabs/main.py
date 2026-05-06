@@ -62,8 +62,9 @@ def parse_args() -> argparse.Namespace:
         choices=["auto", "on", "off"],
         default="auto",
         help="Pointwise Mutual Information calibration for MC cloze scoring. "
-        "auto: ON when --leaderboard is set (matches standard eval methodology); "
-        "OFF otherwise. on/off override that behavior.",
+        "auto: OFF in --leaderboard mode (measured -2pp avg on our setup; "
+        "see runs/overnight_sft_dpo_bench/summary.md). OFF for chat too. "
+        "Use --pmi on to opt in (kept as ablation).",
     )
     return parser.parse_args()
 
@@ -370,9 +371,11 @@ def main() -> None:
     if eos_id is None:
         eos_id = tokenizer.eos_token_id
 
-    # Resolve PMI: auto means ON for leaderboard, OFF for chat.
+    # Resolve PMI: auto means OFF (PMI hurt our setup by ~2pp avg —
+    # see runs/overnight_sft_dpo_bench/summary.md, "Round 3"). Opt in via
+    # --pmi on for ablation; --pmi off is equivalent to the default.
     if args.pmi == "auto":
-        pmi_enabled = bool(args.leaderboard)
+        pmi_enabled = False
     else:
         pmi_enabled = (args.pmi == "on")
 

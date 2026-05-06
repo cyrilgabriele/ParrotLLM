@@ -375,7 +375,9 @@ def parse_args() -> argparse.Namespace:
         "--pmi",
         choices=("auto", "on", "off"),
         default="auto",
-        help="PMI calibration for MC cloze. auto = ON (matches --leaderboard).",
+        help="PMI calibration for MC cloze. auto = OFF — matches the deployed "
+        "--leaderboard inference path (PMI measured -2pp avg on our setup; "
+        "see runs/overnight_sft_dpo_bench/summary.md, Round 3).",
     )
     p.add_argument("--mc-max-tokens", type=int, default=3)
     p.add_argument("--lambada-max-tokens", type=int, default=5)
@@ -415,7 +417,8 @@ def main() -> None:
     if eos_id is None:
         eos_id = tokenizer.eos_token_id
 
-    pmi_enabled = (args.pmi == "on") if args.pmi != "auto" else True
+    # auto -> off, matching the deployed --leaderboard inference path.
+    pmi_enabled = (args.pmi == "on") if args.pmi != "auto" else False
     print(f"[harness] pmi={'on' if pmi_enabled else 'off'}  context_length={context_length}")
 
     benches = resolve_benches(args.bench)

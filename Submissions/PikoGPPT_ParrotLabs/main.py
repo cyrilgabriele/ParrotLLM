@@ -186,43 +186,62 @@ def generate(
     eos_token_id: int | None = None,
     allowed_first_token_ids: list[int] | None = None,
 ) -> torch.Tensor:
+    # Prefill the cache with the (truncated) prompt and reuse it for decode.
+    idx_cond = idx[:, -context_length:]
+    out = model(idx_cond, use_cache=True)
+    if isinstance(out, tuple) and len(out) == 3:
+        logits, _, past_kv = out
+    else:
+        logits, _ = out
+        past_kv = None
+
     for step in range(max_new_tokens):
-        idx_cond = idx[:, -context_length:]
-        logits, _ = model(idx_cond)
-        logits = logits[:, -1, :]
+        last_logits = logits[:, -1, :]
 
         if step == 0 and allowed_first_token_ids:
-            vocab_size = logits.size(-1)
+            vocab_size = last_logits.size(-1)
             in_range = [tid for tid in allowed_first_token_ids if 0 <= tid < vocab_size]
             if in_range:
-                mask = torch.full_like(logits, float("-inf"))
+                mask = torch.full_like(last_logits, float("-inf"))
                 mask[:, in_range] = 0.0
-                logits = logits + mask
+                last_logits = last_logits + mask
 
         if temperature == 0.0:
-            next_token = logits.argmax(dim=-1, keepdim=True)
+            next_token = last_logits.argmax(dim=-1, keepdim=True)
         else:
-            logits = logits / temperature
+            scaled = last_logits / temperature
 
             if top_k > 0:
-                values, _ = torch.topk(logits, min(top_k, logits.size(-1)))
-                logits[logits < values[:, [-1]]] = float("-inf")
+                values, _ = torch.topk(scaled, min(top_k, scaled.size(-1)))
+                scaled[scaled < values[:, [-1]]] = float("-inf")
 
             if top_p < 1.0:
-                sorted_logits, sorted_idx = torch.sort(logits, descending=True)
+                sorted_logits, sorted_idx = torch.sort(scaled, descending=True)
                 sorted_probs = sorted_logits.softmax(dim=-1)
                 cumulative_probs = sorted_probs.cumsum(dim=-1)
                 remove_mask = cumulative_probs - sorted_probs > top_p
                 sorted_logits[remove_mask] = float("-inf")
-                logits = sorted_logits.scatter(1, sorted_idx, sorted_logits)
+                scaled = sorted_logits.scatter(1, sorted_idx, sorted_logits)
 
-            probs = logits.softmax(dim=-1)
+            probs = scaled.softmax(dim=-1)
             next_token = torch.multinomial(probs, num_samples=1)
 
         idx = torch.cat([idx, next_token], dim=1)
 
         if eos_token_id is not None and bool((next_token == eos_token_id).all()):
             break
+
+        if past_kv is not None:
+            cur_cache_len = past_kv[0][0].size(2)
+            if cur_cache_len >= context_length:
+                # Cache full: rebuild from the windowed prompt.
+                idx_cond = idx[:, -context_length:]
+                logits, _, past_kv = model(idx_cond, use_cache=True)
+            else:
+                logits, _, past_kv = model(next_token, past_kv=past_kv, use_cache=True)
+        else:
+            idx_cond = idx[:, -context_length:]
+            logits, _ = model(idx_cond)
 
     return idx
 

@@ -23,33 +23,42 @@ def generate(
     context_length: int = 1024,
     eos_token_id: int | None = None,
 ) -> torch.Tensor:
-    """Autoregressive generation. temp=0 for greedy, temp>0 for sampling."""
+    """Autoregressive generation with KV caching. temp=0 for greedy, temp>0 for sampling."""
     model.eval()
 
+    # Prefill the cache with the (possibly truncated) prompt.
+    idx_cond = idx[:, -context_length:]
+    out = model(idx_cond, use_cache=True)
+    # Cache-aware path returns (logits, loss, past_kv). Fall back to 2-tuple
+    # for models that don't yet support caching.
+    if isinstance(out, tuple) and len(out) == 3:
+        logits, _, past_kv = out
+    else:
+        logits, _ = out
+        past_kv = None
+
     for _ in range(max_new_tokens):
-        idx_cond = idx[:, -context_length:]
-        logits, _ = model(idx_cond)
-        logits = logits[:, -1, :]  # (B, vocab)
+        last_logits = logits[:, -1, :]  # (B, vocab)
 
         if temperature == 0.0:
-            next_token = logits.argmax(dim=-1, keepdim=True)
+            next_token = last_logits.argmax(dim=-1, keepdim=True)
         else:
-            logits = logits / temperature
+            scaled = last_logits / temperature
 
             # top-k
             if top_k > 0:
-                v, _ = torch.topk(logits, min(top_k, logits.size(-1)))
-                logits[logits < v[:, [-1]]] = float("-inf")
+                v, _ = torch.topk(scaled, min(top_k, scaled.size(-1)))
+                scaled[scaled < v[:, [-1]]] = float("-inf")
 
             # top-p (nucleus)
             if top_p < 1.0:
-                sorted_logits, sorted_idx = torch.sort(logits, descending=True)
+                sorted_logits, sorted_idx = torch.sort(scaled, descending=True)
                 cum_probs = sorted_logits.softmax(dim=-1).cumsum(dim=-1)
                 mask = cum_probs - sorted_logits.softmax(dim=-1) > top_p
                 sorted_logits[mask] = float("-inf")
-                logits = sorted_logits.scatter(1, sorted_idx, sorted_logits)
+                scaled = sorted_logits.scatter(1, sorted_idx, sorted_logits)
 
-            probs = logits.softmax(dim=-1)
+            probs = scaled.softmax(dim=-1)
             next_token = torch.multinomial(probs, num_samples=1)
 
         idx = torch.cat([idx, next_token], dim=1)
@@ -57,6 +66,21 @@ def generate(
         # Stop if we generated the EOS token
         if eos_token_id is not None and next_token.item() == eos_token_id:
             break
+
+        # Decode the next token using the cache (single-token forward).
+        if past_kv is not None:
+            cur_cache_len = past_kv[0][0].size(2)
+            if cur_cache_len >= context_length:
+                # Cache is full; drop it and fall back to a windowed full forward.
+                idx_cond = idx[:, -context_length:]
+                out = model(idx_cond, use_cache=True)
+                logits, _, past_kv = out
+            else:
+                logits, _, past_kv = model(next_token, past_kv=past_kv, use_cache=True)
+        else:
+            # No-cache fallback path.
+            idx_cond = idx[:, -context_length:]
+            logits, _ = model(idx_cond)
 
     return idx
 

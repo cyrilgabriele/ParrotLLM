@@ -76,25 +76,63 @@ class MultiHeadAttention(nn.Module):
         self.attn_dropout = dropout
         self.resid_dropout = nn.Dropout(dropout)
 
-    def forward(self, x: torch.Tensor, freqs_cis: torch.Tensor) -> torch.Tensor:
+    def forward(
+        self,
+        x: torch.Tensor,
+        freqs_cis: torch.Tensor,
+        past_kv: tuple[torch.Tensor, torch.Tensor] | None = None,
+        return_kv: bool = False,
+    ) -> torch.Tensor | tuple[torch.Tensor, tuple[torch.Tensor, torch.Tensor]]:
         B, T, C = x.shape
 
         q = self.q_proj(x).view(B, T, self.n_heads, self.d_head).transpose(1, 2)
         k = self.k_proj(x).view(B, T, self.n_heads, self.d_head).transpose(1, 2)
         v = self.v_proj(x).view(B, T, self.n_heads, self.d_head).transpose(1, 2)
 
-        # Apply QK-Norm then RoPE (norm-before-rotation, as in Gemma 3/4 and OLMo 2)
+        # Apply QK-Norm then RoPE (norm-before-rotation, as in Gemma 3/4 and OLMo 2).
+        # When a KV cache is supplied, freqs_cis already corresponds to the
+        # absolute positions [cached_len .. cached_len + T_new) of the new tokens.
         q = apply_rope(self.q_norm(q), freqs_cis)
         k = apply_rope(self.k_norm(k), freqs_cis)
 
-        # Causal self-attention; Flash Attention if available
-        out = F.scaled_dot_product_attention(
-            q, k, v, is_causal=True,
-            dropout_p=self.attn_dropout if self.training else 0.0,
-        )
+        # If a KV cache is present, concat prior K/V (computed at their own
+        # absolute positions, already RoPE-rotated) with the new K/V along time.
+        if past_kv is not None:
+            k_cached, v_cached = past_kv
+            full_k = torch.cat([k_cached, k], dim=2)
+            full_v = torch.cat([v_cached, v], dim=2)
+        else:
+            full_k = k
+            full_v = v
+
+        # Causal self-attention; Flash Attention if available.
+        # PyTorch's is_causal aligns the causal mask to the TOP-LEFT, which is
+        # only correct when q_len == k_len. For cached decode (q_len < k_len),
+        # we build an explicit mask: q at position (cached_len + i) may attend
+        # to all k positions in [0, cached_len + i + 1).
+        if past_kv is not None:
+            k_len = full_k.size(2)
+            cached_len = k_len - T
+            # Row r corresponds to query position (cached_len + r); allowed
+            # columns are [0, cached_len + r + 1).
+            row_pos = torch.arange(T, device=q.device) + cached_len
+            col_pos = torch.arange(k_len, device=q.device)
+            attn_mask = col_pos.unsqueeze(0) <= row_pos.unsqueeze(1)  # (T, k_len) bool
+            out = F.scaled_dot_product_attention(
+                q, full_k, full_v, attn_mask=attn_mask, is_causal=False,
+                dropout_p=self.attn_dropout if self.training else 0.0,
+            )
+        else:
+            out = F.scaled_dot_product_attention(
+                q, full_k, full_v, is_causal=True,
+                dropout_p=self.attn_dropout if self.training else 0.0,
+            )
 
         out = out.transpose(1, 2).contiguous().view(B, T, C)
         out = self.resid_dropout(self.o_proj(out))
+
+        if past_kv is not None or return_kv:
+            return out, (full_k, full_v)
         return out
 
 
@@ -143,13 +181,28 @@ class TransformerBlock(nn.Module):
         self.mlp = SwiGLUMLP(d_model, d_ff, bias, dropout)
         self.ln_2_out = RMSNorm(d_model)
 
-    def forward(self, x: torch.Tensor, freqs_cis: torch.Tensor) -> torch.Tensor:
-        x = x + self.ln_1_out(self.attn(self.ln_1(x), freqs_cis))
+    def forward(
+        self,
+        x: torch.Tensor,
+        freqs_cis: torch.Tensor,
+        past_kv: tuple[torch.Tensor, torch.Tensor] | None = None,
+        return_kv: bool = False,
+    ) -> torch.Tensor | tuple[torch.Tensor, tuple[torch.Tensor, torch.Tensor]]:
+        if past_kv is not None or return_kv:
+            attn_out, new_kv = self.attn(
+                self.ln_1(x), freqs_cis, past_kv=past_kv, return_kv=True
+            )
+            x = x + self.ln_1_out(attn_out)
+        else:
+            x = x + self.ln_1_out(self.attn(self.ln_1(x), freqs_cis))
+            new_kv = None
         mlp_in = self.ln_2(x) if hasattr(self, "ln_2") else x
         mlp_out = self.mlp(mlp_in)
         if hasattr(self, "ln_2_out"):
             mlp_out = self.ln_2_out(mlp_out)
         x = x + mlp_out
+        if new_kv is not None:
+            return x, new_kv
         return x
 
 
@@ -287,18 +340,33 @@ class ParrotLLM(nn.Module):
         return_logits: bool = True,
         z_loss_coeff: float = 0.0,
         loss_chunk_rows: int = 2048,
-    ) -> tuple[torch.Tensor, torch.Tensor | None]:
+        past_kv: list[tuple[torch.Tensor, torch.Tensor]] | None = None,
+        use_cache: bool = False,
+    ) -> tuple[torch.Tensor, torch.Tensor | None] | tuple[
+        torch.Tensor, torch.Tensor | None, list[tuple[torch.Tensor, torch.Tensor]]
+    ]:
         _, T = idx.shape
+        cache_active = use_cache or past_kv is not None
+        cached_len = past_kv[0][0].size(2) if past_kv is not None else 0
 
         x = self.dropout(self.tok_emb(idx))
 
-        freqs_cis = self.freqs_cis[:T]
-        for block in self.blocks:
+        freqs_cis = self.freqs_cis[cached_len : cached_len + T]
+        new_past_kv: list[tuple[torch.Tensor, torch.Tensor]] | None = (
+            [] if cache_active else None
+        )
+        for layer_idx, block in enumerate(self.blocks):
+            layer_past = past_kv[layer_idx] if past_kv is not None else None
             if self.gradient_checkpointing and self.training:
                 def custom_forward(tensor):
                     return block(tensor, freqs_cis)
 
                 x = checkpoint(custom_forward, x, use_reentrant=False)
+            elif cache_active:
+                x, layer_new_kv = block(
+                    x, freqs_cis, past_kv=layer_past, return_kv=True
+                )
+                new_past_kv.append(layer_new_kv)
             else:
                 x = block(x, freqs_cis)
 
@@ -334,6 +402,8 @@ class ParrotLLM(nn.Module):
                         loss = loss + z_loss_coeff * ((z_term * loss_mask).sum() / denom)
                     else:
                         loss = loss + z_loss_coeff * z_term.mean()
+        if cache_active:
+            return logits, loss, new_past_kv
         return logits, loss
 
     def count_parameters(self) -> int:

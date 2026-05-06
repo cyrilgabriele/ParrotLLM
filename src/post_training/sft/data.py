@@ -50,6 +50,7 @@ from src.post_training.sft.template import (
     normalise_hf_example,
     render_example,
 )
+from src.post_training.hf_cache import cleanup_hf_dataset_cache
 
 
 log = logging.getLogger("parrotllm.sft.data")
@@ -221,7 +222,11 @@ DECONTAM_LOADERS: dict[str, Callable[[], Iterable[str]]] = {
 }
 
 
-def load_decontam_texts(names: Iterable[str]) -> Iterable[str]:
+def load_decontam_texts(
+    names: Iterable[str],
+    *,
+    cleanup_hf_cache: bool = False,
+) -> Iterable[str]:
     """Yield benchmark texts for the configured names.
 
     Resolves each short name in `names` to a registered loader (see
@@ -240,7 +245,11 @@ def load_decontam_texts(names: Iterable[str]) -> Iterable[str]:
                 f"Decontam: unknown benchmark '{name}'. Known: {known}."
             )
         log.info("Decontam: loading benchmark '%s'", name)
-        yield from loader()
+        try:
+            yield from loader()
+        finally:
+            if cleanup_hf_cache:
+                cleanup_hf_dataset_cache()
 
 
 # ── Tokenisation ─────────────────────────────────────────────────────────────
@@ -362,6 +371,7 @@ def build_sft_datasets(
     max_examples: int | None = None,
     hf_cache_dir: str | None = None,
     hf_token: str | None = None,
+    cleanup_hf_cache: bool = False,
     synthetic_jsonl_path: str | None = None,
     synthetic_oversample: int = 1,
 ) -> SFTDatasetBundle:
@@ -386,6 +396,8 @@ def build_sft_datasets(
             (VL07 §2 "quality beats quantity" + fact sheet §4.3).
         max_examples: optional cap for smoke testing.
         hf_cache_dir / hf_token: passed through to ``datasets.load_dataset``.
+        cleanup_hf_cache: remove HF dataset cache files after rows have been
+            materialized/tokenized.
 
     Returns:
         ``SFTDatasetBundle(train, val, stats)`` where ``stats`` is a dict
@@ -456,6 +468,9 @@ def build_sft_datasets(
         "Tokenised %d Alpaca examples (dropped %d empty, %d prompt-too-long).",
         len(tokenised), dropped_empty, dropped_too_long,
     )
+    raw = None
+    if cleanup_hf_cache:
+        cleanup_hf_dataset_cache(cache_dir=hf_cache_dir)
 
     # 4b. Optional synthetic raw-format mixin.
     #
@@ -479,6 +494,7 @@ def build_sft_datasets(
             "json",
             data_files=synthetic_jsonl_path,
             split="train",
+            cache_dir=hf_cache_dir,
         )
         log.info("Loaded %d synthetic raw rows.", len(syn_raw))
 
@@ -516,6 +532,9 @@ def build_sft_datasets(
             "Tokenised %d synthetic examples (dropped %d empty, %d too-long).",
             len(syn_tokenised), synthetic_dropped_empty, synthetic_dropped_too_long,
         )
+        syn_raw = None
+        if cleanup_hf_cache:
+            cleanup_hf_dataset_cache(cache_dir=hf_cache_dir)
 
         if synthetic_oversample > 1:
             syn_tokenised = syn_tokenised * int(synthetic_oversample)

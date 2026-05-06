@@ -58,6 +58,55 @@ def test_labels_branch_returns_scalar_loss():
     assert out.dim() == 0  # scalar
 
 
+def test_labels_branch_chunked_loss_matches_full_cross_entropy():
+    model = _tiny_model()
+    torch.manual_seed(0)
+    ids = torch.randint(0, 90, (2, 8))
+    labels = ids.clone()
+    labels[:, :3] = IGNORE_INDEX
+
+    with torch.no_grad():
+        loss = model(ids, labels=labels, loss_chunk_rows=3)
+        x = model.dropout(model.tok_emb(ids))
+        freqs_cis = model.freqs_cis[:ids.shape[1]]
+        for block in model.blocks:
+            x = block(x, freqs_cis)
+        x = model.ln_f(x)
+        logits = model.lm_head(x)
+        expected = torch.nn.functional.cross_entropy(
+            logits[:, :-1, :].contiguous().view(-1, logits.size(-1)),
+            labels[:, 1:].contiguous().view(-1),
+            ignore_index=IGNORE_INDEX,
+        )
+
+    assert torch.allclose(loss, expected, atol=1e-6)
+
+
+def test_labels_branch_skips_all_ignored_chunks_before_cross_entropy():
+    """Ignored-only chunks must not enter CE; MPS can emit bad grads there."""
+    model = _tiny_model()
+    torch.manual_seed(0)
+    ids = torch.randint(0, 90, (2, 8))
+    labels = ids.clone()
+    labels[:, :6] = IGNORE_INDEX
+
+    with torch.no_grad():
+        loss = model(ids, labels=labels, loss_chunk_rows=2)
+        x = model.dropout(model.tok_emb(ids))
+        freqs_cis = model.freqs_cis[:ids.shape[1]]
+        for block in model.blocks:
+            x = block(x, freqs_cis)
+        x = model.ln_f(x)
+        logits = model.lm_head(x)
+        expected = torch.nn.functional.cross_entropy(
+            logits[:, :-1, :].contiguous().view(-1, logits.size(-1)),
+            labels[:, 1:].contiguous().view(-1),
+            ignore_index=IGNORE_INDEX,
+        )
+
+    assert torch.allclose(loss, expected, atol=1e-6)
+
+
 def test_mask_on_all_but_last_token_only_scores_one_position():
     """If only the final token contributes to the loss, changing anything in
     the masked region must NOT change the loss value."""

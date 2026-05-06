@@ -44,6 +44,33 @@ class DPOConfig(BaseModel):
         default_factory=list,
         description="Same registry as SFT (lambada/hellaswag/winogrande/openbookqa).",
     )
+    preference_jsonl_path: str | None = Field(
+        default=None,
+        description=(
+            "Optional local JSONL of {prompt, chosen, rejected} preference "
+            "pairs. Rows may set template='raw' for leaderboard-style prompts."
+        ),
+    )
+    preference_oversample: int = Field(
+        default=1,
+        ge=1,
+        description="Repeat factor for local preference JSONL rows.",
+    )
+    hf_cache_dir: str | None = Field(
+        default=None,
+        description=(
+            "Optional datasets.load_dataset cache_dir override. Leave unset "
+            "to use Hugging Face defaults."
+        ),
+    )
+    cleanup_hf_cache: bool = Field(
+        default=True,
+        description=(
+            "Delete Hugging Face dataset caches after DPO/decontam data has "
+            "been materialized. Keeps Mac storage from filling up during "
+            "repeated post-training runs."
+        ),
+    )
 
     # ── Tokenisation ────────────────────────────────────────────────────────
     max_length: int = Field(
@@ -90,6 +117,11 @@ class DPOConfig(BaseModel):
     batch_size: int = Field(default=4, ge=1,
                             description="Smaller than SFT — DPO holds 2 models + 4 forwards/step.")
     gradient_accumulation_steps: int = Field(default=8, ge=1)
+    loss_chunk_rows: int = Field(
+        default=2048,
+        ge=128,
+        description="Rows used for chunked response-token log-prob scoring.",
+    )
     num_workers: int = Field(default=0, ge=0)
     pin_memory: bool = Field(default=True)
 

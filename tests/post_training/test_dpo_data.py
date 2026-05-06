@@ -28,13 +28,24 @@ def test_normalise_orca_dpo_pairs_schema():
 def test_normalise_orca_without_system():
     raw = {"question": "Q", "chosen": "A", "rejected": "B"}
     n = normalise_dpo_example(raw)
-    assert n == {"prompt": "Q", "chosen": "A", "rejected": "B"}
+    assert n == {"prompt": "Q", "chosen": "A", "rejected": "B", "template": "alpaca"}
 
 
 def test_normalise_generic_string_schema():
     raw = {"prompt": "Hi", "chosen": "Hello", "rejected": "Bye"}
     n = normalise_dpo_example(raw)
-    assert n == {"prompt": "Hi", "chosen": "Hello", "rejected": "Bye"}
+    assert n == {
+        "prompt": "Hi",
+        "chosen": "Hello",
+        "rejected": "Bye",
+        "template": "alpaca",
+    }
+
+
+def test_normalise_preserves_raw_template_flag():
+    raw = {"prompt": "Q\nA) x\nB) y\nAnswer:", "chosen": " A", "rejected": " B", "template": "raw"}
+    n = normalise_dpo_example(raw)
+    assert n["template"] == "raw"
 
 
 def test_normalise_ultrafeedback_message_list_schema():
@@ -97,3 +108,16 @@ def test_tokenise_dpo_example_truncates_with_eos_preserved(tokenizer):
     assert tok is not None
     assert len(tok.chosen_input_ids) == 64
     assert tok.chosen_input_ids[-1] == eos
+
+
+def test_tokenise_dpo_example_raw_template_has_raw_prompt_boundary(tokenizer):
+    ex = {
+        "prompt": "Context: tiny\nA) yes\nB) no\nAnswer:",
+        "chosen": " A",
+        "rejected": " B",
+        "template": "raw",
+    }
+    tok = tokenise_dpo_example(ex, tokenizer, max_length=128)
+    assert tok is not None
+    prompt_ids = tokenizer(ex["prompt"], add_special_tokens=False).input_ids
+    assert tok.chosen_prompt_length == len(prompt_ids)

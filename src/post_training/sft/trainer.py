@@ -44,6 +44,7 @@ Design decisions (documented in docs/post_training/SFT.md):
 
 from __future__ import annotations
 
+import gc
 import json
 import logging
 import math
@@ -65,9 +66,10 @@ from configs.post_training.sftConfig import SFTConfig
 from src.logging_utils import init_logging, make_run_dir
 from src.model import ParrotLLM
 from src.eval.perplexity import compute_perplexity
-from src.post_training.sft.collator import IGNORE_INDEX, SFTCollator, count_supervised_tokens
+from src.post_training.sft.collator import IGNORE_INDEX, SFTCollator
 from src.post_training.sft.data import build_sft_datasets, load_decontam_texts
 from src.post_training.sft.template import DEFAULT_ALPACA_TEMPLATE
+from src.post_training.hf_cache import cleanup_hf_dataset_cache
 from src.utils import build_tokenizer, get_device
 
 
@@ -155,21 +157,66 @@ def _is_nonfinite(loss: torch.Tensor) -> bool:
     return not bool(torch.isfinite(loss).item())
 
 
+def _count_shifted_supervised_tokens(labels: torch.Tensor) -> int:
+    """Count labels that are actually scored after the next-token shift."""
+    if labels.ndim != 2 or labels.size(1) <= 1:
+        return 0
+    return int((labels[:, 1:] != IGNORE_INDEX).sum().item())
+
+
+def _empty_device_cache(device: torch.device) -> None:
+    """Release cached allocator blocks after skipped/eval batches."""
+    gc.collect()
+    if device.type == "cuda":
+        torch.cuda.empty_cache()
+    elif device.type == "mps" and hasattr(torch, "mps"):
+        synchronize = getattr(torch.mps, "synchronize", None)
+        if synchronize is not None:
+            synchronize()
+        empty_cache = getattr(torch.mps, "empty_cache", None)
+        if empty_cache is not None:
+            empty_cache()
+    gc.collect()
+
+
+def _is_recoverable_mps_oom(exc: RuntimeError, device: torch.device) -> bool:
+    message = str(exc).lower()
+    return device.type == "mps" and "out of memory" in message
+
+
+def _model_parameters_are_finite(model: nn.Module) -> bool:
+    """Check whether an optimizer step introduced NaN/Inf parameters."""
+    with torch.no_grad():
+        for param in model.parameters():
+            if param.requires_grad and not bool(torch.isfinite(param).all().item()):
+                return False
+    return True
+
+
 # ── Optimiser ────────────────────────────────────────────────────────────────
 
 def _build_optimizer(model: nn.Module, sft: SFTConfig) -> torch.optim.AdamW:
     """AdamW with weight-decay only on 2D parameters (VL04 "AdamW recipe")."""
     decay_params = [p for p in model.parameters() if p.requires_grad and p.dim() >= 2]
     no_decay_params = [p for p in model.parameters() if p.requires_grad and p.dim() < 2]
+    device_type = next(model.parameters()).device.type
     groups = [
         {"params": decay_params, "weight_decay": sft.weight_decay},
         {"params": no_decay_params, "weight_decay": 0.0},
     ]
+    kwargs: dict[str, Any] = {}
+    if device_type == "cuda":
+        kwargs["fused"] = True
+    elif device_type == "mps":
+        # The foreach/fused fast paths are not needed on Apple Silicon and can
+        # be less stable across PyTorch nightlies. Use the conservative kernel.
+        kwargs["foreach"] = False
+        kwargs["fused"] = False
     return torch.optim.AdamW(
         groups,
         lr=sft.learning_rate,
         betas=(sft.beta1, sft.beta2),
-        fused=torch.cuda.is_available(),
+        **kwargs,
     )
 
 
@@ -225,7 +272,12 @@ def _draw_pretraining_window(
 
 # ── Wikitext-103 tokeniser cache for the CF tripwire ────────────────────────
 
-def _load_wt103_tokens(tokenizer, max_tokens: int) -> torch.Tensor:
+def _load_wt103_tokens(
+    tokenizer,
+    max_tokens: int,
+    *,
+    cleanup_hf_cache: bool = False,
+) -> torch.Tensor:
     """Load the Wikitext-103 test split, tokenise, slice to ``max_tokens``.
 
     Cached once at the start of the run; the same tensor is re-used for
@@ -238,6 +290,9 @@ def _load_wt103_tokens(tokenizer, max_tokens: int) -> torch.Tensor:
     ds = load_dataset("wikitext", "wikitext-103-raw-v1", split="test")
     text = "\n\n".join(ds["text"])
     ids = tokenizer.encode(text)
+    ds = None
+    if cleanup_hf_cache:
+        cleanup_hf_dataset_cache()
     if len(ids) > max_tokens:
         ids = ids[:max_tokens]
     return torch.tensor(ids, dtype=torch.long)
@@ -293,6 +348,7 @@ def _evaluate(
     val_loader: DataLoader,
     device: torch.device,
     autocast,
+    loss_chunk_rows: int = 2048,
     max_batches: int | None = None,
 ) -> dict[str, float]:
     """Run validation: mean loss per supervised token."""
@@ -304,11 +360,15 @@ def _evaluate(
             break
         input_ids = batch["input_ids"].to(device, non_blocking=True)
         labels = batch["labels"].to(device, non_blocking=True)
-        with autocast:
-            loss = model(input_ids, labels=labels)
-        n_supervised = count_supervised_tokens(labels)
+        n_supervised = _count_shifted_supervised_tokens(labels)
         if n_supervised == 0:
             continue
+        with autocast:
+            loss = model(
+                input_ids,
+                labels=labels,
+                loss_chunk_rows=loss_chunk_rows,
+            )
         total_loss += loss.item() * n_supervised
         total_tokens += n_supervised
     model.train()
@@ -386,7 +446,12 @@ def run_sft(
     # dropped before training. Skipping this invalidates leaderboard scores.
     decontam_texts: list[str] | None = None
     if sft.decontam_benchmarks:
-        decontam_texts = list(load_decontam_texts(sft.decontam_benchmarks))
+        decontam_texts = list(
+            load_decontam_texts(
+                sft.decontam_benchmarks,
+                cleanup_hf_cache=sft.cleanup_hf_cache,
+            )
+        )
         log.info(
             "Decontam: collected %d benchmark strings from %d benchmark(s).",
             len(decontam_texts), len(sft.decontam_benchmarks),
@@ -403,6 +468,8 @@ def run_sft(
         seed=42,
         decontam_texts=decontam_texts,
         max_examples=sft.max_examples,
+        hf_cache_dir=sft.hf_cache_dir,
+        cleanup_hf_cache=sft.cleanup_hf_cache,
         synthetic_jsonl_path=sft.synthetic_jsonl_path,
         synthetic_oversample=sft.synthetic_oversample,
     )
@@ -485,6 +552,7 @@ def run_sft(
         wt103_tokens = _load_wt103_tokens(
             tokenizer,
             max_tokens=(sft.wt103_max_sequences + 2) * sft.max_length,
+            cleanup_hf_cache=sft.cleanup_hf_cache,
         )
         model.eval()
         wt103_baseline_ppl = compute_perplexity(
@@ -520,7 +588,7 @@ def run_sft(
     # — catch the silent failure (mask wrong → loss computed over 0 tokens
     # → gradients zero → "training" for hours with no actual learning).
     first = next(iter(train_loader))
-    n_sup = count_supervised_tokens(first["labels"])
+    n_sup = _count_shifted_supervised_tokens(first["labels"])
     total_pos = first["input_ids"].numel()
     log.info(
         "Preflight batch: %d supervised tokens / %d total (%.1f%% supervised).",
@@ -538,6 +606,8 @@ def run_sft(
     accum_counter = 0
     accum_loss_sum = 0.0
     accum_tokens_sum = 0
+    nonfinite_streak = 0
+    oom_streak = 0
     should_stop_early = False
 
     for epoch in range(sft.epochs):
@@ -559,15 +629,41 @@ def run_sft(
                 pre_targets = pre_targets.to(device, non_blocking=True)
                 with autocast:
                     _, loss = model(
-                        pre_inputs, targets=pre_targets, return_logits=False,
+                        pre_inputs,
+                        targets=pre_targets,
+                        return_logits=False,
+                        loss_chunk_rows=sft.loss_chunk_rows,
                     )
                 n_tokens = sft.max_length * sft.batch_size
             else:
                 input_ids = batch["input_ids"].to(device, non_blocking=True)
                 labels = batch["labels"].to(device, non_blocking=True)
+                n_tokens = _count_shifted_supervised_tokens(labels)
+                if n_tokens == 0:
+                    log.warning(
+                        "Zero supervised next-token labels at step %d. "
+                        "Skipping batch and resetting accumulator.",
+                        state.step,
+                    )
+                    optimizer.zero_grad(set_to_none=True)
+                    accum_counter = 0
+                    accum_loss_sum = 0.0
+                    accum_tokens_sum = 0
+                    oom_streak = 0
+                    nonfinite_streak += 1
+                    if nonfinite_streak >= 25:
+                        raise RuntimeError(
+                            "SFT saw 25 consecutive unusable/non-finite batches. "
+                            "Stopping instead of looping forever; inspect the "
+                            "label mask, response lengths, and optimizer health."
+                        )
+                    continue
                 with autocast:
-                    loss = model(input_ids, labels=labels)
-                n_tokens = count_supervised_tokens(labels)
+                    loss = model(
+                        input_ids,
+                        labels=labels,
+                        loss_chunk_rows=sft.loss_chunk_rows,
+                    )
 
             if _is_nonfinite(loss):
                 # Discard the whole in-flight accumulation window — partial
@@ -584,19 +680,58 @@ def run_sft(
                 accum_counter = 0
                 accum_loss_sum = 0.0
                 accum_tokens_sum = 0
+                _empty_device_cache(device)
+                nonfinite_streak += 1
+                if nonfinite_streak >= 25:
+                    raise RuntimeError(
+                        "SFT saw 25 consecutive unusable/non-finite batches. "
+                        "Stopping instead of looping forever; inspect the "
+                        "label mask, response lengths, and optimizer health."
+                    )
                 continue
 
             loss_value = loss.item()
+            nonfinite_streak = 0
 
             # Gradient accumulation: divide the per-step loss by K so the
             # accumulated gradient has the correct magnitude after K backward
             # passes. This is VL04 slide 39 rule #3 ("Important: divide loss
             # by K, otherwise gradients are K times too large").
             loss_to_back = loss / sft.gradient_accumulation_steps
-            if scaler is not None:
-                scaler.scale(loss_to_back).backward()
-            else:
-                loss_to_back.backward()
+            try:
+                if scaler is not None:
+                    scaler.scale(loss_to_back).backward()
+                else:
+                    loss_to_back.backward()
+            except RuntimeError as exc:
+                if not _is_recoverable_mps_oom(exc, device):
+                    raise
+                log.warning(
+                    "MPS OOM during backward at step %d. Clearing device "
+                    "cache, dropping the partial accumulation window, and "
+                    "continuing with the next batch: %s",
+                    state.step, exc,
+                )
+                optimizer.zero_grad(set_to_none=True)
+                accum_counter = 0
+                accum_loss_sum = 0.0
+                accum_tokens_sum = 0
+                oom_streak += 1
+                del loss_to_back
+                del loss
+                _empty_device_cache(device)
+                if oom_streak >= 5:
+                    raise RuntimeError(
+                        "SFT saw 5 consecutive recoverable MPS OOM windows. "
+                        "Stopping instead of spinning on memory pressure. "
+                        "Restart from the latest 'last' checkpoint after "
+                        "lowering sft.max_length or closing memory-heavy apps."
+                    ) from exc
+                continue
+            del loss_to_back
+            if device.type == "mps":
+                _empty_device_cache(device)
+            oom_streak = 0
 
             # n_tokens was already computed above (branch-aware: response
             # tokens for SFT, full window for pretraining-mix).
@@ -612,9 +747,31 @@ def run_sft(
             if scaler is not None:
                 scaler.unscale_(optimizer)
             if sft.grad_clip > 0:
-                torch.nn.utils.clip_grad_norm_(
-                    model.parameters(), max_norm=sft.grad_clip,
-                )
+                try:
+                    torch.nn.utils.clip_grad_norm_(
+                        model.parameters(),
+                        max_norm=sft.grad_clip,
+                        error_if_nonfinite=True,
+                    )
+                except RuntimeError as exc:
+                    log.warning(
+                        "Non-finite gradient norm at step %d. Skipping "
+                        "optimizer step and resetting accumulator: %s",
+                        state.step, exc,
+                    )
+                    optimizer.zero_grad(set_to_none=True)
+                    accum_counter = 0
+                    accum_loss_sum = 0.0
+                    accum_tokens_sum = 0
+                    _empty_device_cache(device)
+                    nonfinite_streak += 1
+                    if nonfinite_streak >= 25:
+                        raise RuntimeError(
+                            "SFT saw 25 consecutive non-finite gradient windows. "
+                            "Stopping instead of looping forever; inspect the "
+                            "loss graph and optimizer setup."
+                        )
+                    continue
             if sft.lr_schedule == "cosine":
                 lr = _cosine_lr(state.step, sft.warmup_steps, total_optim_steps,
                                 sft.learning_rate, sft.min_lr)
@@ -628,7 +785,17 @@ def run_sft(
                 scaler.update()
             else:
                 optimizer.step()
+            if not _model_parameters_are_finite(model):
+                optimizer.zero_grad(set_to_none=True)
+                _empty_device_cache(device)
+                raise RuntimeError(
+                    "Optimizer step produced NaN/Inf model parameters. "
+                    "Aborting before the checkpoint is corrupted; on MPS this "
+                    "usually means the optimizer kernel or learning-rate setup "
+                    "became unstable."
+                )
             optimizer.zero_grad(set_to_none=True)
+            _empty_device_cache(device)
 
             state.step += 1
             accum_loss_per_token = (
@@ -656,7 +823,14 @@ def run_sft(
                 })
 
             if state.step % sft.eval_every == 0:
-                val_metrics = _evaluate(model, val_loader, device, autocast)
+                val_metrics = _evaluate(
+                    model,
+                    val_loader,
+                    device,
+                    autocast,
+                    loss_chunk_rows=sft.loss_chunk_rows,
+                )
+                _empty_device_cache(device)
                 log.info(
                     "  [val] loss %.4f | ppl %.2f | tokens %d",
                     val_metrics["val_loss"], val_metrics["val_ppl"],
@@ -773,7 +947,13 @@ def run_sft(
             break
 
     # Final checkpoint + summary.
-    final_val = _evaluate(model, val_loader, device, autocast)
+    final_val = _evaluate(
+        model,
+        val_loader,
+        device,
+        autocast,
+        loss_chunk_rows=sft.loss_chunk_rows,
+    )
     log.info(
         "SFT complete. Final val loss %.4f (best %.4f). Total steps %d, tokens %d.",
         final_val["val_loss"], state.best_val_loss, state.step, state.tokens_seen,

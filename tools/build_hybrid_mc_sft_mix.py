@@ -26,6 +26,8 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Iterable
 
+from src.post_training.hf_cache import cleanup_hf_dataset_cache
+
 
 ROOT = Path(__file__).resolve().parents[1]
 if str(ROOT) not in sys.path:
@@ -300,75 +302,78 @@ def main() -> int:
     parser.add_argument("--control", type=int, default=600)
     args = parser.parse_args()
 
-    rng = random.Random(args.seed)
-    print("Loading decontamination hashes...")
-    decontam = _load_decontam_hashes()
-    print(f"  decontam: {len(decontam)} hashes")
+    try:
+        rng = random.Random(args.seed)
+        print("Loading decontamination hashes...")
+        decontam = _load_decontam_hashes()
+        print(f"  decontam: {len(decontam)} hashes")
 
-    quotas = {
-        "hellaswag": 1500,
-        "openbookqa": 1600,
-        "winogrande": 1000,
-        "sciq": 700,
-        "arc_easy": 500,
-        "arc_challenge": 300,
-        "commonsenseqa": 1200,
-        "boolq_control": 400,
-    }
-    scale = max(0.1, (args.target - args.control) / sum(quotas.values()))
-    quotas = {name: max(1, int(round(value * scale))) for name, value in quotas.items()}
+        quotas = {
+            "hellaswag": 1500,
+            "openbookqa": 1600,
+            "winogrande": 1000,
+            "sciq": 700,
+            "arc_easy": 500,
+            "arc_challenge": 300,
+            "commonsenseqa": 1200,
+            "boolq_control": 400,
+        }
+        scale = max(0.1, (args.target - args.control) / sum(quotas.values()))
+        quotas = {name: max(1, int(round(value * scale))) for name, value in quotas.items()}
 
-    source_loaders = {
-        "hellaswag": load_hellaswag,
-        "openbookqa": load_openbookqa,
-        "winogrande": load_winogrande,
-        "sciq": load_sciq,
-        "arc_easy": lambda: load_arc("ARC-Easy", "arc_easy_train"),
-        "arc_challenge": lambda: load_arc("ARC-Challenge", "arc_challenge_train"),
-        "commonsenseqa": load_commonsenseqa,
-        "boolq_control": load_boolq_control,
-    }
+        source_loaders = {
+            "hellaswag": load_hellaswag,
+            "openbookqa": load_openbookqa,
+            "winogrande": load_winogrande,
+            "sciq": load_sciq,
+            "arc_easy": lambda: load_arc("ARC-Easy", "arc_easy_train"),
+            "arc_challenge": lambda: load_arc("ARC-Challenge", "arc_challenge_train"),
+            "commonsenseqa": load_commonsenseqa,
+            "boolq_control": load_boolq_control,
+        }
 
-    rows: list[dict] = []
-    for name, quota in quotas.items():
-        print(f"Loading {name} train split...")
-        try:
-            items = source_loaders[name]()
-        except Exception as exc:
-            print(f"  skipped {name}: {exc!r}")
-            continue
-        picked = _sample_rendered(
-            items,
-            quota=quota,
-            rng=rng,
-            decontam=decontam,
-            balance_four_way=True,
-        )
-        rows.extend(picked)
-        print(f"  added {len(picked)} rows")
+        rows: list[dict] = []
+        for name, quota in quotas.items():
+            print(f"Loading {name} train split...")
+            try:
+                items = source_loaders[name]()
+            except Exception as exc:
+                print(f"  skipped {name}: {exc!r}")
+                continue
+            picked = _sample_rendered(
+                items,
+                quota=quota,
+                rng=rng,
+                decontam=decontam,
+                balance_four_way=True,
+            )
+            rows.extend(picked)
+            print(f"  added {len(picked)} rows")
 
-    control_rows: list[dict] = []
-    control_items = programmatic_control_items()
-    while len(control_rows) < args.control:
-        picked = _sample_rendered(
-            control_items[:],
-            quota=len(control_items),
-            rng=rng,
-            decontam=decontam,
-            balance_four_way=True,
-        )
-        control_rows.extend(picked)
-    rows.extend(control_rows[: args.control])
+        control_rows: list[dict] = []
+        control_items = programmatic_control_items()
+        while len(control_rows) < args.control:
+            picked = _sample_rendered(
+                control_items[:],
+                quota=len(control_items),
+                rng=rng,
+                decontam=decontam,
+                balance_four_way=True,
+            )
+            control_rows.extend(picked)
+        rows.extend(control_rows[: args.control])
 
-    rng.shuffle(rows)
-    _write_jsonl(rows, args.out)
+        rng.shuffle(rows)
+        _write_jsonl(rows, args.out)
 
-    letters = Counter(row["response"].strip() for row in rows)
-    sources = Counter(row["source"] for row in rows)
-    print(f"Wrote {len(rows)} rows to {args.out}")
-    print(f"Answer distribution: {dict(sorted(letters.items()))}")
-    print(f"Source distribution: {dict(sorted(sources.items()))}")
-    return 0
+        letters = Counter(row["response"].strip() for row in rows)
+        sources = Counter(row["source"] for row in rows)
+        print(f"Wrote {len(rows)} rows to {args.out}")
+        print(f"Answer distribution: {dict(sorted(letters.items()))}")
+        print(f"Source distribution: {dict(sorted(sources.items()))}")
+        return 0
+    finally:
+        cleanup_hf_dataset_cache()
 
 
 if __name__ == "__main__":

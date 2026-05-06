@@ -54,8 +54,11 @@ sft:
 
   synthetic_jsonl_path: data/synthetic/sft_v9_mc_balanced.jsonl
   synthetic_oversample: 2
+  cleanup_hf_cache: true
 
-  max_length: 1024
+  # Apple-Silicon SFT recipe: keep training examples below long-context
+  # attention memory cliffs. Inference/benchmark context remains 1024.
+  max_length: 256
 
   learning_rate: 1.0e-5
   min_lr: 1.0e-6
@@ -68,12 +71,18 @@ sft:
   epochs: 2
   lr_schedule: cosine
 
-  batch_size: 8
-  gradient_accumulation_steps: 8
+  # MPS keeps activations/attention in shared memory, so use the smallest
+  # micro-batch and preserve the effective batch with accumulation.
+  batch_size: 1
+  gradient_accumulation_steps: 64
+  loss_chunk_rows: 128
   num_workers: 0
   pin_memory: true
 
-  pretraining_mix_ratio: 0.20
+  # Disabled for the first Apple-Silicon run: full-length pretraining windows
+  # make MPS backward instability much harder to isolate. Re-enable at 0.05
+  # only after the pure SFT pass is moving cleanly.
+  pretraining_mix_ratio: 0.0
   pretraining_bin_path: data/processed/train.bin
 
   wt103_eval_every_n_evals: 1
@@ -82,8 +91,8 @@ sft:
 
   runs_dir: runs
   eval_every: 100
-  save_every: 999999
-  log_every: 10
+  save_every: 25
+  log_every: 1
   early_stopping_patience: 3
 
   base_checkpoint: runs/posttraining/base_import/run_20260410_044337/checkpoints/best_loss_3p2650_epoch_0000_step_0095500.pt

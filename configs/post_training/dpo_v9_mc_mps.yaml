@@ -1,0 +1,88 @@
+# DPO v9 — Mac-safe benchmark-focused ablation on top of SFT v9.
+#
+# Build the MC preference mix first:
+#   uv run python tools/build_hybrid_mc_dpo_preferences.py \
+#     --out data/synthetic/dpo_v9_mc_preferences.jsonl
+#
+# Run:
+#   uv run python -u main.py --stage dpo \
+#     --config configs/post_training/dpo_v9_mc_mps.yaml
+#
+# Keep model.context_length=1024 for inference/leaderboard; only DPO
+# training examples are capped to 256 for MPS memory stability.
+
+model:
+  vocab_size: 50258
+  pad_token_id: 50257
+  bos_token_id: 50256
+  eos_token_id: 50256
+  d_model: 384
+  n_layers: 14
+  n_heads: 6
+  d_ff: 768
+  context_length: 1024
+  bias: false
+  dropout: 0.0
+  rope_theta: 10000.0
+  gradient_checkpointing: false
+
+logging:
+  console_level: INFO
+  file_level: INFO
+
+dpo:
+  hf_dataset_name: Intel/orca_dpo_pairs
+  hf_split: train
+  max_examples: 4000
+  val_fraction: 0.05
+  decontam_benchmarks:
+    - lambada
+    - hellaswag
+    - winogrande
+    - openbookqa
+    - arc_easy
+    - arc_challenge
+    - boolq
+    - commonsenseqa
+    - sciq
+    - mmlu
+
+  preference_jsonl_path: data/synthetic/dpo_v9_mc_preferences.jsonl
+  preference_oversample: 1
+  cleanup_hf_cache: true
+
+  max_length: 256
+
+  beta: 0.2
+  length_normalize_logp: true
+
+  learning_rate: 5.0e-7
+  min_lr: 1.0e-7
+  weight_decay: 0.0
+  beta1: 0.9
+  beta2: 0.95
+  grad_clip: 1.0
+
+  warmup_steps: 10
+  epochs: 1
+  lr_schedule: cosine
+
+  batch_size: 1
+  gradient_accumulation_steps: 32
+  loss_chunk_rows: 128
+  num_workers: 0
+  pin_memory: true
+
+  wt103_eval_every_n_evals: 1
+  wt103_max_sequences: 64
+  wt103_hard_stop_pct: 5.0
+
+  runs_dir: runs
+  eval_every: 25
+  save_every: 25
+  log_every: 1
+  early_stopping_patience: 2
+
+  base_checkpoint: runs/run_20260505_213838_sft/checkpoints/final_step_0001952_epoch_01_valloss_2p4902.pt
+  device: auto
+  torch_compile: false

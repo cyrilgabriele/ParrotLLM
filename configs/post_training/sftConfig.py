@@ -83,6 +83,21 @@ class SFTConfig(BaseModel):
             "trainer (e.g. 50k Alpaca + 2.5k synthetic × 5x = ~20% raw)."
         ),
     )
+    hf_cache_dir: str | None = Field(
+        default=None,
+        description=(
+            "Optional datasets.load_dataset cache_dir override. Leave unset "
+            "to use Hugging Face defaults."
+        ),
+    )
+    cleanup_hf_cache: bool = Field(
+        default=True,
+        description=(
+            "Delete Hugging Face dataset caches after SFT/decontam data has "
+            "been materialized. Keeps Mac storage from filling up during "
+            "repeated post-training runs."
+        ),
+    )
 
     # ── Tokenisation / template ─────────────────────────────────────────────
     max_length: int = Field(
@@ -120,6 +135,14 @@ class SFTConfig(BaseModel):
     # ── Batching ────────────────────────────────────────────────────────────
     batch_size: int = Field(default=8, ge=1)
     gradient_accumulation_steps: int = Field(default=8, ge=1)
+    loss_chunk_rows: int = Field(
+        default=2048,
+        ge=128,
+        description=(
+            "Rows used when computing CE over the vocabulary in chunks. "
+            "Lower values reduce peak memory on MPS at a small speed cost."
+        ),
+    )
     num_workers: int = Field(default=2, ge=0)
     pin_memory: bool = Field(default=True)
 

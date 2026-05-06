@@ -12,8 +12,11 @@ import math
 import torch
 
 from src.post_training.sft.trainer import (
+    _build_optimizer,
+    _count_shifted_supervised_tokens,
     _cosine_lr,
     _draw_pretraining_window,
+    _is_recoverable_mps_oom,
     _is_nonfinite,
     _should_stop_early,
     _wsd_lr,
@@ -39,6 +42,46 @@ def test_is_nonfinite_detects_negative_inf():
 
 def test_is_nonfinite_passes_through_normal_loss():
     assert not _is_nonfinite(torch.tensor(1.234))
+
+
+def test_count_shifted_supervised_tokens_matches_forward_loss_positions():
+    labels = torch.tensor([
+        [-100, -100, 11, 12],
+        [-100, 21, -100, 22],
+    ])
+    assert _count_shifted_supervised_tokens(labels) == 4
+
+
+def test_count_shifted_supervised_tokens_ignores_unscored_first_column():
+    labels = torch.tensor([[7, -100, -100]])
+    assert _count_shifted_supervised_tokens(labels) == 0
+
+
+def test_build_optimizer_uses_safe_mps_kernel_flags():
+    class TinyConfig:
+        weight_decay = 0.1
+        learning_rate = 1e-5
+        beta1 = 0.9
+        beta2 = 0.95
+
+    model = torch.nn.Linear(2, 2)
+    opt = _build_optimizer(model, TinyConfig())
+    assert isinstance(opt, torch.optim.AdamW)
+
+
+def test_is_recoverable_mps_oom_requires_mps_and_oom_message():
+    assert _is_recoverable_mps_oom(
+        RuntimeError("MPS backend out of memory"),
+        torch.device("mps"),
+    )
+    assert not _is_recoverable_mps_oom(
+        RuntimeError("MPS backend out of memory"),
+        torch.device("cpu"),
+    )
+    assert not _is_recoverable_mps_oom(
+        RuntimeError("some other error"),
+        torch.device("mps"),
+    )
 
 
 # ── LR schedules (smoke + boundary conditions) ──────────────────────────────

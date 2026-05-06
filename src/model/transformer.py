@@ -46,10 +46,41 @@ def apply_rope(x: torch.Tensor, freqs_cis: torch.Tensor) -> torch.Tensor:
     x: (B, n_heads, T, d_head)
     freqs_cis: (T, d_head // 2) complex
     """
-    x_complex = torch.view_as_complex(x.float().reshape(*x.shape[:-1], -1, 2))
-    freqs_cis = freqs_cis.unsqueeze(0).unsqueeze(0)  # (1, 1, T, d_head//2)
-    x_rotated = x_complex * freqs_cis
-    return torch.view_as_real(x_rotated).reshape(x.shape).type_as(x)
+    x_float = x.float()
+    x_even = x_float[..., 0::2]
+    x_odd = x_float[..., 1::2]
+
+    # Real-valued form of complex multiply:
+    # (x_even + i*x_odd) * (cos + i*sin).
+    # Keeping complex tensors out of the autograd graph is materially more
+    # stable on MPS while producing the same rotation.
+    freqs = torch.view_as_real(freqs_cis).to(device=x.device)
+    cos = freqs[..., 0].unsqueeze(0).unsqueeze(0)
+    sin = freqs[..., 1].unsqueeze(0).unsqueeze(0)
+
+    rotated = torch.empty_like(x_float)
+    rotated[..., 0::2] = x_even * cos - x_odd * sin
+    rotated[..., 1::2] = x_even * sin + x_odd * cos
+    return rotated.type_as(x)
+
+
+def causal_attention(q: torch.Tensor, k: torch.Tensor, v: torch.Tensor, *,
+                     dropout_p: float = 0.0) -> torch.Tensor:
+    """Causal attention with an MPS-stable fallback for training."""
+    if q.device.type != "mps":
+        return F.scaled_dot_product_attention(
+            q, k, v, is_causal=True, dropout_p=dropout_p,
+        )
+
+    scale = 1.0 / math.sqrt(q.size(-1))
+    scores = torch.matmul(q.float(), k.float().transpose(-2, -1)) * scale
+    T = q.size(-2)
+    causal_mask = torch.ones((T, T), device=q.device, dtype=torch.bool).triu(1)
+    scores = scores.masked_fill(causal_mask, torch.finfo(scores.dtype).min)
+    attn = torch.softmax(scores, dim=-1).type_as(v)
+    if dropout_p > 0.0:
+        attn = F.dropout(attn, p=dropout_p, training=True)
+    return torch.matmul(attn, v)
 
 
 # ── Multi-Head Attention ─────────────────────────────────────────────────────
@@ -86,9 +117,12 @@ class MultiHeadAttention(nn.Module):
         q = self.q_norm(apply_rope(q, freqs_cis))
         k = self.k_norm(apply_rope(k, freqs_cis))
 
-        # Causal self-attention; Flash Attention if available
-        out = F.scaled_dot_product_attention(
-            q, k, v, is_causal=True,
+        # Causal self-attention. CUDA/CPU use SDPA; MPS training uses the
+        # explicit math path because SDPA backward can produce non-finite grads.
+        out = causal_attention(
+            q,
+            k,
+            v,
             dropout_p=self.attn_dropout if self.training else 0.0,
         )
 
@@ -306,6 +340,63 @@ class ParrotLLM(nn.Module):
             loss = loss + z_loss_coeff * (total_z / flat_targets.numel())
         return loss
 
+    def _compute_labels_loss_in_chunks(
+        self,
+        hidden: torch.Tensor,
+        labels: torch.Tensor,
+        *,
+        loss_chunk_rows: int = 2048,
+    ) -> torch.Tensor:
+        """Compute shifted, masked CE for HF-style labels without full logits."""
+        shift_hidden = hidden[:, :-1, :].contiguous()
+        shift_labels = labels[:, 1:].contiguous()
+
+        flat_hidden = shift_hidden.reshape(-1, shift_hidden.size(-1))
+        flat_labels = shift_labels.reshape(-1)
+
+        total_ce = torch.zeros((), device=hidden.device, dtype=torch.float32)
+        supervised = (flat_labels != -100).sum().to(dtype=torch.float32)
+
+        for start in range(0, flat_hidden.size(0), loss_chunk_rows):
+            stop = start + loss_chunk_rows
+            hidden_chunk = flat_hidden[start:stop]
+            label_chunk = flat_labels[start:stop]
+
+            supervised_mask = label_chunk != -100
+            if not bool(supervised_mask.any().item()):
+                continue
+            hidden_chunk = hidden_chunk[supervised_mask]
+            label_chunk = label_chunk[supervised_mask]
+            logits_chunk = F.linear(hidden_chunk, self.lm_head.weight, self.lm_head.bias)
+
+            total_ce = total_ce + F.cross_entropy(
+                logits_chunk,
+                label_chunk,
+                reduction="sum",
+            )
+
+        return total_ce / supervised
+
+    def forward_hidden(self, idx: torch.Tensor) -> torch.Tensor:
+        """Return final hidden states before the language-model head."""
+        _, T = idx.shape
+
+        x = self.dropout(self.tok_emb(idx))
+
+        freqs_cis = self.freqs_cis[:T]
+        for block in self.blocks:
+            if self.gradient_checkpointing and self.training:
+                def custom_forward(tensor):
+                    return block(tensor, freqs_cis)
+
+                x = checkpoint(custom_forward, x, use_reentrant=False)
+            else:
+                x = block(x, freqs_cis)
+
+        if hasattr(self, "ln_f"):
+            x = self.ln_f(x)
+        return x
+
     def forward(
         self,
         idx: torch.Tensor,
@@ -336,22 +427,7 @@ class ParrotLLM(nn.Module):
         When ``targets`` is given (legacy pretraining path), it returns
         ``(logits, loss)`` as before.
         """
-        _, T = idx.shape
-
-        x = self.dropout(self.tok_emb(idx))
-
-        freqs_cis = self.freqs_cis[:T]
-        for block in self.blocks:
-            if self.gradient_checkpointing and self.training:
-                def custom_forward(tensor):
-                    return block(tensor, freqs_cis)
-
-                x = checkpoint(custom_forward, x, use_reentrant=False)
-            else:
-                x = block(x, freqs_cis)
-
-        if hasattr(self, "ln_f"):
-            x = self.ln_f(x)
+        x = self.forward_hidden(idx)
 
         # ── SFT path (HuggingFace labels convention, VL07 slide 15) ─────────
         if labels is not None:
@@ -360,15 +436,11 @@ class ParrotLLM(nn.Module):
             # via `ignore_index=-100` in F.cross_entropy, which is the
             # exact mechanism VL07 slide 15 prescribes ("Instruction tokens
             # are masked with label = −100").
-            logits = self.lm_head(x)
-            shift_logits = logits[:, :-1, :].contiguous()
-            shift_labels = labels[:, 1:].contiguous()
-            loss = F.cross_entropy(
-                shift_logits.view(-1, shift_logits.size(-1)),
-                shift_labels.view(-1),
-                ignore_index=-100,
+            return self._compute_labels_loss_in_chunks(
+                x,
+                labels,
+                loss_chunk_rows=loss_chunk_rows,
             )
-            return loss
 
         # ── Pretraining path (pre-shifted targets) ──────────────────────────
         logits = self.lm_head(x) if (targets is None or return_logits) else None

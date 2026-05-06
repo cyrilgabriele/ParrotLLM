@@ -57,8 +57,11 @@ from src.post_training.dpo.data import build_dpo_datasets
 from src.post_training.sft.data import load_decontam_texts
 from src.post_training.sft.trainer import (
     _cosine_lr,
+    _empty_device_cache,
+    _is_recoverable_mps_oom,
     _is_nonfinite,
     _load_wt103_tokens,
+    _model_parameters_are_finite,
     _should_stop_early,
     _wsd_lr,
     _wt103_should_stop,
@@ -119,6 +122,7 @@ def per_sequence_logp(
     labels: torch.Tensor,
     *,
     length_normalize: bool = False,
+    loss_chunk_rows: int = 2048,
 ) -> torch.Tensor:
     """Sum log-prob of the response tokens for each sequence in the batch.
 
@@ -129,10 +133,33 @@ def per_sequence_logp(
     Returns a (B,) tensor of summed log-probs (or per-token mean if
     ``length_normalize`` is True). Differentiable wrt model parameters.
     """
-    # The model's forward returns (logits, loss=None) for the legacy path.
-    # We bypass loss and only need logits.
-    logits, _ = model(input_ids, return_logits=True)
-    # Standard next-token shift: predict labels[t+1] from logits[t].
+    raw_model = _unwrap_model(model)
+    if not hasattr(raw_model, "forward_hidden") or not hasattr(raw_model, "lm_head"):
+        logits, _ = model(input_ids, return_logits=True)
+        return _per_sequence_logp_from_logits(
+            logits,
+            labels,
+            length_normalize=length_normalize,
+        )
+
+    hidden = raw_model.forward_hidden(input_ids)
+    lm_head = raw_model.lm_head
+    return _per_sequence_logp_from_hidden(
+        hidden,
+        labels,
+        lm_head=lm_head,
+        length_normalize=length_normalize,
+        loss_chunk_rows=loss_chunk_rows,
+    )
+
+
+def _per_sequence_logp_from_logits(
+    logits: torch.Tensor,
+    labels: torch.Tensor,
+    *,
+    length_normalize: bool = False,
+) -> torch.Tensor:
+    """Reference full-logit path used by tests and fallback wrappers."""
     shift_logits = logits[:, :-1, :]
     shift_labels = labels[:, 1:]
     log_probs = F.log_softmax(shift_logits, dim=-1)
@@ -150,20 +177,80 @@ def per_sequence_logp(
     return per_token_logp.sum(dim=-1)
 
 
+def _per_sequence_logp_from_hidden(
+    hidden: torch.Tensor,
+    labels: torch.Tensor,
+    *,
+    lm_head: nn.Linear,
+    length_normalize: bool = False,
+    loss_chunk_rows: int = 2048,
+) -> torch.Tensor:
+    """Chunked response-token log-prob scoring without full sequence logits."""
+    B = hidden.size(0)
+    shift_hidden = hidden[:, :-1, :].contiguous()
+    shift_labels = labels[:, 1:].contiguous()
+
+    flat_hidden = shift_hidden.reshape(-1, shift_hidden.size(-1))
+    flat_labels = shift_labels.reshape(-1)
+    seq_ids = torch.arange(B, device=hidden.device).unsqueeze(1)
+    seq_ids = seq_ids.expand(B, shift_labels.size(1)).reshape(-1)
+
+    total = torch.zeros(B, device=hidden.device, dtype=torch.float32)
+    counts = torch.zeros(B, device=hidden.device, dtype=torch.float32)
+    supervised = flat_labels != IGNORE_INDEX
+    if not bool(supervised.any().item()):
+        return total
+
+    flat_hidden = flat_hidden[supervised]
+    flat_labels = flat_labels[supervised]
+    seq_ids = seq_ids[supervised]
+
+    for start in range(0, flat_hidden.size(0), loss_chunk_rows):
+        stop = start + loss_chunk_rows
+        hidden_chunk = flat_hidden[start:stop]
+        label_chunk = flat_labels[start:stop]
+        seq_chunk = seq_ids[start:stop]
+        logits_chunk = F.linear(hidden_chunk, lm_head.weight, lm_head.bias)
+        log_probs = F.log_softmax(logits_chunk, dim=-1)
+        vals = log_probs.gather(-1, label_chunk.unsqueeze(-1)).squeeze(-1)
+        total.index_add_(0, seq_chunk, vals.float())
+        counts.index_add_(0, seq_chunk, torch.ones_like(vals, dtype=torch.float32))
+
+    if length_normalize:
+        return total / counts.clamp(min=1.0)
+    return total
+
+
+def _unwrap_model(model: nn.Module) -> nn.Module:
+    raw = model
+    if hasattr(raw, "module"):
+        raw = raw.module
+    if hasattr(raw, "_orig_mod"):
+        raw = raw._orig_mod
+    return raw
+
+
 # ── Optimiser ────────────────────────────────────────────────────────────────
 
 def _build_optimizer(model: nn.Module, dpo: DPOConfig) -> torch.optim.AdamW:
     decay_params = [p for p in model.parameters() if p.requires_grad and p.dim() >= 2]
     no_decay_params = [p for p in model.parameters() if p.requires_grad and p.dim() < 2]
+    device_type = next(model.parameters()).device.type
     groups = [
         {"params": decay_params, "weight_decay": dpo.weight_decay},
         {"params": no_decay_params, "weight_decay": 0.0},
     ]
+    kwargs: dict[str, Any] = {}
+    if device_type == "cuda":
+        kwargs["fused"] = True
+    elif device_type == "mps":
+        kwargs["foreach"] = False
+        kwargs["fused"] = False
     return torch.optim.AdamW(
         groups,
         lr=dpo.learning_rate,
         betas=(dpo.beta1, dpo.beta2),
-        fused=torch.cuda.is_available(),
+        **kwargs,
     )
 
 
@@ -205,7 +292,17 @@ def _load_sft_model(checkpoint_path: str, device: torch.device) -> tuple[ParrotL
 # ── Eval ─────────────────────────────────────────────────────────────────────
 
 @torch.no_grad()
-def _evaluate(policy, reference, val_loader, device, autocast, *, beta, length_normalize):
+def _evaluate(
+    policy,
+    reference,
+    val_loader,
+    device,
+    autocast,
+    *,
+    beta,
+    length_normalize,
+    loss_chunk_rows: int = 2048,
+):
     policy.eval()
     losses, accs = [], []
     for batch in val_loader:
@@ -214,10 +311,26 @@ def _evaluate(policy, reference, val_loader, device, autocast, *, beta, length_n
         ri = batch["rejected_input_ids"].to(device, non_blocking=True)
         rl = batch["rejected_labels"].to(device, non_blocking=True)
         with autocast:
-            pol_c = per_sequence_logp(policy, ci, cl, length_normalize=length_normalize)
-            pol_r = per_sequence_logp(policy, ri, rl, length_normalize=length_normalize)
-            ref_c = per_sequence_logp(reference, ci, cl, length_normalize=length_normalize)
-            ref_r = per_sequence_logp(reference, ri, rl, length_normalize=length_normalize)
+            pol_c = per_sequence_logp(
+                policy, ci, cl,
+                length_normalize=length_normalize,
+                loss_chunk_rows=loss_chunk_rows,
+            )
+            pol_r = per_sequence_logp(
+                policy, ri, rl,
+                length_normalize=length_normalize,
+                loss_chunk_rows=loss_chunk_rows,
+            )
+            ref_c = per_sequence_logp(
+                reference, ci, cl,
+                length_normalize=length_normalize,
+                loss_chunk_rows=loss_chunk_rows,
+            )
+            ref_r = per_sequence_logp(
+                reference, ri, rl,
+                length_normalize=length_normalize,
+                loss_chunk_rows=loss_chunk_rows,
+            )
         loss, m = dpo_loss(
             policy_chosen_logp=pol_c, policy_rejected_logp=pol_r,
             ref_chosen_logp=ref_c, ref_rejected_logp=ref_r, beta=beta,
@@ -270,7 +383,12 @@ def run_dpo(
     # Decontamination
     decontam_texts: list[str] | None = None
     if dpo.decontam_benchmarks:
-        decontam_texts = list(load_decontam_texts(dpo.decontam_benchmarks))
+        decontam_texts = list(
+            load_decontam_texts(
+                dpo.decontam_benchmarks,
+                cleanup_hf_cache=dpo.cleanup_hf_cache,
+            )
+        )
         log.info("Decontam: collected %d benchmark strings.", len(decontam_texts))
 
     bundle = build_dpo_datasets(
@@ -282,6 +400,10 @@ def run_dpo(
         seed=42,
         decontam_texts=decontam_texts,
         max_examples=dpo.max_examples,
+        preference_jsonl_path=dpo.preference_jsonl_path,
+        preference_oversample=dpo.preference_oversample,
+        hf_cache_dir=dpo.hf_cache_dir,
+        cleanup_hf_cache=dpo.cleanup_hf_cache,
     )
     log.info("Dataset ready: train=%d, val=%d", len(bundle.train), len(bundle.val))
 
@@ -345,6 +467,7 @@ def run_dpo(
         log.info("Loading Wikitext-103 for CF tripwire...")
         wt103_tokens = _load_wt103_tokens(
             tokenizer, max_tokens=(dpo.wt103_max_sequences + 2) * dpo.max_length,
+            cleanup_hf_cache=dpo.cleanup_hf_cache,
         )
         wt103_baseline_ppl = compute_perplexity(
             policy, wt103_tokens, dpo.max_length, device,
@@ -370,6 +493,8 @@ def run_dpo(
     accum_counter = 0
     accum_loss_sum = 0.0
     accum_acc_sum = 0.0
+    nonfinite_streak = 0
+    oom_streak = 0
     should_stop_early = False
 
     for epoch in range(dpo.epochs):
@@ -381,16 +506,53 @@ def run_dpo(
             ri = batch["rejected_input_ids"].to(device, non_blocking=True)
             rl = batch["rejected_labels"].to(device, non_blocking=True)
 
-            with autocast:
-                pol_c = per_sequence_logp(policy, ci, cl, length_normalize=dpo.length_normalize_logp)
-                pol_r = per_sequence_logp(policy, ri, rl, length_normalize=dpo.length_normalize_logp)
-                with torch.no_grad():
-                    ref_c = per_sequence_logp(reference, ci, cl, length_normalize=dpo.length_normalize_logp)
-                    ref_r = per_sequence_logp(reference, ri, rl, length_normalize=dpo.length_normalize_logp)
-                loss, m = dpo_loss(
-                    policy_chosen_logp=pol_c, policy_rejected_logp=pol_r,
-                    ref_chosen_logp=ref_c, ref_rejected_logp=ref_r, beta=dpo.beta,
+            try:
+                with autocast:
+                    pol_c = per_sequence_logp(
+                        policy, ci, cl,
+                        length_normalize=dpo.length_normalize_logp,
+                        loss_chunk_rows=dpo.loss_chunk_rows,
+                    )
+                    pol_r = per_sequence_logp(
+                        policy, ri, rl,
+                        length_normalize=dpo.length_normalize_logp,
+                        loss_chunk_rows=dpo.loss_chunk_rows,
+                    )
+                    with torch.no_grad():
+                        ref_c = per_sequence_logp(
+                            reference, ci, cl,
+                            length_normalize=dpo.length_normalize_logp,
+                            loss_chunk_rows=dpo.loss_chunk_rows,
+                        )
+                        ref_r = per_sequence_logp(
+                            reference, ri, rl,
+                            length_normalize=dpo.length_normalize_logp,
+                            loss_chunk_rows=dpo.loss_chunk_rows,
+                        )
+                    loss, m = dpo_loss(
+                        policy_chosen_logp=pol_c, policy_rejected_logp=pol_r,
+                        ref_chosen_logp=ref_c, ref_rejected_logp=ref_r, beta=dpo.beta,
+                    )
+            except RuntimeError as exc:
+                if not _is_recoverable_mps_oom(exc, device):
+                    raise
+                log.warning(
+                    "MPS OOM during DPO forward at step %d. Clearing cache, "
+                    "dropping the partial accumulation window, and continuing: %s",
+                    state.step, exc,
                 )
+                optimizer.zero_grad(set_to_none=True)
+                accum_counter = 0
+                accum_loss_sum = 0.0
+                accum_acc_sum = 0.0
+                oom_streak += 1
+                _empty_device_cache(device)
+                if oom_streak >= 5:
+                    raise RuntimeError(
+                        "DPO saw 5 consecutive recoverable MPS OOM windows. "
+                        "Lower dpo.max_length or close memory-heavy apps."
+                    ) from exc
+                continue
 
             if _is_nonfinite(loss):
                 log.warning(
@@ -401,14 +563,49 @@ def run_dpo(
                 accum_counter = 0
                 accum_loss_sum = 0.0
                 accum_acc_sum = 0.0
+                nonfinite_streak += 1
+                _empty_device_cache(device)
+                if nonfinite_streak >= 25:
+                    raise RuntimeError(
+                        "DPO saw 25 consecutive non-finite batches. Stopping "
+                        "instead of looping forever."
+                    )
                 continue
 
             loss_value = loss.item()
+            nonfinite_streak = 0
             loss_to_back = loss / dpo.gradient_accumulation_steps
-            if scaler is not None:
-                scaler.scale(loss_to_back).backward()
-            else:
-                loss_to_back.backward()
+            try:
+                if scaler is not None:
+                    scaler.scale(loss_to_back).backward()
+                else:
+                    loss_to_back.backward()
+            except RuntimeError as exc:
+                if not _is_recoverable_mps_oom(exc, device):
+                    raise
+                log.warning(
+                    "MPS OOM during DPO backward at step %d. Clearing cache, "
+                    "dropping the partial accumulation window, and continuing: %s",
+                    state.step, exc,
+                )
+                optimizer.zero_grad(set_to_none=True)
+                accum_counter = 0
+                accum_loss_sum = 0.0
+                accum_acc_sum = 0.0
+                oom_streak += 1
+                del loss_to_back
+                del loss
+                _empty_device_cache(device)
+                if oom_streak >= 5:
+                    raise RuntimeError(
+                        "DPO saw 5 consecutive recoverable MPS OOM windows. "
+                        "Lower dpo.max_length or close memory-heavy apps."
+                    ) from exc
+                continue
+            del loss_to_back
+            if device.type == "mps":
+                _empty_device_cache(device)
+            oom_streak = 0
 
             accum_loss_sum += loss_value
             accum_acc_sum += m["accuracy"]
@@ -420,7 +617,29 @@ def run_dpo(
             if scaler is not None:
                 scaler.unscale_(optimizer)
             if dpo.grad_clip > 0:
-                torch.nn.utils.clip_grad_norm_(policy.parameters(), max_norm=dpo.grad_clip)
+                try:
+                    torch.nn.utils.clip_grad_norm_(
+                        policy.parameters(),
+                        max_norm=dpo.grad_clip,
+                        error_if_nonfinite=True,
+                    )
+                except RuntimeError as exc:
+                    log.warning(
+                        "Non-finite DPO gradient norm at step %d. Skipping "
+                        "optimizer step and resetting accumulator: %s",
+                        state.step, exc,
+                    )
+                    optimizer.zero_grad(set_to_none=True)
+                    accum_counter = 0
+                    accum_loss_sum = 0.0
+                    accum_acc_sum = 0.0
+                    nonfinite_streak += 1
+                    _empty_device_cache(device)
+                    if nonfinite_streak >= 25:
+                        raise RuntimeError(
+                            "DPO saw 25 consecutive non-finite gradient windows."
+                        ) from exc
+                    continue
 
             if dpo.lr_schedule == "cosine":
                 lr = _cosine_lr(state.step, dpo.warmup_steps, total_optim_steps,
@@ -436,7 +655,15 @@ def run_dpo(
                 scaler.update()
             else:
                 optimizer.step()
+            if not _model_parameters_are_finite(policy):
+                optimizer.zero_grad(set_to_none=True)
+                _empty_device_cache(device)
+                raise RuntimeError(
+                    "DPO optimizer step produced NaN/Inf model parameters. "
+                    "Aborting before the checkpoint is corrupted."
+                )
             optimizer.zero_grad(set_to_none=True)
+            _empty_device_cache(device)
             state.step += 1
 
             avg_loss = accum_loss_sum / accum_counter
@@ -464,8 +691,11 @@ def run_dpo(
             if state.step % dpo.eval_every == 0:
                 val = _evaluate(
                     policy, reference, val_loader, device, autocast,
-                    beta=dpo.beta, length_normalize=dpo.length_normalize_logp,
+                    beta=dpo.beta,
+                    length_normalize=dpo.length_normalize_logp,
+                    loss_chunk_rows=dpo.loss_chunk_rows,
                 )
+                _empty_device_cache(device)
                 log.info("  [val] dpo_loss %.4f | acc %.3f",
                          val["val_loss"], val["val_accuracy"])
                 _write_metric({"stage": "dpo", "step": state.step, "epoch": epoch, **val})
@@ -542,7 +772,9 @@ def run_dpo(
 
     final_val = _evaluate(
         policy, reference, val_loader, device, autocast,
-        beta=dpo.beta, length_normalize=dpo.length_normalize_logp,
+        beta=dpo.beta,
+        length_normalize=dpo.length_normalize_logp,
+        loss_chunk_rows=dpo.loss_chunk_rows,
     )
     log.info("DPO complete. Final val loss %.4f acc %.3f (best %.4f). Total steps %d.",
              final_val["val_loss"], final_val["val_accuracy"],

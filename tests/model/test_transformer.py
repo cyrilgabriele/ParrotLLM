@@ -1,6 +1,11 @@
 import torch
 import pytest
-from src.model.transformer import ParrotLLM
+from src.model.transformer import (
+    ParrotLLM,
+    apply_rope,
+    causal_attention,
+    precompute_rope_freqs,
+)
 
 @pytest.fixture
 def small_config():
@@ -17,6 +22,35 @@ def small_config():
         }
     }
 
+def test_real_rope_matches_complex_rotation():
+    torch.manual_seed(0)
+    x = torch.randn(2, 3, 5, 8)
+    freqs = precompute_rope_freqs(dim=8, max_seq_len=5)
+
+    actual = apply_rope(x, freqs)
+
+    x_complex = torch.view_as_complex(x.float().reshape(*x.shape[:-1], -1, 2))
+    expected = torch.view_as_real(
+        x_complex * freqs.unsqueeze(0).unsqueeze(0)
+    ).reshape_as(x)
+
+    assert torch.allclose(actual, expected, atol=1e-6)
+
+
+def test_causal_attention_matches_sdpa_math():
+    torch.manual_seed(0)
+    q = torch.randn(2, 3, 5, 7)
+    k = torch.randn(2, 3, 5, 7)
+    v = torch.randn(2, 3, 5, 7)
+
+    actual = causal_attention(q, k, v)
+    expected = torch.nn.functional.scaled_dot_product_attention(
+        q, k, v, is_causal=True,
+    )
+
+    assert torch.allclose(actual, expected, atol=1e-6)
+
+
 def test_model_forward_shape(small_config):
     model = ParrotLLM(small_config)
     B, T = 4, 16
@@ -26,6 +60,20 @@ def test_model_forward_shape(small_config):
     
     assert logits.shape == (B, T, small_config["model"]["vocab_size"])
     assert loss is None
+
+
+def test_forward_hidden_matches_forward_logits_path(small_config):
+    model = ParrotLLM(small_config)
+    model.eval()
+    B, T = 2, 8
+    idx = torch.randint(0, small_config["model"]["vocab_size"], (B, T))
+
+    with torch.no_grad():
+        hidden = model.forward_hidden(idx)
+        logits, _ = model(idx)
+
+    assert hidden.shape == (B, T, small_config["model"]["d_model"])
+    assert torch.allclose(model.lm_head(hidden), logits, atol=1e-6)
 
 def test_model_forward_with_targets(small_config):
     model = ParrotLLM(small_config)

@@ -15,7 +15,11 @@ import math
 
 import torch
 
-from src.post_training.dpo.trainer import dpo_loss, per_sequence_logp
+from src.post_training.dpo.trainer import (
+    _per_sequence_logp_from_logits,
+    dpo_loss,
+    per_sequence_logp,
+)
 
 
 def _make_logp(values: list[float]) -> torch.Tensor:
@@ -154,3 +158,52 @@ def test_per_sequence_logp_length_normalize_divides_by_count():
     assert math.isclose(
         mean_logp.item(), sum_logp.item() / n_supervised, rel_tol=1e-4,
     )
+
+
+def test_per_sequence_logp_chunked_matches_full_logits():
+    from src.model import ParrotLLM
+    cfg = {"model": {
+        "vocab_size": 100, "pad_token_id": 99, "bos_token_id": 0, "eos_token_id": 0,
+        "d_model": 32, "n_layers": 2, "n_heads": 4, "d_ff": 64,
+        "context_length": 16, "bias": False, "dropout": 0.0,
+        "rope_theta": 10000.0, "gradient_checkpointing": False,
+    }}
+    model = ParrotLLM(cfg).eval()
+
+    torch.manual_seed(0)
+    ids = torch.randint(0, 90, (2, 8))
+    labels = ids.clone()
+    labels[:, :4] = -100
+
+    with torch.no_grad():
+        logits, _ = model(ids)
+        expected = _per_sequence_logp_from_logits(
+            logits, labels, length_normalize=True,
+        )
+        actual = per_sequence_logp(
+            model,
+            ids,
+            labels,
+            length_normalize=True,
+            loss_chunk_rows=3,
+        )
+
+    assert torch.allclose(actual, expected, atol=1e-6)
+
+
+def test_per_sequence_logp_skips_ignored_only_chunks():
+    from src.model import ParrotLLM
+    cfg = {"model": {
+        "vocab_size": 100, "pad_token_id": 99, "bos_token_id": 0, "eos_token_id": 0,
+        "d_model": 32, "n_layers": 2, "n_heads": 4, "d_ff": 64,
+        "context_length": 16, "bias": False, "dropout": 0.0,
+        "rope_theta": 10000.0, "gradient_checkpointing": False,
+    }}
+    model = ParrotLLM(cfg).eval()
+
+    ids = torch.randint(0, 90, (1, 8))
+    labels = ids.clone()
+    labels[:, :7] = -100
+    with torch.no_grad():
+        logp = per_sequence_logp(model, ids, labels, loss_chunk_rows=2)
+    assert torch.isfinite(logp).all()

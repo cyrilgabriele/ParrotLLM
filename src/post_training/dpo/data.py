@@ -18,7 +18,9 @@ the same patterns. The five logical steps:
 from __future__ import annotations
 
 import logging
+import json
 from dataclasses import dataclass
+from pathlib import Path
 from typing import Iterable
 
 import torch
@@ -29,6 +31,8 @@ from src.post_training.sft.data import (
     build_decontam_index,
     filter_contaminated,
 )
+from src.post_training.sft.template import DEFAULT_RAW_TEMPLATE
+from src.post_training.hf_cache import cleanup_hf_dataset_cache
 
 
 log = logging.getLogger("parrotllm.dpo.data")
@@ -57,6 +61,7 @@ def normalise_dpo_example(raw: dict) -> dict:
             "prompt": prompt,
             "chosen": _stringify_completion(raw["chosen"]),
             "rejected": _stringify_completion(raw["rejected"]),
+            "template": str(raw.get("template", "alpaca")).strip().lower() or "alpaca",
         }
 
     # Variant 2 & 3: ultrafeedback / generic { prompt, chosen, rejected }.
@@ -65,6 +70,7 @@ def normalise_dpo_example(raw: dict) -> dict:
             "prompt": _stringify_completion(raw["prompt"]),
             "chosen": _stringify_completion(raw["chosen"]),
             "rejected": _stringify_completion(raw["rejected"]),
+            "template": str(raw.get("template", "alpaca")).strip().lower() or "alpaca",
         }
 
     raise ValueError(f"Unrecognised DPO schema: keys={list(raw.keys())}")
@@ -124,7 +130,8 @@ def tokenise_dpo_example(
 ) -> TokenisedDPOExample | None:
     """Render → tokenise both halves → return None if prompt alone too long
     or either response degenerates to zero tokens after stripping."""
-    prompt_text = template.render_prompt(example["prompt"], "")
+    render_template = DEFAULT_RAW_TEMPLATE if example.get("template") == "raw" else template
+    prompt_text = render_template.render_prompt(example["prompt"], "")
     eos = tokenizer.eos_token
 
     prompt_ids = tokenizer(prompt_text, add_special_tokens=False).input_ids
@@ -195,8 +202,11 @@ def build_dpo_datasets(
     seed: int = 42,
     decontam_texts: Iterable[str] | None = None,
     max_examples: int | None = None,
+    preference_jsonl_path: str | None = None,
+    preference_oversample: int = 1,
     hf_cache_dir: str | None = None,
     hf_token: str | None = None,
+    cleanup_hf_cache: bool = False,
 ) -> DPODatasetBundle:
     """Load + decontaminate + tokenise + split a DPO preference dataset.
 
@@ -226,6 +236,42 @@ def build_dpo_datasets(
             dropped_schema += 1
     log.info("Schema-normalised %d rows (dropped %d malformed).",
              len(normalised), dropped_schema)
+    raw = None
+    if cleanup_hf_cache:
+        cleanup_hf_dataset_cache(cache_dir=hf_cache_dir)
+
+    if max_examples is not None:
+        normalised = normalised[: int(max_examples)]
+        log.info("Capped HF preference rows to first %d examples.", len(normalised))
+
+    local_raw = 0
+    dropped_local_schema = 0
+    if preference_jsonl_path:
+        path = Path(preference_jsonl_path)
+        log.info("Loading local preference JSONL: %s", path)
+        local_rows: list[dict] = []
+        with path.open("r", encoding="utf-8") as fh:
+            for line in fh:
+                if not line.strip():
+                    continue
+                local_raw += 1
+                try:
+                    row = normalise_dpo_example(json.loads(line))
+                except (json.JSONDecodeError, ValueError):
+                    dropped_local_schema += 1
+                    continue
+                local_rows.append(row)
+        if preference_oversample > 1:
+            local_rows = local_rows * int(preference_oversample)
+            log.info(
+                "Oversampled local preferences %dx -> %d rows.",
+                int(preference_oversample), len(local_rows),
+            )
+        normalised.extend(local_rows)
+        log.info(
+            "Loaded %d local rows (dropped %d malformed, kept %d after oversample).",
+            local_raw, dropped_local_schema, len(local_rows),
+        )
 
     benchmark_index = build_decontam_index(decontam_texts or [])
     decontaminated: list[dict] = []
@@ -241,10 +287,6 @@ def build_dpo_datasets(
         decontaminated.append(ex)
     log.info("Decontaminated against %d benchmark hashes (dropped %d pairs).",
              len(benchmark_index), dropped_contam)
-
-    if max_examples is not None:
-        decontaminated = decontaminated[: int(max_examples)]
-        log.info("Capped to first %d examples.", len(decontaminated))
 
     tokenised: list[TokenisedDPOExample] = []
     dropped_tok = 0
@@ -269,6 +311,8 @@ def build_dpo_datasets(
     stats = {
         "raw": raw_n,
         "dropped_schema": dropped_schema,
+        "local_raw": local_raw,
+        "dropped_local_schema": dropped_local_schema,
         "dropped_contaminated": dropped_contam,
         "dropped_tokenisation": dropped_tok,
         "kept": len(tokenised),

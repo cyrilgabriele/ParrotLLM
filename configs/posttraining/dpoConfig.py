@@ -40,6 +40,13 @@ class DPOConfig(BaseModel):
     # keep all pairs.
     max_train_pair_tokens: int | None = Field(default=None, ge=32)
 
+    # When True, per-sequence log-prob is the MEAN over supervised tokens
+    # rather than the SUM. Off by default to preserve legacy behavior; opt in
+    # for length-normalized DPO (LN-DPO) on continuation-pair datasets where
+    # response length varies wildly across sources. See
+    # docs/superpowers/notes/2026-05-06-dpo-pair-length-audit.md.
+    length_normalize: bool = Field(default=False)
+
     # Hyperparameters (per spec, Phase 1).
     beta: float = Field(default=0.1, gt=0.0)
     learning_rate: float = Field(default=5.0e-7, gt=0.0)

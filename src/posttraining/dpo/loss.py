@@ -1,8 +1,11 @@
 """DPO loss and sequence-level log-probability helper.
 
-Mirrors the TA's EX08_DPO.ipynb (cells `76c7429e` and `a2522f40`) literally.
-Sequence log-prob is the SUM (not mean) over unmasked tokens — the LN-DPO
-variant (Phase 2.1) lives in a separate plan.
+Mirrors the TA's EX08_DPO.ipynb (cells `76c7429e` and `a2522f40`) literally
+for the default (sum-of-logp) path. The ``length_normalize`` flag enables the
+LN-DPO variant motivated by the cross-source length-asymmetry audit at
+``docs/superpowers/notes/2026-05-06-dpo-pair-length-audit.md``: per-pair
+gradient signal becomes the MEAN log-prob over unmasked tokens, so a 14-token
+HellaSwag pair no longer dominates a 1.6-token WinoGrande pair by ~9x.
 """
 from __future__ import annotations
 
@@ -12,15 +15,25 @@ import torch
 import torch.nn.functional as F
 
 
-def sequence_logprob_from_labels(logits: torch.Tensor, labels: torch.Tensor) -> torch.Tensor:
-    """Sum log p(target tokens) per sequence, ignoring -100 positions.
+def sequence_logprob_from_labels(
+    logits: torch.Tensor,
+    labels: torch.Tensor,
+    *,
+    length_normalize: bool = False,
+) -> torch.Tensor:
+    """Per-sequence log p(target tokens), ignoring -100 positions.
 
     Args:
         logits: [B, S, V] float tensor.
         labels: [B, S] long tensor with -100 on positions to ignore.
+        length_normalize: when False (default, legacy behavior), return the
+            SUM of per-token log-probs. When True, return the MEAN over
+            unmasked positions per row — equalising per-pair gradient
+            magnitude across sources of differing response length. Rows with
+            zero unmasked positions return 0.0 (divisor clamped to >= 1).
 
     Returns:
-        [B] float tensor of per-sequence summed log-probs.
+        [B] float tensor of per-sequence (summed or mean) log-probs.
     """
     # log p(t) = logits[t] - logsumexp(logits) — avoids materialising the
     # [B, S, V] log_softmax tensor (~800 MB at our shapes) and the matching
@@ -32,7 +45,13 @@ def sequence_logprob_from_labels(logits: torch.Tensor, labels: torch.Tensor) -> 
     log_partition = torch.logsumexp(logits, dim=-1)
     token_log_probs = token_logits - log_partition
     mask = (labels != -100).to(token_log_probs.dtype)
-    return (token_log_probs * mask).sum(dim=-1)
+    summed = (token_log_probs * mask).sum(dim=-1)
+    if not length_normalize:
+        return summed
+    # Per-row count of supervised tokens, clamped to >= 1 so all-masked rows
+    # do not divide by zero. (The summed log-prob is already 0 for those.)
+    counts = mask.sum(dim=-1).clamp(min=1.0)
+    return summed / counts
 
 
 def dpo_loss(

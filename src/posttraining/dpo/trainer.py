@@ -133,8 +133,14 @@ def build_dpo_collator(*, pad_token_id: int) -> Callable[[list[dict[str, Any]]],
 # ── Forward + train step ────────────────────────────────────────────────────
 
 
-def _forward_logp(model: nn.Module, input_ids: torch.Tensor, labels: torch.Tensor) -> torch.Tensor:
-    """Sum log p(target tokens) per sequence, ignoring -100 positions.
+def _forward_logp(
+    model: nn.Module,
+    input_ids: torch.Tensor,
+    labels: torch.Tensor,
+    *,
+    length_normalize: bool = False,
+) -> torch.Tensor:
+    """Per-sequence log p(target tokens), ignoring -100 positions.
 
     ``ParrotLLM.forward`` returns ``(logits, loss)``. We need only logits for
     DPO and pass ``targets=None`` to skip the internal CE computation.
@@ -142,11 +148,16 @@ def _forward_logp(model: nn.Module, input_ids: torch.Tensor, labels: torch.Tenso
     Causal-LM next-token alignment: predict label at position t from logits at
     position t-1, so we shift logits/labels by one before computing the
     sequence log-prob.
+
+    When ``length_normalize`` is True, return the mean per-token log-prob
+    rather than the sum (LN-DPO).
     """
     logits, _ = model(input_ids, targets=None, return_logits=True)
     shift_logits = logits[:, :-1, :].contiguous()
     shift_labels = labels[:, 1:].contiguous()
-    return sequence_logprob_from_labels(shift_logits, shift_labels)
+    return sequence_logprob_from_labels(
+        shift_logits, shift_labels, length_normalize=length_normalize
+    )
 
 
 def dpo_train_step(
@@ -158,11 +169,15 @@ def dpo_train_step(
     optimizer: torch.optim.Optimizer,
     grad_clip: float,
     autocast_ctx: Any | None = None,
+    length_normalize: bool = False,
 ) -> tuple[torch.Tensor, dict[str, float]]:
     """Run one DPO optimizer step. Returns (loss, metrics_dict).
 
     ``metrics_dict`` always contains the float ``loss`` plus the six diagnostic
     keys returned by :func:`dpo_loss`.
+
+    When ``length_normalize`` is True, per-sequence log-probs are the mean
+    over supervised tokens (LN-DPO) rather than the sum.
     """
     policy.train()
     optimizer.zero_grad(set_to_none=True)
@@ -177,14 +192,14 @@ def dpo_train_step(
         autocast_ctx = nullcontext()
 
     with autocast_ctx:
-        pi_chosen = _forward_logp(policy, chosen_ids, chosen_labels)
-        pi_rejected = _forward_logp(policy, rejected_ids, rejected_labels)
+        pi_chosen = _forward_logp(policy, chosen_ids, chosen_labels, length_normalize=length_normalize)
+        pi_rejected = _forward_logp(policy, rejected_ids, rejected_labels, length_normalize=length_normalize)
 
     # Reference forward never participates in the policy graph.
     with torch.no_grad():
         with autocast_ctx:
-            ref_chosen = _forward_logp(reference, chosen_ids, chosen_labels)
-            ref_rejected = _forward_logp(reference, rejected_ids, rejected_labels)
+            ref_chosen = _forward_logp(reference, chosen_ids, chosen_labels, length_normalize=length_normalize)
+            ref_rejected = _forward_logp(reference, rejected_ids, rejected_labels, length_normalize=length_normalize)
         ref_chosen = ref_chosen.detach().to(pi_chosen.dtype)
         ref_rejected = ref_rejected.detach().to(pi_rejected.dtype)
 
@@ -209,15 +224,26 @@ def _evaluate_chosen_token_accuracy(
     dev_loader: DataLoader,
     *,
     device: torch.device,
+    length_normalize: bool = False,
 ) -> float:
-    """Return fraction of dev pairs where pi(chosen) > pi(rejected)."""
+    """Return fraction of dev pairs where pi(chosen) > pi(rejected).
+
+    The ``length_normalize`` flag must match the trainer setting so eval
+    accuracy is computed on the same scoring rule used for training.
+    """
     policy.eval()
     n_total = 0
     n_correct = 0
     for batch in dev_loader:
         batch = {k: v.to(device) for k, v in batch.items()}
-        pi_c = _forward_logp(policy, batch["chosen_input_ids"], batch["chosen_labels"])
-        pi_r = _forward_logp(policy, batch["rejected_input_ids"], batch["rejected_labels"])
+        pi_c = _forward_logp(
+            policy, batch["chosen_input_ids"], batch["chosen_labels"],
+            length_normalize=length_normalize,
+        )
+        pi_r = _forward_logp(
+            policy, batch["rejected_input_ids"], batch["rejected_labels"],
+            length_normalize=length_normalize,
+        )
         n_correct += (pi_c > pi_r).sum().item()
         n_total += pi_c.shape[0]
     policy.train()
@@ -376,6 +402,7 @@ def run_dpo(project_config: ProjectConfig, *, device: torch.device, checkpoint: 
                 optimizer=optimizer,
                 grad_clip=dpo_cfg.grad_clip,
                 autocast_ctx=autocast_ctx,
+                length_normalize=dpo_cfg.length_normalize,
             )
             scheduler.step()
             step += 1
@@ -405,6 +432,7 @@ def run_dpo(project_config: ProjectConfig, *, device: torch.device, checkpoint: 
             if step % dpo_cfg.eval_every == 0:
                 acc = _evaluate_chosen_token_accuracy(
                     policy, reference, dev_loader, device=device,
+                    length_normalize=dpo_cfg.length_normalize,
                 )
                 metrics_logger.log(
                     "dpo", "eval",

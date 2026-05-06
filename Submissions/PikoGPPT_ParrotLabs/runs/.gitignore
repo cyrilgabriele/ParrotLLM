@@ -1,0 +1,4 @@
+# Submission checkpoints (~458 MB each) exceed GitHub's 100 MB per-file
+# limit and are distributed out-of-band. See MANIFEST.md for hash and
+# provenance.
+*.pt

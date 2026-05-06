@@ -143,6 +143,9 @@ def score_continuation_logprob(
     return total / cont_len
 
 
+DEFAULT_PMI_NEUTRAL_PREFIX = "Answer:"
+
+
 def cloze_score_options(
     model,
     tokenizer,
@@ -153,6 +156,8 @@ def cloze_score_options(
     context_length: int,
     leading_space: bool = True,
     scorer=None,
+    pmi: bool = False,
+    pmi_neutral_prefix: str = DEFAULT_PMI_NEUTRAL_PREFIX,
 ) -> int:
     """Return the index of the highest-scoring option.
 
@@ -160,22 +165,44 @@ def cloze_score_options(
     normalized by tokenized continuation length. Leading-space matches
     lm-eval-harness convention (prompt ends without whitespace, completion
     is scored with a leading space).
+
+    If ``pmi=True``, returns the argmax of the PMI-calibrated score
+    log P(option | context) - log P(option | neutral_prefix). The neutral
+    prefix is the same template wrapper but with an empty MC stem; default
+    is "Answer:" to match leaderboard MC prompts (which always end in that
+    line). PMI calibration removes the per-option surface-frequency bias
+    that otherwise inflates common phrasings regardless of correctness.
     """
     if scorer is None:
         scorer = score_continuation_logprob
     prefix_ids = tokenizer.encode(prefix_text, add_special_tokens=False)
+    neutral_ids: list[int] | None = None
+    if pmi:
+        neutral_ids = tokenizer.encode(pmi_neutral_prefix, add_special_tokens=False)
+
     best_idx = 0
     best_score = float("-inf")
     for i, opt in enumerate(option_texts):
         cont = (" " + opt) if leading_space else opt
         cont_ids = tokenizer.encode(cont, add_special_tokens=False)
-        score = scorer(
+        cond = scorer(
             model,
             prefix_ids=prefix_ids,
             continuation_ids=cont_ids,
             device=device,
             context_length=context_length,
         )
+        if pmi:
+            uncond = scorer(
+                model,
+                prefix_ids=neutral_ids,
+                continuation_ids=cont_ids,
+                device=device,
+                context_length=context_length,
+            )
+            score = cond - uncond
+        else:
+            score = cond
         if score > best_score:
             best_score = score
             best_idx = i

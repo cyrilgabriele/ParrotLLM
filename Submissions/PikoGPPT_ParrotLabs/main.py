@@ -57,6 +57,14 @@ def parse_args() -> argparse.Namespace:
         help="System prompt prepended to user content under alpaca template. "
         "Must match the value used during training.",
     )
+    parser.add_argument(
+        "--pmi",
+        choices=["auto", "on", "off"],
+        default="auto",
+        help="Pointwise Mutual Information calibration for MC cloze scoring. "
+        "auto: ON when --leaderboard is set (matches standard eval methodology); "
+        "OFF otherwise. on/off override that behavior.",
+    )
     return parser.parse_args()
 
 
@@ -253,8 +261,16 @@ def _score_mc(
     rendered: RenderedPrompt,
     device,
     context_length: int,
+    pmi: bool = False,
 ) -> int:
-    """Run cloze scoring for an MC prompt and return the chosen option index."""
+    """Run cloze scoring for an MC prompt and return the chosen option index.
+
+    When ``pmi=True``, every per-option score is calibrated by subtracting an
+    unconditional baseline so per-option surface frequency doesn't bias the
+    ranking. For HellaSwag/OpenBookQA the baseline is log P(option | "Answer:").
+    For WinoGrande's substitution path the baseline is log P(tail | option),
+    which removes the option-only surface bias on the post-blank tail.
+    """
     n_opts = len(rendered.mc_options)
     if rendered.mc_header == "Context" and n_opts == 2 and "_" in rendered.mc_stem:
         # WinoGrande: substitute the option into the blank, score the post-blank tail.
@@ -266,7 +282,7 @@ def _score_mc(
             if not tail_ids:
                 # Degenerate: score the option itself given the prefix-only context.
                 prefix = rendered.mc_stem.split("_")[0].rstrip()
-                score = score_continuation_logprob(
+                cond = score_continuation_logprob(
                     model,
                     prefix_ids=tokenizer.encode(prefix, add_special_tokens=False),
                     continuation_ids=tokenizer.encode(
@@ -275,14 +291,42 @@ def _score_mc(
                     device=device,
                     context_length=context_length,
                 )
+                if pmi:
+                    # Neutral prefix is empty: score log P(" <option>" | "").
+                    uncond = score_continuation_logprob(
+                        model,
+                        prefix_ids=[],
+                        continuation_ids=tokenizer.encode(
+                            " " + opt, add_special_tokens=False
+                        ),
+                        device=device,
+                        context_length=context_length,
+                    )
+                    score = cond - uncond
+                else:
+                    score = cond
             else:
-                score = score_continuation_logprob(
+                cond = score_continuation_logprob(
                     model,
                     prefix_ids=head_ids,
                     continuation_ids=tail_ids,
                     device=device,
                     context_length=context_length,
                 )
+                if pmi:
+                    # Neutral prefix is the option alone, scoring log P(tail | option).
+                    # This subtracts the per-option intrinsic surface bias on the tail.
+                    opt_ids = tokenizer.encode(opt, add_special_tokens=False)
+                    uncond = score_continuation_logprob(
+                        model,
+                        prefix_ids=opt_ids,
+                        continuation_ids=tail_ids,
+                        device=device,
+                        context_length=context_length,
+                    )
+                    score = cond - uncond
+                else:
+                    score = cond
             if score > best_score:
                 best_score, best_idx = score, i
         return best_idx
@@ -294,6 +338,7 @@ def _score_mc(
         option_texts=rendered.mc_options,
         device=device,
         context_length=context_length,
+        pmi=pmi,
     )
 
 
@@ -325,6 +370,12 @@ def main() -> None:
     if eos_id is None:
         eos_id = tokenizer.eos_token_id
 
+    # Resolve PMI: auto means ON for leaderboard, OFF for chat.
+    if args.pmi == "auto":
+        pmi_enabled = bool(args.leaderboard)
+    else:
+        pmi_enabled = (args.pmi == "on")
+
     # ── MC path: cloze-score the options, write the chosen letter and exit ──
     if rendered.kind == "mc":
         try:
@@ -334,6 +385,7 @@ def main() -> None:
                 rendered=rendered,
                 device=device,
                 context_length=context_length,
+                pmi=pmi_enabled,
             )
             letter = chr(ord("A") + best_idx)
         except Exception:

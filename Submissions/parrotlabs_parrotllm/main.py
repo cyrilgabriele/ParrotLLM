@@ -39,12 +39,18 @@ def _ensure_venv_python() -> None:
     """
     if os.environ.get("_PARROTLABS_BOOTSTRAPPED") == "1":
         return
+    probe_error: BaseException | None = None
     try:
         import torch  # noqa: F401
         import transformers  # noqa: F401
+        # Probe our own modules too -- catches PEP-604 / PEP-585 syntax
+        # failures on Python <3.10 even if torch+transformers are present.
+        sys.path.insert(0, str(Path(__file__).resolve().parent))
+        from src.model.transformer import ParrotLLM  # noqa: F401
+        from src.inference import detect_mc_prompt  # noqa: F401
         return
-    except ImportError:
-        pass
+    except Exception as exc:  # ImportError, TypeError, SyntaxError, etc.
+        probe_error = exc
 
     # IMPORTANT: do NOT compare via Path.resolve() — uv venvs share the same
     # underlying interpreter binary, so two different venvs with different
@@ -79,6 +85,7 @@ def _ensure_venv_python() -> None:
                 candidates.append(parent / vdir / sub)
 
     seen_dirs: set[Path] = set()
+    chosen: Path | None = None
     for cand in candidates:
         if not cand.exists():
             continue
@@ -87,19 +94,31 @@ def _ensure_venv_python() -> None:
         if cand_venv_dir == cur_venv_dir or cand_venv_dir in seen_dirs:
             continue
         seen_dirs.add(cand_venv_dir)
-        env = os.environ.copy()
-        env["_PARROTLABS_BOOTSTRAPPED"] = "1"
+        chosen = cand
+        break
+
+    if chosen is None:
         sys.stderr.write(
-            f"[parrotlabs_parrotllm] re-exec via {cand} "
-            "(spawning interpreter lacked torch/transformers)\n"
+            f"[parrotlabs_parrotllm] no fallback venv found and current "
+            f"interpreter cannot import deps: {probe_error!r}. cwd={os.getcwd()} "
+            f"VIRTUAL_ENV={os.environ.get('VIRTUAL_ENV')!r}\n"
         )
         sys.stderr.flush()
-        import subprocess
-        rc = subprocess.run(
-            [str(cand), str(Path(__file__).resolve()), *sys.argv[1:]],
-            env=env,
-        ).returncode
-        sys.exit(rc)
+        return  # let the next import statement raise the real traceback
+
+    env = os.environ.copy()
+    env["_PARROTLABS_BOOTSTRAPPED"] = "1"
+    sys.stderr.write(
+        f"[parrotlabs_parrotllm] re-exec via {chosen} "
+        f"(probe failed: {probe_error!r})\n"
+    )
+    sys.stderr.flush()
+    import subprocess
+    rc = subprocess.run(
+        [str(chosen), str(Path(__file__).resolve()), *sys.argv[1:]],
+        env=env,
+    ).returncode
+    sys.exit(rc)
 
 
 _ensure_venv_python()

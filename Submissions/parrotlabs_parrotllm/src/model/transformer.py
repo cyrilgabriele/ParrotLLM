@@ -1,4 +1,5 @@
 """ParrotLLM transformer — a decoder-only language model."""
+from __future__ import annotations
 
 import gc
 import math

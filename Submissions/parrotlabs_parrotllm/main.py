@@ -12,49 +12,89 @@ from pathlib import Path
 
 
 def _ensure_venv_python() -> None:
-    """Re-exec under a nearby `.venv/bin/python` if the spawning interpreter
-    lacks torch.
+    """Re-exec under a Python that has torch+transformers if the spawning
+    interpreter is missing either of them.
 
     The leaderboard runner (`leaderboard/run_benchmarks.py`) spawns each
     inference call via `subprocess.run([python_exe, main_path, ...])` with
     `python_exe` defaulting to the literal string "python". On the TA's
-    machine that resolves through PATH to a system interpreter without
-    torch, even when the runner itself was launched with `uv run`. The
-    result is that every subprocess dies on `import torch` and the harness
-    counts each example as invalid.
+    machine that can resolve through PATH to a system interpreter without
+    torch (or without transformers), even when the runner itself was
+    launched with `uv run`. The result is that every subprocess dies on
+    `import torch` / `import transformers` and the harness counts each
+    example as invalid.
 
-    This shim runs *before* any heavy import: if the current interpreter
-    can't `import torch`, walk up from the submission directory looking
-    for a `.venv` (created by `uv sync` in the leaderboard repo root) and
-    re-exec under that interpreter. The `_PARROTLABS_BOOTSTRAPPED` guard
-    prevents an infinite re-exec loop if the venv python also lacks torch.
+    Probe order before re-exec:
+      1. `VIRTUAL_ENV` — set by `uv run` and by activated venvs; the most
+         reliable pointer at the parent's actual interpreter.
+      2. `UV_PROJECT_ENVIRONMENT` — uv's per-project venv override.
+      3. Walk up from the submission directory for `.venv/`, `venv/`, or
+         `env/` directories with a `bin/python` (POSIX) or
+         `Scripts\\python.exe` (Windows).
+
+    `_PARROTLABS_BOOTSTRAPPED=1` blocks an infinite re-exec loop if the
+    candidate interpreter also lacks the deps. A diagnostic line is
+    written to stderr (NOT stdout — the leaderboard contract requires
+    a clean stdout) so the TA can see when the shim fires.
     """
     if os.environ.get("_PARROTLABS_BOOTSTRAPPED") == "1":
         return
     try:
         import torch  # noqa: F401
+        import transformers  # noqa: F401
         return
     except ImportError:
         pass
-    here = Path(__file__).resolve().parent
-    candidate_subs = (
-        Path(".venv") / "bin" / "python",
-        Path(".venv") / "bin" / "python3",
-        Path(".venv") / "Scripts" / "python.exe",
-    )
+
     cur = Path(sys.executable).resolve()
+    candidates: list[Path] = []
+
+    for env_key in ("VIRTUAL_ENV", "UV_PROJECT_ENVIRONMENT"):
+        env_val = os.environ.get(env_key)
+        if env_val:
+            for sub in (
+                Path("bin") / "python",
+                Path("bin") / "python3",
+                Path("Scripts") / "python.exe",
+            ):
+                candidates.append(Path(env_val) / sub)
+
+    here = Path(__file__).resolve().parent
+    venv_dirs = (".venv", "venv", "env")
+    interp_subs = (
+        Path("bin") / "python",
+        Path("bin") / "python3",
+        Path("Scripts") / "python.exe",
+    )
     for parent in [here, *here.parents]:
-        for sub in candidate_subs:
-            cand = parent / sub
-            if cand.exists() and cand.resolve() != cur:
-                env = os.environ.copy()
-                env["_PARROTLABS_BOOTSTRAPPED"] = "1"
-                import subprocess
-                rc = subprocess.run(
-                    [str(cand), str(Path(__file__).resolve()), *sys.argv[1:]],
-                    env=env,
-                ).returncode
-                sys.exit(rc)
+        for vdir in venv_dirs:
+            for sub in interp_subs:
+                candidates.append(parent / vdir / sub)
+
+    seen: set[Path] = set()
+    for cand in candidates:
+        if not cand.exists():
+            continue
+        try:
+            resolved = cand.resolve()
+        except OSError:
+            continue
+        if resolved == cur or resolved in seen:
+            continue
+        seen.add(resolved)
+        env = os.environ.copy()
+        env["_PARROTLABS_BOOTSTRAPPED"] = "1"
+        sys.stderr.write(
+            f"[parrotlabs_parrotllm] re-exec via {cand} "
+            "(spawning interpreter lacked torch/transformers)\n"
+        )
+        sys.stderr.flush()
+        import subprocess
+        rc = subprocess.run(
+            [str(cand), str(Path(__file__).resolve()), *sys.argv[1:]],
+            env=env,
+        ).returncode
+        sys.exit(rc)
 
 
 _ensure_venv_python()

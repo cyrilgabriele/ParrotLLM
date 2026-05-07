@@ -46,7 +46,14 @@ def _ensure_venv_python() -> None:
     except ImportError:
         pass
 
-    cur = Path(sys.executable).resolve()
+    # IMPORTANT: do NOT compare via Path.resolve() — uv venvs share the same
+    # underlying interpreter binary, so two different venvs with different
+    # site-packages resolve to the same path. The right notion of "same as
+    # me" is the venv directory containing the python, not the binary it
+    # ultimately symlinks to.
+    cur_path = Path(sys.executable).absolute()
+    cur_venv_dir = cur_path.parent.parent  # e.g., /path/to/.venv
+
     candidates: list[Path] = []
 
     for env_key in ("VIRTUAL_ENV", "UV_PROJECT_ENVIRONMENT"):
@@ -71,17 +78,15 @@ def _ensure_venv_python() -> None:
             for sub in interp_subs:
                 candidates.append(parent / vdir / sub)
 
-    seen: set[Path] = set()
+    seen_dirs: set[Path] = set()
     for cand in candidates:
         if not cand.exists():
             continue
-        try:
-            resolved = cand.resolve()
-        except OSError:
+        cand_abs = cand.absolute()
+        cand_venv_dir = cand_abs.parent.parent
+        if cand_venv_dir == cur_venv_dir or cand_venv_dir in seen_dirs:
             continue
-        if resolved == cur or resolved in seen:
-            continue
-        seen.add(resolved)
+        seen_dirs.add(cand_venv_dir)
         env = os.environ.copy()
         env["_PARROTLABS_BOOTSTRAPPED"] = "1"
         sys.stderr.write(

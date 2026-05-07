@@ -4,10 +4,60 @@
 from __future__ import annotations
 
 import argparse
+import os
 import random
 import sys
 from dataclasses import dataclass, field
 from pathlib import Path
+
+
+def _ensure_venv_python() -> None:
+    """Re-exec under a nearby `.venv/bin/python` if the spawning interpreter
+    lacks torch.
+
+    The leaderboard runner (`leaderboard/run_benchmarks.py`) spawns each
+    inference call via `subprocess.run([python_exe, main_path, ...])` with
+    `python_exe` defaulting to the literal string "python". On the TA's
+    machine that resolves through PATH to a system interpreter without
+    torch, even when the runner itself was launched with `uv run`. The
+    result is that every subprocess dies on `import torch` and the harness
+    counts each example as invalid.
+
+    This shim runs *before* any heavy import: if the current interpreter
+    can't `import torch`, walk up from the submission directory looking
+    for a `.venv` (created by `uv sync` in the leaderboard repo root) and
+    re-exec under that interpreter. The `_PARROTLABS_BOOTSTRAPPED` guard
+    prevents an infinite re-exec loop if the venv python also lacks torch.
+    """
+    if os.environ.get("_PARROTLABS_BOOTSTRAPPED") == "1":
+        return
+    try:
+        import torch  # noqa: F401
+        return
+    except ImportError:
+        pass
+    here = Path(__file__).resolve().parent
+    candidate_subs = (
+        Path(".venv") / "bin" / "python",
+        Path(".venv") / "bin" / "python3",
+        Path(".venv") / "Scripts" / "python.exe",
+    )
+    cur = Path(sys.executable).resolve()
+    for parent in [here, *here.parents]:
+        for sub in candidate_subs:
+            cand = parent / sub
+            if cand.exists() and cand.resolve() != cur:
+                env = os.environ.copy()
+                env["_PARROTLABS_BOOTSTRAPPED"] = "1"
+                import subprocess
+                rc = subprocess.run(
+                    [str(cand), str(Path(__file__).resolve()), *sys.argv[1:]],
+                    env=env,
+                ).returncode
+                sys.exit(rc)
+
+
+_ensure_venv_python()
 
 import numpy as np
 import torch

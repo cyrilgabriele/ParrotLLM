@@ -3,7 +3,59 @@
 from __future__ import annotations
 
 import argparse
+import os
+import sys
 from pathlib import Path
+
+
+def _delegate_leaderboard_inference_if_requested() -> None:
+    """Route `python main.py --stage inference --leaderboard ...` to the
+    polished submission entrypoint at Submissions/parrotlabs_parrotllm/main.py.
+
+    The factsheet §4.4 harness clones our repo and invokes the literal
+    contract `python main.py --stage inference --checkpoint ... --device auto
+    --leaderboard --seed 0`. The repo-root inference path
+    (`src/eval/inference.py`) Alpaca-wraps every prompt and skips MC /
+    LAMBADA shape dispatch + cloze-scoring, so it would emit malformed
+    answers for the public benchmarks. Delegating to the submission keeps
+    one source of truth for leaderboard inference. Detection is done
+    pre-argparse so unrecognised flags from the contract (e.g. --device,
+    which the rest of this script doesn't use) don't error out.
+    """
+    argv = sys.argv
+    if "--stage" not in argv or "--leaderboard" not in argv:
+        return
+    try:
+        stage_val = argv[argv.index("--stage") + 1]
+    except (IndexError, ValueError):
+        return
+    if stage_val != "inference":
+        return
+
+    submission_main = (
+        Path(__file__).resolve().parent
+        / "Submissions" / "parrotlabs_parrotllm" / "main.py"
+    )
+    if not submission_main.is_file():
+        return
+
+    forwarded = list(argv[1:])
+    # Resolve --checkpoint against the *current* cwd before exec. os.execv
+    # preserves cwd, so relative paths would still work — but freezing the
+    # absolute path here keeps the submission's error messages pointing at
+    # what the TA actually typed, regardless of where the submission script
+    # internally re-resolves it.
+    if "--checkpoint" in forwarded:
+        idx = forwarded.index("--checkpoint")
+        if idx + 1 < len(forwarded):
+            ckpt = Path(forwarded[idx + 1])
+            if not ckpt.is_absolute():
+                forwarded[idx + 1] = str((Path.cwd() / ckpt).resolve())
+
+    os.execv(sys.executable, [sys.executable, str(submission_main), *forwarded])
+
+
+_delegate_leaderboard_inference_if_requested()
 
 from configs import load_project_config, load_project_config_from_checkpoint
 from src.logging_utils import init_logging
@@ -45,6 +97,15 @@ def main() -> None:
     parser.add_argument("--leaderboard", action="store_true")
     parser.add_argument("--mock-testing", action="store_true", default=None)
     parser.add_argument("--seed", type=int, default=42)
+    # Factsheet §4.4 inference contract. Non-leaderboard stages ignore this
+    # (the YAML drives device selection); leaderboard inference is delegated
+    # to the submission script before this parser even runs.
+    parser.add_argument(
+        "--device",
+        default=None,
+        help="Device override (auto/cuda/mps/cpu). Required by the "
+             "leaderboard inference contract (factsheet §4.4).",
+    )
     # dashboard-specific
     parser.add_argument("--open", action="store_true",
                         help="Open browser automatically when starting the dashboard")
@@ -156,7 +217,7 @@ def main() -> None:
         checkpoint_path = args.checkpoint
         if not args.mock_testing:
             checkpoint_path = _require_checkpoint(args.checkpoint, stage="inference")
-        device = get_device(inference_cfg.device)
+        device = get_device(args.device or inference_cfg.device)
         from src.eval.inference import run_inference
 
         run_inference(

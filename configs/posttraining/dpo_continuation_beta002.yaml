@@ -22,21 +22,24 @@ logging:
 
 dpo:
   device: auto
-  # Continuation-preference DPO recipe (Plan B).
-  # `reference_checkpoint` is set by the calling overnight script after the
-  # SFT run finishes. Substitute the literal placeholder string below.
+  # Continuation-preference DPO with β=0.02 (one-fifth of the original 0.1,
+  # half of the prior beta005 retry). The β=0.05 retry came back tied to
+  # baseline (sum 153.5) with LAMBADA actually +1.0 — the model didn't
+  # diverge enough to use its budget, so push β harder. Same reference,
+  # same 24,500 prepared pairs, same lr/epochs.
+  # See docs/superpowers/specs/2026-05-08-dpo-betadown-design.md.
   reference_checkpoint: runs/posttraining/sft_benchmark/run_20260506_010816_sft_lr_5e-07/checkpoints/best_loss_0p9853_epoch_0000_step_0000300.pt
   cache_dir: data/posttraining/hf_cache
   raw_dir: data/posttraining/dpo_raw
   prepared_dir: data/posttraining/dpo_pairs_continuation
-  runs_dir: runs/posttraining/dpo_continuation
+  runs_dir: runs/posttraining/dpo_continuation_beta002
   system_prompt: "You are ParrotLLM, a helpful assistant."
   max_seq_length: 1024
   # Per dpo_letter_v2: cap pair length to keep peak MPSGraph workspace below
   # the 42 GiB unified-memory ceiling on Apple Silicon.
   max_train_pair_tokens: 512
 
-  beta: 0.1
+  beta: 0.02
   learning_rate: 2.0e-6
   num_epochs: 1.0
   train_batch_size: 4

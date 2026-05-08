@@ -22,21 +22,25 @@ logging:
 
 dpo:
   device: auto
-  # Continuation-preference DPO recipe (Plan B).
-  # `reference_checkpoint` is set by the calling overnight script after the
-  # SFT run finishes. Substitute the literal placeholder string below.
+  # Continuation-preference DPO with β=0.01 (one-tenth of the original 0.1).
+  # Trend so far: β=0.05 sum=153.5 (LAMBADA +1.0), β=0.02 sum=154.5
+  # (LAMBADA +1.5). Both gains came from LAMBADA-up rather than MC moves,
+  # consistent with the TA's "MC are an inference trick" hint. Pushing β
+  # further to test whether the LAMBADA-up + sum-up trend continues, and
+  # whether hidden eval starts moving (only verifiable on the leaderboard).
+  # See docs/superpowers/specs/2026-05-08-dpo-betadown-design.md.
   reference_checkpoint: runs/posttraining/sft_benchmark/run_20260506_010816_sft_lr_5e-07/checkpoints/best_loss_0p9853_epoch_0000_step_0000300.pt
   cache_dir: data/posttraining/hf_cache
   raw_dir: data/posttraining/dpo_raw
   prepared_dir: data/posttraining/dpo_pairs_continuation
-  runs_dir: runs/posttraining/dpo_continuation
+  runs_dir: runs/posttraining/dpo_continuation_beta001
   system_prompt: "You are ParrotLLM, a helpful assistant."
   max_seq_length: 1024
   # Per dpo_letter_v2: cap pair length to keep peak MPSGraph workspace below
   # the 42 GiB unified-memory ceiling on Apple Silicon.
   max_train_pair_tokens: 512
 
-  beta: 0.1
+  beta: 0.01
   learning_rate: 2.0e-6
   num_epochs: 1.0
   train_batch_size: 4

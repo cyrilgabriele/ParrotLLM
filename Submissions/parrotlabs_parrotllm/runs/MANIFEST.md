@@ -22,29 +22,39 @@ Verify the SHA-256 against the value below before running the leaderboard.
 ## File metadata
 
 - **Filename:** `parrotlabs_final.pt`
+- **Version:** v2 (β-down DPO sweep, 2026-05-08)
 - **Size:** ~458 MB (479,859,235 bytes)
-- **SHA-256:** `1c131cd13b088e875e0705f5a428fffac394005d8f61c947421c2be8c87bf888`
+- **SHA-256:** `0536fd92955600bb216020db6918657df16cccb29ce247fa3b681148ef042ffd`
 - **Format:** PyTorch state_dict + config bundle (`torch.load` compatible)
 
 ## Provenance
 
-- **Source run:** `runs/posttraining/dpo_continuation/run_20260506_023156/`
-- **Source file:** `checkpoints/best_loss_0p4400_epoch_0000_step_0002900.pt`
-- **Stage:** continuation-pair DPO (Plan B), 1 epoch, β=0.1, lr=2.0e-6
+- **Source run:** `runs/posttraining/dpo_continuation_beta001/run_20260508_220825/`
+- **Source file:** `checkpoints/best_loss_0p4400_epoch_0000_step_0003100.pt`
+- **Stage:** continuation-pair DPO (Plan B), 1 epoch, **β=0.01** (one-tenth of v1's 0.1), lr=2.0e-6
 - **Reference:** SFT checkpoint at
   `runs/posttraining/sft_benchmark/run_20260506_010816_sft_lr_5e-07/checkpoints/best_loss_0p9853_epoch_0000_step_0000300.pt`
   (Alpaca template, lr=5e-7, early-stopped at step 300)
-- **Best DPO step:** 2900 (training loss 0.4400 from SFT 0.985 from base 6.79)
+- **Best DPO step:** 3100 (training loss 0.4400 from SFT 0.985 from base 6.79)
+- **Recipe:** `configs/posttraining/dpo_continuation_beta001.yaml`
+- **Design / plan:** `docs/superpowers/specs/2026-05-08-dpo-betadown-design.md`, `docs/superpowers/plans/2026-05-08-dpo-betadown.md`
 
 ## Bench results at limit=200
 
-| Benchmark | Score |
-|---|---|
-| HellaSwag  | 22.00% |
-| WinoGrande | 58.50% |
-| OpenBookQA | 36.50% |
-| LAMBADA    | 36.50% |
-| **Average** | **38.38%** |
+| Benchmark  | v1 (β=0.1) | **v2 (β=0.01)** | Δ |
+|---|---|---|---|
+| HellaSwag  | 22.00% | **23.50%** | +1.5 |
+| WinoGrande | 58.50% | **59.50%** | +1.0 |
+| OpenBookQA | 36.50% | **35.50%** | -1.0 |
+| LAMBADA    | 36.50% | **38.50%** | +2.0 |
+| **Sum**    | 153.50 | **157.00**  | **+3.5** |
+| **Average** | 38.38% | **39.25%**  | +0.87 |
+
+Three of four public benchmarks improved; OpenBookQA regressed by 1 point.
+The β-down sweep saw monotonically rising LAMBADA across β=0.1 → 0.05 → 0.02 → 0.01
+(36.5 → 37.5 → 38.0 → 38.5) and rising sum (153.5 → 153.5 → 154.5 → 157.0).
+β=0.05 and β=0.02 results are recorded in `runs/posttraining/dpo_continuation_beta005/`
+and `dpo_continuation_beta002/` for reference.
 
 See `Submissions/parrotlabs_parrotllm/README.md` for the full reproduction
 recipe and inference contract.

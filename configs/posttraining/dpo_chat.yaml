@@ -24,7 +24,7 @@ dpo:
   device: auto
   preference_format: hh_rlhf
   # Placeholder — overwritten by scripts/chat_sft_dpo.sh before dpo-prepare runs.
-  reference_checkpoint: runs/posttraining/sft_chat/PLACEHOLDER.pt
+  reference_checkpoint: runs/posttraining/sft_chat/run_20260511_101916_sft_lr_5e-05/checkpoints/best_loss_2p6500_epoch_0000_step_0000731.pt
   cache_dir: data/posttraining/hf_cache
   raw_dir: data/posttraining/dpo_raw
   prepared_dir: data/posttraining/dpo_chat_pairs

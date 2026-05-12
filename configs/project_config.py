@@ -58,6 +58,11 @@ class ChatConfig(BaseModel):
     repetition_penalty: float = Field(default=1.1, ge=1.0, le=2.0)
     system_prompt: str = Field(...)
     checkpoint_dir: Path = Field(...)
+    # Optional pin to a specific .pt file. When set, the chat UI loads
+    # this checkpoint on startup and skips the PREFERRED_RUNS / lowest-
+    # valloss auto-discovery in src/chat/app.py. Lets the team swap the
+    # demo target by editing YAML alone (no code change).
+    preferred_checkpoint: Path | None = Field(default=None)
 
     @field_validator("checkpoint_dir", mode="before")
     @classmethod
@@ -65,6 +70,13 @@ class ChatConfig(BaseModel):
         if isinstance(value, Path):
             return value
         return Path(str(value))
+
+    @field_validator("preferred_checkpoint", mode="before")
+    @classmethod
+    def _coerce_preferred_checkpoint(cls, value: str | Path | None) -> Path | None:
+        if value is None or value == "":
+            return None
+        return value if isinstance(value, Path) else Path(str(value))
 
 
 class ProjectConfig(BaseModel):

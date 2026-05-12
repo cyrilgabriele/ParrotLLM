@@ -65,8 +65,14 @@ def run_chat(project_config: ProjectConfig, *, device: torch.device) -> None:
             return "sft"
         return "pretrain"
 
+    # ``best_*`` is the early-stopping winner; ``final_*`` is the end-of-run
+    # checkpoint. v7's submission winner is ``final_*`` because end-of-run
+    # (valloss 2.42) beat the early-stop best at step 900 (valloss 2.47) —
+    # see docs/post_training v7_v8_results.md. Treat both as load-candidates.
+    AUTO_LOAD_PREFIXES = ("best_", "final_")
+
     def _best_by_stage(candidates):
-        """Lowest-valloss ``best_*`` checkpoint per stage, across all runs.
+        """Lowest-valloss auto-load checkpoint per stage, across all runs.
 
         Filters out collapsed/length-bias runs whose val_loss is implausibly
         low (< 0.3). DPO v1/v2 collapsed to 0.018 — the runner would auto-
@@ -75,7 +81,7 @@ def run_chat(project_config: ProjectConfig, *, device: torch.device) -> None:
         COLLAPSE_FLOOR = 0.3
         out = {}
         for p in candidates:
-            if not os.path.basename(p).startswith("best_"):
+            if not os.path.basename(p).startswith(AUTO_LOAD_PREFIXES):
                 continue
             stage = _stage_from_path(p)
             valloss = _parse_valloss(p)
@@ -155,11 +161,27 @@ def run_chat(project_config: ProjectConfig, *, device: torch.device) -> None:
         repetition_penalty = float(repetition_penalty)
 
         if stage in {"sft", "dpo"}:
-            # Alpaca was trained single-turn — discard chat history and
-            # render only the current instruction. Multi-turn Alpaca
-            # would silently violate VL07 slide 32 (train ↔ inference
-            # template parity).
-            prompt = format_sft_prompt(message)
+            # Multi-turn for the conference demo (factsheet §4.5: "new
+            # prompt = current conversation (context) + user text input").
+            # Each completed turn is rendered as a full Alpaca block
+            # (preamble + ### Instruction + ### Response + answer) so
+            # every individual turn is byte-identical to training format
+            # (VL07 slide 32); the multi-turn stacking is itself OOD,
+            # but the per-turn template parity is preserved.
+            parts = []
+            for h in history:
+                role = h.get("role")
+                content = h.get("content", "")
+                if role == "user":
+                    parts.append(format_sft_prompt(content))
+                elif role == "assistant":
+                    # Strip the trailing "_TTFT ... tokens_" footer added
+                    # in this same function; it's UI metadata, not part
+                    # of what the model actually produced.
+                    clean = re.sub(r"\n*_TTFT[^_]*_\s*$", "", content).strip()
+                    parts.append(clean + "\n\n")
+            parts.append(format_sft_prompt(message))
+            prompt = "".join(parts)
         else:
             prompt = ""
             for h in history:
@@ -217,22 +239,45 @@ def run_chat(project_config: ProjectConfig, *, device: torch.device) -> None:
         yield final_text.strip() + footer
 
     available = list_checkpoints()
+    # If the config pins a checkpoint outside checkpoint_dir, the recursive
+    # glob misses it. Hoist it into the dropdown so it's still selectable.
+    cfg_pin = getattr(chat_cfg, "preferred_checkpoint", None)
+    if cfg_pin is not None:
+        cfg_pin_str = str(cfg_pin)
+        if os.path.isfile(cfg_pin_str) and cfg_pin_str not in available:
+            available.insert(0, cfg_pin_str)
     best_per_stage = _best_by_stage(available)
 
     # Prefer an explicitly-marked run if available — overrides val_loss
     # heuristics. Picks the lowest-valloss best_* inside that run.
     def _best_in_run(run_name):
         cands = [p for p in available
-                 if run_name in p and os.path.basename(p).startswith("best_")]
+                 if run_name in p
+                 and os.path.basename(p).startswith(AUTO_LOAD_PREFIXES)]
         if not cands:
             return None
         return min(cands, key=_parse_valloss)
 
+    # Highest priority: explicit pin via chat.preferred_checkpoint in YAML.
+    # Lets the team swap the demo target without touching any code.
     preferred_default = None
-    for run_name in PREFERRED_RUNS:
-        preferred_default = _best_in_run(run_name)
-        if preferred_default:
-            break
+    if cfg_pin is not None:
+        cfg_pin_str = str(cfg_pin)
+        if os.path.isfile(cfg_pin_str):
+            preferred_default = cfg_pin_str
+            log.info(f"chat.preferred_checkpoint: {cfg_pin_str}")
+        else:
+            log.warning(
+                f"chat.preferred_checkpoint not found on disk: {cfg_pin_str} "
+                f"— falling back to auto-discovery."
+            )
+
+    # Second priority: explicit run-name markers in PREFERRED_RUNS.
+    if preferred_default is None:
+        for run_name in PREFERRED_RUNS:
+            preferred_default = _best_in_run(run_name)
+            if preferred_default:
+                break
 
     default_ckpt = (
         preferred_default
@@ -253,58 +298,114 @@ def run_chat(project_config: ProjectConfig, *, device: torch.device) -> None:
 
     theme = gr.themes.Soft(
         primary_hue="emerald",
+        secondary_hue="teal",
         neutral_hue="slate",
         font=[gr.themes.GoogleFont("Inter"), "system-ui", "sans-serif"],
+        font_mono=[gr.themes.GoogleFont("JetBrains Mono"), "ui-monospace", "monospace"],
+        radius_size=gr.themes.sizes.radius_lg,
     )
+
     custom_css = """
-    .gradio-container { max-width: 1200px !important; margin: 0 auto !important; }
-    .sidebar-card { background: var(--block-background-fill); border-radius: 12px;
-                    padding: 12px; }
+    .gradio-container { max-width: 1280px !important; margin: 0 auto !important; }
+    .hero {
+        background: linear-gradient(135deg, #064e3b 0%, #0f766e 50%, #115e59 100%);
+        border-radius: 18px; padding: 22px 26px; color: #ecfdf5;
+        box-shadow: 0 8px 30px rgba(6,78,59,0.25);
+    }
+    .hero h1 { color: #ecfdf5 !important; margin: 0; font-size: 28px; font-weight: 700; letter-spacing: -0.01em; }
+    .hero svg { width: 100%; height: 100%; display: block; }
+    .hero .tagline { color: #a7f3d0; font-size: 14px; margin-top: 4px; }
+    .hero .pill {
+        display: inline-block; background: rgba(255,255,255,0.12);
+        backdrop-filter: blur(6px); border: 1px solid rgba(255,255,255,0.18);
+        padding: 4px 10px; border-radius: 999px; font-size: 12px;
+        margin-right: 6px; color: #ecfdf5;
+    }
+    .sidebar-card {
+        background: var(--block-background-fill); border-radius: 14px;
+        padding: 14px; border: 1px solid var(--border-color-primary);
+    }
+    .status-pill {
+        font-family: var(--font-mono); font-size: 12px;
+        padding: 10px 12px; border-radius: 10px;
+        background: var(--background-fill-secondary);
+        border-left: 3px solid #10b981; word-break: break-all;
+    }
+    footer { display: none !important; }
+    .gradio-container .prose { font-size: 14px; }
     """
 
-    with gr.Blocks(title="ParrotLLM Chat") as demo:
-        gr.Markdown("## ParrotLLM Chat — instruction-tuned PikoGPT (40M)")
+    # Inline the SVG with the opaque background <rect> stripped, so the logo
+    # sits flush on the hero's gradient (no white/black square around it).
+    _logo_svg_path = os.path.join(
+        os.path.dirname(__file__), "..", "..",
+        "docs", "logos", "black", "parrotlabs_logo_black_bg.svg",
+    )
+    try:
+        with open(_logo_svg_path, "r") as _f:
+            _logo_svg = _f.read()
+        _logo_svg = re.sub(
+            r'<rect[^/]*fill="#0{3,6}"[^/]*/>', "", _logo_svg, count=1
+        )
+    except OSError:
+        _logo_svg = ""  # fall back gracefully if the logo file is missing
 
+    with gr.Blocks(title="ParrotLLM · Chat") as demo:
+        # ── Hero header ───────────────────────────────────────────────
+        with gr.Row(elem_classes="hero"):
+            with gr.Column(scale=0, min_width=110):
+                gr.HTML(
+                    f"<div style='width:84px;height:84px;display:flex;"
+                    f"align-items:center;justify-content:center'>"
+                    f"<div style='width:84px;height:84px'>{_logo_svg}</div>"
+                    f"</div>"
+                )
+            with gr.Column(scale=1):
+                gr.HTML(
+                    "<h1>ParrotLLM</h1>"
+                    "<div class='tagline'>40M-parameter LLM, pretrained from scratch · "
+                    "instruction-tuned · ParrotLabs FS26</div>"
+                    "<div style='margin-top:10px'>"
+                    "<span class='pill'>🥇 #1 on PikoGPT Leaderboard</span>"
+                    "<span class='pill'>33.6% public_avg</span>"
+                    "<span class='pill'>Team ParrotLLM</span>"
+                    "</div>"
+                )
+
+        # ── Body: sidebar + chat ──────────────────────────────────────
         with gr.Row():
-            # ── Sidebar: model + sampling ───────────────────────────
-            with gr.Column(scale=1, min_width=280):
+            with gr.Column(scale=1, min_width=300):
                 with gr.Group(elem_classes="sidebar-card"):
-                    status = gr.Textbox(
-                        label="Loaded checkpoint",
-                        interactive=False,
-                        value=initial_status,
-                        lines=3,
-                        max_lines=4,
+                    gr.Markdown("### Model")
+                    status = gr.Markdown(
+                        value=f"<div class='status-pill'>{initial_status}</div>",
                     )
                     if quick_choices:
                         quick = gr.Radio(
                             choices=quick_choices, value=default_ckpt,
-                            label="Quick load (best val loss)",
+                            label="Quick load",
                         )
 
-                with gr.Accordion("Generation", open=True):
-                    # VL09 slide 30 PikoGPT defaults: τ=0.8, top-p=0.9,
-                    # rep.pen=1.1. ChatConfig values feed the initial
-                    # values so a config override propagates here.
+                with gr.Accordion("Sampling", open=True):
                     temp_slider = gr.Slider(
                         minimum=0.0, maximum=1.5, value=chat_cfg.temperature,
-                        step=0.05, label="Temperature (τ)",
-                        info="0 = greedy. PikoGPT default: 0.8.",
+                        step=0.05, label="Temperature",
+                        info="0 = deterministic. Higher = more creative.",
                     )
                     top_p_slider = gr.Slider(
                         minimum=0.1, maximum=1.0, value=chat_cfg.top_p, step=0.05,
-                        label="Top-p (nucleus)",
-                        info="Adaptive cap on cumulative probability. VL09 default: 0.9.",
+                        label="Top-p",
+                        info="Nucleus cap on cumulative probability.",
                     )
                     top_k_slider = gr.Slider(
                         minimum=0, maximum=200, value=chat_cfg.top_k, step=1,
                         label="Top-k",
-                        info="Hard cap on candidates. 0 = off. VL09 default: 50.",
+                        info="Hard cap on candidate tokens (0 = off).",
                     )
                     rep_pen_slider = gr.Slider(
                         minimum=1.0, maximum=2.0, value=chat_cfg.repetition_penalty,
-                        step=0.05, label="Repetition penalty (θ)",
-                        info="VL09 slide 25. 1.0 = off; PikoGPT default: 1.1.",
+                        step=0.05, label="Repetition penalty",
+                        info="Discourages repeats (1.0 = off).",
                     )
                     max_tokens_slider = gr.Slider(
                         minimum=16, maximum=400, value=120, step=8,
@@ -313,24 +414,16 @@ def run_chat(project_config: ProjectConfig, *, device: torch.device) -> None:
                     ngram_slider = gr.Slider(
                         minimum=0, maximum=6, value=3, step=1,
                         label="No-repeat n-gram",
-                        info="0 = off. 3 = forbids repeating any 3-token sequence — kills 'blue, with a blue, with a blue' loops.",
+                        info="Hard-bans repeated n-grams (0 = off).",
                     )
 
-                with gr.Accordion("Advanced — manual checkpoint pick", open=False):
+                with gr.Accordion("Checkpoint", open=False):
                     ckpt_dropdown = gr.Dropdown(
                         choices=available, value=default_ckpt,
-                        label="Checkpoint", interactive=True,
+                        label="Path", interactive=True,
                     )
-                    load_btn = gr.Button("Load", size="sm")
+                    load_btn = gr.Button("Load", variant="primary", size="sm")
 
-                gr.Markdown(
-                    "_Stages: **pretrain** (raw text continuation) · "
-                    "**sft** / **dpo** (Alpaca single-turn). The template is "
-                    "picked from the checkpoint's `training_stage` field — "
-                    "VL07 slide 32._"
-                )
-
-            # ── Main: chat ──────────────────────────────────────────
             with gr.Column(scale=3):
                 gr.ChatInterface(
                     chat_fn,
@@ -339,20 +432,40 @@ def run_chat(project_config: ProjectConfig, *, device: torch.device) -> None:
                         max_tokens_slider, ngram_slider,
                     ],
                     chatbot=gr.Chatbot(
-                        height=560,
+                        height=620,
                         layout="bubble",
                         buttons=["copy"],
+                        placeholder=(
+                            "<div style='text-align:center; padding:40px 20px; opacity:0.6'>"
+                            "<div style='font-size:42px'>🦜</div>"
+                            "<div style='font-size:16px; margin-top:8px; font-weight:500'>"
+                            "Say hello to ParrotLLM</div>"
+                            "</div>"
+                        ),
                     ),
+                    examples=[
+                        ["Name three Swiss cities."],
+                        ["Explain what an LLM is in one paragraph."],
+                        ["Write a haiku about a parrot."],
+                        ["What is the capital of France?"],
+                    ],
                 )
 
-        load_btn.click(load_ckpt, inputs=ckpt_dropdown, outputs=status)
+        load_btn.click(
+            lambda p: f"<div class='status-pill'>{load_ckpt(p)}</div>",
+            inputs=ckpt_dropdown, outputs=status,
+        )
         if quick_choices:
             def _quick_swap(path):
-                return load_ckpt(path), gr.update(value=path)
+                return (
+                    f"<div class='status-pill'>{load_ckpt(path)}</div>",
+                    gr.update(value=path),
+                )
             quick.change(_quick_swap, inputs=quick, outputs=[status, ckpt_dropdown])
 
     log.info("Launching chat UI...")
     demo.queue(default_concurrency_limit=1).launch(
         server_name="127.0.0.1", server_port=7860, inbrowser=False,
+        allowed_paths=["docs/logos"],
         theme=theme, css=custom_css,
     )

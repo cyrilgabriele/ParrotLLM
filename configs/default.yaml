@@ -134,6 +134,9 @@ chat:
   repetition_penalty: 1.1
   system_prompt: "You are ParrotLLM, a helpful assistant."
   checkpoint_dir: runs
+  # Swap the demo target by changing this line (no code edit). Leave
+  # null to auto-pick the best available checkpoint under checkpoint_dir.
+  preferred_checkpoint: runs/run_20260428_211931_sft/checkpoints/final_step_0001966_epoch_01_valloss_2p4231.pt
 
 # ── Post-training: Supervised Fine-Tuning (VL07) ────────────────────────────
 # Recommended by VL07 slide 48 for PikoGPT: Alpaca dataset + small LR to

@@ -1,0 +1,32 @@
+# Chat config for the v7 SFT checkpoint on the 5090.
+
+model:
+  vocab_size: 50258
+  pad_token_id: 50257
+  bos_token_id: 50256
+  eos_token_id: 50256
+  d_model: 384
+  n_layers: 14
+  n_heads: 6
+  d_ff: 768
+  context_length: 1024
+  bias: false
+  dropout: 0.0
+  rope_theta: 10000.0
+
+logging:
+  console_level: INFO
+  file_level: INFO
+
+chat:
+  device: cuda
+  max_tokens: 128
+  temperature: 0.7
+  top_k: 50
+  top_p: 0.9
+  system_prompt: "You are ParrotLLM, a helpful assistant."
+  checkpoint_dir: runs
+  # Latest DPO (UltraFeedback on top of sft_v8) — lowest DPO val_loss across
+  # all runs (0.6836). Matches the "Best DPO" auto-discovery so the Quick-load
+  # radio doesn't snap-back to SFT on UI init.
+  preferred_checkpoint: runs/run_20260507_173213_dpo/checkpoints/best_step_0000450_epoch_00_valloss_0p6836.pt

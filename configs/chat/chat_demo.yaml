@@ -23,7 +23,7 @@ logging:
   file_level: INFO
 
 chat:
-  device: cuda
+  device: auto
   # Defaults tuned for the 40M weight-tied ParrotLLM at presentation time.
   # Small models lose coherence above T=0.7 and love to repeat — these
   # values bias toward readable, on-topic answers. All sliders remain

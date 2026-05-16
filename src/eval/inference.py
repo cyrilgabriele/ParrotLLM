@@ -247,7 +247,7 @@ def generate(
 
 
 def load_model_from_checkpoint(checkpoint_path: str, device: torch.device):
-    ckpt = torch.load(checkpoint_path, map_location=device, weights_only=False)
+    ckpt = torch.load(checkpoint_path, map_location="cpu", weights_only=False)
     config = ckpt["config"]
     model = ParrotLLM(config).to(device)
     sd = ckpt["model"]

@@ -46,6 +46,18 @@ class InferenceConfig(BaseModel):
     repetition_penalty: float = Field(default=1.0, ge=1.0, le=2.0)
 
 
+class DemoCheckpoint(BaseModel):
+    model_config = ConfigDict(extra="ignore")
+
+    name: str = Field(..., min_length=1)
+    path: Path = Field(...)
+
+    @field_validator("path", mode="before")
+    @classmethod
+    def _coerce_path(cls, value: str | Path) -> Path:
+        return value if isinstance(value, Path) else Path(str(value))
+
+
 class ChatConfig(BaseModel):
     model_config = ConfigDict(extra="ignore")
 
@@ -63,6 +75,10 @@ class ChatConfig(BaseModel):
     # valloss auto-discovery in src/chat/app.py. Lets the team swap the
     # demo target by editing YAML alone (no code change).
     preferred_checkpoint: Path | None = Field(default=None)
+    # Named quick-load entries rendered as labeled buttons in the chat
+    # sidebar. Lets the demo present human-friendly names ("Cyril &
+    # Christof", "Gian & Tilman") instead of raw checkpoint paths.
+    demo_checkpoints: list[DemoCheckpoint] | None = Field(default=None)
 
     @field_validator("checkpoint_dir", mode="before")
     @classmethod
@@ -138,6 +154,7 @@ def load_project_config_from_checkpoint(checkpoint_path: str | Path) -> ProjectC
 
 __all__ = [
     "ChatConfig",
+    "DemoCheckpoint",
     "EvalConfig",
     "EvalDatasetConfig",
     "HfUploadConfig",

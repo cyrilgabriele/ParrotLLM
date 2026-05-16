@@ -3,6 +3,7 @@
 from .preprocessing.preprocessConfig import DEFAULT_LANG, PreprocessConfig
 from .project_config import (
     ChatConfig,
+    DemoCheckpoint,
     EvalConfig,
     EvalDatasetConfig,
     HfUploadConfig,
@@ -18,6 +19,7 @@ from .tuning.tuneConfig import TuneConfig
 __all__ = [
     "ChatConfig",
     "DEFAULT_LANG",
+    "DemoCheckpoint",
     "EvalConfig",
     "EvalDatasetConfig",
     "HfUploadConfig",

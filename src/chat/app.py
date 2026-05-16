@@ -109,6 +109,7 @@ def run_chat(project_config: ProjectConfig, *, device: torch.device) -> None:
         state["model"] = model
         state["config"] = ckpt_config
         state["training_stage"] = training_stage
+        state["checkpoint_name"] = os.path.basename(path)
         n_params = model.count_parameters()
         msg = (
             f"Loaded {os.path.basename(path)} | stage={training_stage} | "
@@ -139,7 +140,7 @@ def run_chat(project_config: ProjectConfig, *, device: torch.device) -> None:
     def chat_fn(
         message, history,
         temperature, top_p, top_k, repetition_penalty,
-        max_tokens, no_repeat_ngram,
+        max_tokens, no_repeat_ngram, system_prompt,
     ):
         """Streaming chat callback.
 
@@ -159,6 +160,25 @@ def run_chat(project_config: ProjectConfig, *, device: torch.device) -> None:
         top_p = float(top_p)
         top_k = int(top_k)
         repetition_penalty = float(repetition_penalty)
+        no_repeat_ngram = int(no_repeat_ngram)
+        system_prompt = (system_prompt or "").strip()
+
+        log.info(
+            f"[gen] ckpt={state.get('checkpoint_name', '?')} stage={stage} | "
+            f"T={temperature:.2f} top_p={top_p:.2f} top_k={top_k} "
+            f"rep_pen={repetition_penalty:.2f} max_tok={max_tokens} "
+            f"no_rep_ngram={no_repeat_ngram} | "
+            f"sys_prompt={system_prompt[:60]!r}{'...' if len(system_prompt) > 60 else ''} | "
+            f"msg={message[:60]!r}{'...' if len(message) > 60 else ''}"
+        )
+
+        # Thread the (optional) system prompt as a prefix to the CURRENT user
+        # message's instruction. History stays untouched, so editing the
+        # system prompt mid-conversation only affects the next response —
+        # exactly what a TA testing edge cases wants.
+        message_with_system = (
+            f"{system_prompt}\n\n{message}" if system_prompt else message
+        )
 
         if stage in {"sft", "dpo"}:
             # Multi-turn for the conference demo (factsheet §4.5: "new
@@ -180,7 +200,7 @@ def run_chat(project_config: ProjectConfig, *, device: torch.device) -> None:
                     # of what the model actually produced.
                     clean = re.sub(r"\n*_TTFT[^_]*_\s*$", "", content).strip()
                     parts.append(clean + "\n\n")
-            parts.append(format_sft_prompt(message))
+            parts.append(format_sft_prompt(message_with_system))
             prompt = "".join(parts)
         else:
             prompt = ""
@@ -191,7 +211,7 @@ def run_chat(project_config: ProjectConfig, *, device: torch.device) -> None:
                     prompt += f"User: {content}\n"
                 elif role == "assistant":
                     prompt += f"Assistant: {content}\n"
-            prompt += f"User: {message}\nAssistant:"
+            prompt += f"User: {message_with_system}\nAssistant:"
 
         input_ids = tokenizer.encode(prompt)
         max_ctx = mc["context_length"] - max_tokens
@@ -278,6 +298,26 @@ def run_chat(project_config: ProjectConfig, *, device: torch.device) -> None:
             preferred_default = _best_in_run(run_name)
             if preferred_default:
                 break
+
+    # Named demo entries from chat.demo_checkpoints — rendered as labeled
+    # buttons in the sidebar so the live demo can flip between team
+    # checkpoints by name ("Cyril & Christof" / "Gian & Tilman") instead
+    # of raw paths. Hoist any missing entries into `available` so the
+    # full dropdown also exposes them.
+    demo_choices: list[tuple[str, str]] = []
+    for entry in (chat_cfg.demo_checkpoints or []):
+        entry_path = str(entry.path)
+        if not os.path.isfile(entry_path):
+            log.warning(
+                f"chat.demo_checkpoints: '{entry.name}' path not found, "
+                f"skipping: {entry_path}"
+            )
+            continue
+        demo_choices.append((entry.name, entry_path))
+        if entry_path not in available:
+            available.insert(0, entry_path)
+    if demo_choices and preferred_default is None:
+        preferred_default = demo_choices[0][1]
 
     default_ckpt = (
         preferred_default
@@ -380,7 +420,17 @@ def run_chat(project_config: ProjectConfig, *, device: torch.device) -> None:
                     status = gr.Markdown(
                         value=f"<div class='status-pill'>{initial_status}</div>",
                     )
-                    if quick_choices:
+                    if demo_choices:
+                        demo_radio = gr.Radio(
+                            choices=demo_choices,
+                            value=default_ckpt if default_ckpt in [p for _, p in demo_choices] else demo_choices[0][1],
+                            label="Team checkpoint",
+                        )
+                    # Hide the generic "Best DPO / Best SFT" quick-load when team
+                    # demo checkpoints are configured — those buttons scan the full
+                    # runs/ folder and would mislead a demo viewer into thinking the
+                    # globally-best checkpoints belong to the currently-selected team.
+                    if quick_choices and not demo_choices:
                         quick = gr.Radio(
                             choices=quick_choices, value=default_ckpt,
                             label="Quick load",
@@ -408,13 +458,32 @@ def run_chat(project_config: ProjectConfig, *, device: torch.device) -> None:
                         info="Discourages repeats (1.0 = off).",
                     )
                     max_tokens_slider = gr.Slider(
-                        minimum=16, maximum=400, value=120, step=8,
+                        minimum=16, maximum=400, value=chat_cfg.max_tokens, step=8,
                         label="Max new tokens",
                     )
                     ngram_slider = gr.Slider(
                         minimum=0, maximum=6, value=3, step=1,
                         label="No-repeat n-gram",
                         info="Hard-bans repeated n-grams (0 = off).",
+                    )
+
+                # System prompt — editable at runtime. Threaded into each
+                # current-turn instruction; history stays untouched, so
+                # changes only affect the NEXT response. Empty box = no
+                # system prompt injected (model sees only the user message).
+                with gr.Accordion("System prompt", open=True):
+                    system_prompt_box = gr.Textbox(
+                        value=chat_cfg.system_prompt,
+                        label="Prefix prepended to each user message",
+                        info=(
+                            "Edit any time; takes effect on the next message. "
+                            "Clear the box to send the user message with no prefix."
+                        ),
+                        lines=3,
+                        max_lines=6,
+                    )
+                    reset_system_btn = gr.Button(
+                        "Reset to default", size="sm", variant="secondary"
                     )
 
                 with gr.Accordion("Checkpoint", open=False):
@@ -429,7 +498,7 @@ def run_chat(project_config: ProjectConfig, *, device: torch.device) -> None:
                     chat_fn,
                     additional_inputs=[
                         temp_slider, top_p_slider, top_k_slider, rep_pen_slider,
-                        max_tokens_slider, ngram_slider,
+                        max_tokens_slider, ngram_slider, system_prompt_box,
                     ],
                     chatbot=gr.Chatbot(
                         height=620,
@@ -443,10 +512,16 @@ def run_chat(project_config: ProjectConfig, *, device: torch.device) -> None:
                             "</div>"
                         ),
                     ),
+                    # Prompts chosen for what a 40M-param model can actually do well:
+                    # one-step creative/continuation/transformation tasks.
+                    # Avoided: factual recall (Faust author), arithmetic (12×17),
+                    # "list N distinct things" (the model repeats items).
                     examples=[
-                        ["Name three Swiss cities."],
-                        ["Explain what an LLM is in one paragraph."],
-                        ["Write a haiku about a parrot."],
+                        ["Continue this story: The old lighthouse keeper walked down to the shore and"],
+                        ["Write a short poem about autumn rain."],
+                        ["Write a friendly email opening to a new colleague."],
+                        ["Summarize in one sentence: The cat sat lazily on the warm windowsill while the rain fell outside."],
+                        ["Write a short bedtime story about a sleepy rabbit."],
                         ["What is the capital of France?"],
                     ],
                 )
@@ -455,13 +530,26 @@ def run_chat(project_config: ProjectConfig, *, device: torch.device) -> None:
             lambda p: f"<div class='status-pill'>{load_ckpt(p)}</div>",
             inputs=ckpt_dropdown, outputs=status,
         )
-        if quick_choices:
+        reset_system_btn.click(
+            lambda: chat_cfg.system_prompt,
+            outputs=system_prompt_box,
+        )
+        if quick_choices and not demo_choices:
             def _quick_swap(path):
                 return (
                     f"<div class='status-pill'>{load_ckpt(path)}</div>",
                     gr.update(value=path),
                 )
             quick.change(_quick_swap, inputs=quick, outputs=[status, ckpt_dropdown])
+        if demo_choices:
+            def _demo_swap(path):
+                return (
+                    f"<div class='status-pill'>{load_ckpt(path)}</div>",
+                    gr.update(value=path),
+                )
+            demo_radio.change(
+                _demo_swap, inputs=demo_radio, outputs=[status, ckpt_dropdown],
+            )
 
     log.info("Launching chat UI...")
     demo.queue(default_concurrency_limit=1).launch(

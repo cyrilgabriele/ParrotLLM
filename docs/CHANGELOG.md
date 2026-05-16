@@ -21,6 +21,23 @@ Track what was changed, why it was changed, and any important notes.
 
 ## Unreleased
 
+### [2026-05-16] - Christof Steiner
+
+#### What
+- Added `tools/download_demo_checkpoints.sh`: fetches both team checkpoints into `runs/demo/` — `cyril_christof.pt` from the `parrotllm-may05` release on `steinerchristof/PikoGPT_Leaderboard` (our submission, PR #4) and `gian_tilman.pt` from the committed `PikoGPT_ParrotLabs/runs/dpo_v9_submit_fp16.pt` blob on `TilmanHaferbeck/PikoGPT_Leaderboard@parrotllm_submission` (PR #13)
+- Added `chat.demo_checkpoints: list[{name, path}]` to `configs/project_config.py` (`DemoCheckpoint` model) and re-exported it from `configs.__init__`
+- Wired `chat.demo_checkpoints` into `src/chat/app.py`: each entry is hoisted into the dropdown and rendered as a labeled radio ("Team checkpoint") in the sidebar; selecting a name calls `load_ckpt` and syncs the dropdown. First demo entry wins on startup when `preferred_checkpoint` is unset
+- Added `configs/chat/chat_demo.yaml` so the two-team demo runs with a single command: `uv run python main.py --stage chat --config configs/chat/chat_demo.yaml`
+- README: added a "Two-team demo" section documenting the labels, sources, and the three-command setup on a fresh machine
+
+#### Why
+- The original team split into two halves for the final submission (ParrotLLM = Cyril + Christof, PikoGPT_ParrotLabs = Gian + Tilman). Loading both checkpoints in the same chat UI lets the live demo compare outputs on identical prompts without restarting the app or editing YAML
+- Config-driven labels keep the demo target swappable from YAML alone, matching the existing `preferred_checkpoint` pattern
+- A single download script avoids hand-pasting two different URL formats (GitHub release asset vs. raw git blob — the other team committed their .pt directly, ours is a release asset because LFS uploads from public forks are blocked)
+
+#### Remarks
+- The Gian & Tilman checkpoint may use a different model class internally; `load_model_from_checkpoint` rebuilds `ParrotLLM(ckpt["config"])` and calls `load_state_dict(ckpt["model"])`, so any state-dict key mismatch will surface at load time in the sidebar status pill rather than silently producing garbage
+
 ### [2026-05-04] - Christof Steiner
 
 #### What

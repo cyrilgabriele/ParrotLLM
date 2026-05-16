@@ -1,0 +1,50 @@
+# Two-team demo: side-by-side ParrotLLM (Cyril & Christof) and
+# PikoGPT_ParrotLabs (Gian & Tilman) in the chat UI.
+#
+# Both .pt files are fetched by tools/download_demo_checkpoints.sh into
+# runs/demo/; the chat sidebar renders them as named radio buttons.
+
+model:
+  vocab_size: 50258
+  pad_token_id: 50257
+  bos_token_id: 50256
+  eos_token_id: 50256
+  d_model: 384
+  n_layers: 14
+  n_heads: 6
+  d_ff: 768
+  context_length: 1024
+  bias: false
+  dropout: 0.0
+  rope_theta: 10000.0
+
+logging:
+  console_level: INFO
+  file_level: INFO
+
+chat:
+  device: cuda
+  # Defaults tuned for the 40M weight-tied ParrotLLM at presentation time.
+  # Small models lose coherence above T=0.7 and love to repeat — these
+  # values bias toward readable, on-topic answers. All sliders remain
+  # adjustable in the sidebar at demo time.
+  max_tokens: 160          # was 128 — slight bump for fuller answers; EOS still terminates early
+  temperature: 0.5         # was 0.7 — at 0.5 the 40M hallucinates noticeably less
+  top_k: 40                # was 50 — tighter tail for noisy small-model logits
+  top_p: 0.9               # standard nucleus, no change
+  repetition_penalty: 1.2  # was 1.1 default — 40M repeats list items ("Zurich, Zurich, Zurich") at 1.15
+  # Empty by default — most honest baseline for a 40M model that was never
+  # trained with system prompts. The sidebar textbox stays visible so the
+  # TA (or the user) can type one in at runtime to test its effect, then
+  # clear it again. Threaded into the Alpaca instruction slot via
+  # src/chat/app.py.
+  system_prompt: ""
+  checkpoint_dir: runs
+  # Leave preferred_checkpoint unset so the first demo entry below
+  # ("Cyril & Christof") wins on startup.
+  preferred_checkpoint: null
+  demo_checkpoints:
+    - name: "Cyril & Christof"
+      path: runs/demo/cyril_christof.pt
+    - name: "Gian & Tilman"
+      path: runs/demo/gian_tilman.pt

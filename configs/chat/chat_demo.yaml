@@ -19,8 +19,8 @@ model:
   rope_theta: 10000.0
 
 logging:
-  console_level: INFO
-  file_level: INFO
+  console_level: DEBUG
+  file_level: DEBUG
 
 chat:
   device: auto

@@ -169,7 +169,8 @@ def run_chat(project_config: ProjectConfig, *, device: torch.device) -> None:
             f"rep_pen={repetition_penalty:.2f} max_tok={max_tokens} "
             f"no_rep_ngram={no_repeat_ngram} | "
             f"sys_prompt={system_prompt[:60]!r}{'...' if len(system_prompt) > 60 else ''} | "
-            f"msg={message[:60]!r}{'...' if len(message) > 60 else ''}"
+            f"msg={message[:60]!r}{'...' if len(message) > 60 else ''} | "
+            f"history_turns={len(history)}"
         )
 
         # Thread the (optional) system prompt as a prefix to the CURRENT user
@@ -192,6 +193,11 @@ def run_chat(project_config: ProjectConfig, *, device: torch.device) -> None:
             for h in history:
                 role = h.get("role")
                 content = h.get("content", "")
+                if isinstance(content, list):
+                    content = "".join(
+                        c.get("text", "") if isinstance(c, dict) else str(c)
+                        for c in content
+                    )
                 if role == "user":
                     parts.append(format_sft_prompt(content))
                 elif role == "assistant":
@@ -207,6 +213,11 @@ def run_chat(project_config: ProjectConfig, *, device: torch.device) -> None:
             for h in history:
                 role = h.get("role")
                 content = h.get("content", "")
+                if isinstance(content, list):
+                    content = "".join(
+                        c.get("text", "") if isinstance(c, dict) else str(c)
+                        for c in content
+                    )
                 if role == "user":
                     prompt += f"User: {content}\n"
                 elif role == "assistant":
@@ -217,6 +228,11 @@ def run_chat(project_config: ProjectConfig, *, device: torch.device) -> None:
         max_ctx = mc["context_length"] - max_tokens
         if len(input_ids) > max_ctx:
             input_ids = input_ids[-max_ctx:]
+
+        log.debug(
+            f"[prompt] {len(input_ids)} tokens (max_ctx={max_ctx})\n"
+            f"--- BEGIN PROMPT ---\n{prompt}\n--- END PROMPT ---"
+        )
 
         idx = torch.tensor([input_ids], dtype=torch.long, device=device)
         eos_id = tokenizer.eos_token_id if stage in {"sft", "dpo"} else None

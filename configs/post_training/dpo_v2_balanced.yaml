@@ -1,0 +1,83 @@
+# DPO v2 — corrects two failure modes of the v1 full run:
+#
+#   v1 metrics at step 200 (best): val_acc=98.9%, val_loss=0.0368, train_acc=1.0,
+#   reward_margins 5-12. Training continued to step 374 with margins reaching
+#   12+ — textbook overfitting past the optimal point. Wikitext-103 PPL went
+#   +1.5 vs the SFT base (policy drifted off the reference more than β=0.1
+#   should have allowed).
+#
+#   This v2 keeps everything identical to v1 except:
+#     1. beta: 0.1 -> 0.2     (stronger KL leash — VL08 slide 21 metaphor)
+#     2. early_stopping_patience: 0 -> 2 (stop after 2 non-improving evals
+#        instead of running the full epoch)
+#     3. eval_every: 10 -> 20 (still frequent enough to early-stop tightly)
+#
+# Same SFT base, same dataset, same effective batch — the only intentional
+# variables are beta and stop criterion. Re-evaluate the resulting checkpoint
+# against tools/perplexity_sweep.py + tools/benchmark_pipeline.py and compare
+# vs the v1 numbers in runs/leaderboard_comparison.json.
+
+model:
+  vocab_size: 50258
+  pad_token_id: 50257
+  bos_token_id: 50256
+  eos_token_id: 50256
+  d_model: 384
+  n_layers: 14
+  n_heads: 6
+  d_ff: 768
+  context_length: 1024
+  bias: false
+  dropout: 0.0
+  rope_theta: 10000.0
+  gradient_checkpointing: false
+
+logging:
+  console_level: INFO
+  file_level: INFO
+
+dpo:
+  hf_dataset_name: Intel/orca_dpo_pairs
+  hf_split: train
+  max_examples: null              # full ~12k preference pairs
+  val_fraction: 0.05              # 5% held-out (same split as v1)
+  decontam_benchmarks:
+    - lambada
+    - hellaswag
+    - winogrande
+    - openbookqa
+
+  max_length: 1024
+
+  beta: 0.2                       # CHANGED — was 0.1; tighter KL leash
+  length_normalize_logp: false
+
+  learning_rate: 5.0e-6
+  min_lr: 5.0e-7
+  weight_decay: 0.0
+  beta1: 0.9
+  beta2: 0.95
+  grad_clip: 1.0
+
+  warmup_steps: 10
+  epochs: 1
+  lr_schedule: cosine
+
+  batch_size: 4
+  gradient_accumulation_steps: 8
+  num_workers: 0
+  pin_memory: true
+
+  wt103_eval_every_n_evals: 1     # measure CF on every eval to catch drift
+  wt103_max_sequences: 64
+  wt103_hard_stop_pct: 10.0       # abort if WT-103 PPL drifts >10% over base
+
+  runs_dir: runs
+  eval_every: 20                  # CHANGED — was 10
+  save_every: 999999
+  log_every: 10
+  early_stopping_patience: 2      # CHANGED — was 0 (off)
+
+  base_checkpoint: runs/run_20260426_203420_sft/checkpoints/best_step_0001500_epoch_01_valloss_2p7198.pt
+  device: auto
+  torch_compile: true

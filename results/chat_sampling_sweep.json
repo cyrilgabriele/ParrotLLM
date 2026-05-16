@@ -1,0 +1,2810 @@
+[
+  {
+    "config": {
+      "temperature": 0.0,
+      "top_p": 0.9,
+      "top_k": 50,
+      "repetition_penalty": 1.0,
+      "max_tokens": 60,
+      "no_repeat_ngram": 3
+    },
+    "score": 0.4166666666666667,
+    "correct": 5,
+    "n": 12,
+    "elapsed_s": 4.18855339998845,
+    "per_prompt": [
+      {
+        "prompt": "What is the capital of France?",
+        "response": "The capital of the French capital is Paris.\n\n_TTFT 203 ms \u00b7 39.6 tok/s \u00b7 10 tokens_",
+        "ok": true,
+        "expected": [
+          "paris"
+        ]
+      },
+      {
+        "prompt": "What is the capital of Switzerland?",
+        "response": "Paris is the largest city in the world.\n\n_TTFT 13 ms \u00b7 44.4 tok/s \u00b7 10 tokens_",
+        "ok": false,
+        "expected": [
+          "bern"
+        ]
+      },
+      {
+        "prompt": "What is 2 + 2?",
+        "response": "2 + 2 is the city of Paris.\n\n_TTFT 12 ms \u00b7 61.5 tok/s \u00b7 10 tokens_",
+        "ok": false,
+        "expected": [
+          "4",
+          "four"
+        ]
+      },
+      {
+        "prompt": "Who wrote the play Hamlet?",
+        "response": "Chairs of Hamlet is the most famous play in the French history of the world, and is the world's most famous musical play.\n\n_TTFT 19 ms \u00b7 81.6 tok/s \u00b7 29 tokens_",
+        "ok": false,
+        "expected": [
+          "shakespeare"
+        ]
+      },
+      {
+        "prompt": "What is the largest planet in our solar system?",
+        "response": "3 + 2 = 2.\n\n_TTFT 12 ms \u00b7 97.0 tok/s \u00b7 7 tokens_",
+        "ok": false,
+        "expected": [
+          "jupiter"
+        ]
+      },
+      {
+        "prompt": "What color do you get when you mix blue and yellow?",
+        "response": "Green\n\n_TTFT 14 ms \u00b7 85.3 tok/s \u00b7 2 tokens_",
+        "ok": true,
+        "expected": [
+          "green"
+        ]
+      },
+      {
+        "prompt": "On which continent is Egypt located?",
+        "response": "Saharan Africa\n\n_TTFT 12 ms \u00b7 95.6 tok/s \u00b7 3 tokens_",
+        "ok": true,
+        "expected": [
+          "africa"
+        ]
+      },
+      {
+        "prompt": "How many sides does a triangle have?",
+        "response": "1 + 2\n\n_TTFT 12 ms \u00b7 94.1 tok/s \u00b7 4 tokens_",
+        "ok": false,
+        "expected": [
+          "3",
+          "three"
+        ]
+      },
+      {
+        "prompt": "What is the chemical formula of water?",
+        "response": "Water is the main chemical formula for water.\n\n_TTFT 14 ms \u00b7 93.7 tok/s \u00b7 10 tokens_",
+        "ok": false,
+        "expected": [
+          "h2o",
+          "h\u2082o",
+          "h 2 o"
+        ]
+      },
+      {
+        "prompt": "What is the smallest prime number?",
+        "response": "4 + 2\n\n_TTFT 14 ms \u00b7 84.1 tok/s \u00b7 4 tokens_",
+        "ok": true,
+        "expected": [
+          "2",
+          "two"
+        ]
+      },
+      {
+        "prompt": "What animal is known as the king of the jungle?",
+        "response": "Cattle\n\n\nCows\n\nChunks\n\nDogs\n\nMammals\n\nLions\n\nHorns\n\nBirds\n\nPigs\n\nFossils\n\nEggs\n\nSperm\n\neggs\negg\neggshells\n\n_TTFT 19 ms \u00b7 94.4 tok/s \u00b7 60 tokens_",
+        "ok": true,
+        "expected": [
+          "lion"
+        ]
+      },
+      {
+        "prompt": "What is the boiling point of water in Celsius?",
+        "response": "6 + 2\n\n_TTFT 14 ms \u00b7 85.8 tok/s \u00b7 4 tokens_",
+        "ok": false,
+        "expected": [
+          "100"
+        ]
+      }
+    ]
+  },
+  {
+    "config": {
+      "temperature": 0.7,
+      "top_p": 0.9,
+      "top_k": 50,
+      "repetition_penalty": 1.1,
+      "max_tokens": 60,
+      "no_repeat_ngram": 3
+    },
+    "score": 0.16666666666666666,
+    "correct": 2,
+    "n": 12,
+    "elapsed_s": 4.690164699975867,
+    "per_prompt": [
+      {
+        "prompt": "What is the capital of France?",
+        "response": "45. The most distant island in the world is the Roman Empire.\n\n_TTFT 17 ms \u00b7 62.3 tok/s \u00b7 15 tokens_",
+        "ok": false,
+        "expected": [
+          "paris"
+        ]
+      },
+      {
+        "prompt": "What is the capital of Switzerland?",
+        "response": "47. The oceans are a small island.\n\n_TTFT 20 ms \u00b7 66.2 tok/s \u00b7 10 tokens_",
+        "ok": false,
+        "expected": [
+          "bern"
+        ]
+      },
+      {
+        "prompt": "What is 2 + 2?",
+        "response": "48. The vast oceans are the largest of the world's oceans.\n\n_TTFT 17 ms \u00b7 73.2 tok/s \u00b7 15 tokens_",
+        "ok": true,
+        "expected": [
+          "4",
+          "four"
+        ]
+      },
+      {
+        "prompt": "Who wrote the play Hamlet?",
+        "response": "49. The biggest planets are the planet Jupiter, Jupiter, and the moon Europa.\n\n_TTFT 18 ms \u00b7 62.4 tok/s \u00b7 18 tokens_",
+        "ok": false,
+        "expected": [
+          "shakespeare"
+        ]
+      },
+      {
+        "prompt": "What is the largest planet in our solar system?",
+        "response": "50. The global ocean is the most distant continent in the planet.\n\n_TTFT 14 ms \u00b7 77.5 tok/s \u00b7 15 tokens_",
+        "ok": false,
+        "expected": [
+          "jupiter"
+        ]
+      },
+      {
+        "prompt": "What color do you get when you mix blue and yellow?",
+        "response": "51. The main stars are the moons.\n\n_TTFT 14 ms \u00b7 65.7 tok/s \u00b7 10 tokens_",
+        "ok": false,
+        "expected": [
+          "green"
+        ]
+      },
+      {
+        "prompt": "On which continent is Egypt located?",
+        "response": "52. The moon is a hot moon.\n\n_TTFT 21 ms \u00b7 55.4 tok/s \u00b7 11 tokens_",
+        "ok": false,
+        "expected": [
+          "africa"
+        ]
+      },
+      {
+        "prompt": "How many sides does a triangle have?",
+        "response": "53. The closest planets are Egypt and Egypt.\n53 are Egypt's biggest planet, and Egypt's largest.\n54. The highest point of the sun is Egypt, which is the longest of its kind.\n55. The greatest star in the sky is Egypt.\n\n_TTFT 14 ms \u00b7 57.8 tok/s \u00b7 56 tokens_",
+        "ok": true,
+        "expected": [
+          "3",
+          "three"
+        ]
+      },
+      {
+        "prompt": "What is the chemical formula of water?",
+        "response": "55 are Egypt' largest planet.\n\n_TTFT 15 ms \u00b7 71.3 tok/s \u00b7 8 tokens_",
+        "ok": false,
+        "expected": [
+          "h2o",
+          "h\u2082o",
+          "h 2 o"
+        ]
+      },
+      {
+        "prompt": "What is the smallest prime number?",
+        "response": "56. The lowest point of Earth is Egypt and the Earth.\n\n_TTFT 14 ms \u00b7 71.6 tok/s \u00b7 14 tokens_",
+        "ok": false,
+        "expected": [
+          "2",
+          "two"
+        ]
+      },
+      {
+        "prompt": "What animal is known as the king of the jungle?",
+        "response": "57. The smallest planets are Egyptian, Venus, and Saturn.\n\n_TTFT 23 ms \u00b7 58.9 tok/s \u00b7 14 tokens_",
+        "ok": false,
+        "expected": [
+          "lion"
+        ]
+      },
+      {
+        "prompt": "What is the boiling point of water in Celsius?",
+        "response": "58. The deepest oceans are Egypt, and this temperature is the highest in the Sun's atmosphere.\n\n_TTFT 17 ms \u00b7 62.1 tok/s \u00b7 21 tokens_",
+        "ok": false,
+        "expected": [
+          "100"
+        ]
+      }
+    ]
+  },
+  {
+    "config": {
+      "temperature": 1.0,
+      "top_p": 0.9,
+      "top_k": 50,
+      "repetition_penalty": 1.0,
+      "max_tokens": 60,
+      "no_repeat_ngram": 3
+    },
+    "score": 0.16666666666666666,
+    "correct": 2,
+    "n": 12,
+    "elapsed_s": 5.966238200024236,
+    "per_prompt": [
+      {
+        "prompt": "What is the capital of France?",
+        "response": "There is a massive water range in the world.\nThe heart of Paris are the most populous regions in the planet.\nFrom around 1.5 to 9.9 billion, there are approximately 7 million regions of the world worldwide.\n\n_TTFT 16 ms \u00b7 60.1 tok/s \u00b7 48 tokens_",
+        "ok": true,
+        "expected": [
+          "paris"
+        ]
+      },
+      {
+        "prompt": "What is the capital of Switzerland?",
+        "response": "It is a large area of the planet that is considered to be the largest and most powerful country in the universe.\n\n_TTFT 17 ms \u00b7 59.1 tok/s \u00b7 24 tokens_",
+        "ok": false,
+        "expected": [
+          "bern"
+        ]
+      },
+      {
+        "prompt": "What is 2 + 2?",
+        "response": "One of the most important aspects of the king is his influence over the world as he fights the other side and the other sides.\n\n_TTFT 14 ms \u00b7 60.1 tok/s \u00b7 27 tokens_",
+        "ok": false,
+        "expected": [
+          "4",
+          "four"
+        ]
+      },
+      {
+        "prompt": "Who wrote the play Hamlet?",
+        "response": "Some people say that Hamlet is a popular game and they prefer Hamlet's style and style. \n\nLike Hamlet:\n \nBelow: \nHow long can Hamlet make him the king?\n\n_TTFT 18 ms \u00b7 66.5 tok/s \u00b7 50 tokens_",
+        "ok": false,
+        "expected": [
+          "shakespeare"
+        ]
+      },
+      {
+        "prompt": "What is the largest planet in our solar system?",
+        "response": "They are the largest planets in Earth\u2019s atmosphere, with a maximum of three planets and a maximum number of planets.\n\n_TTFT 15 ms \u00b7 66.1 tok/s \u00b7 27 tokens_",
+        "ok": false,
+        "expected": [
+          "jupiter"
+        ]
+      },
+      {
+        "prompt": "What color do you get when you mix blue and yellow?",
+        "response": "A lot of colors.\n\n_TTFT 15 ms \u00b7 68.7 tok/s \u00b7 6 tokens_",
+        "ok": false,
+        "expected": [
+          "green"
+        ]
+      },
+      {
+        "prompt": "On which continent is Egypt located?",
+        "response": "That is Egypt\u2019an and the capital?\nThis is Egypt in the highest echelons of the globe.\n\n_TTFT 16 ms \u00b7 59.8 tok/s \u00b7 25 tokens_",
+        "ok": false,
+        "expected": [
+          "africa"
+        ]
+      },
+      {
+        "prompt": "How many sides does a triangle have?",
+        "response": "Three sides are the two highest eir in the equator.\n\n_TTFT 16 ms \u00b7 67.4 tok/s \u00b7 14 tokens_",
+        "ok": true,
+        "expected": [
+          "3",
+          "three"
+        ]
+      },
+      {
+        "prompt": "What is the chemical formula of water?",
+        "response": "Airline is the highest Einhornic airway in the entire world.\n\n_TTFT 19 ms \u00b7 52.2 tok/s \u00b7 17 tokens_",
+        "ok": false,
+        "expected": [
+          "h2o",
+          "h\u2082o",
+          "h 2 o"
+        ]
+      },
+      {
+        "prompt": "What is the smallest prime number?",
+        "response": "The largest of the four highest eighths is the upper echelon.\n\n_TTFT 18 ms \u00b7 64.3 tok/s \u00b7 17 tokens_",
+        "ok": false,
+        "expected": [
+          "2",
+          "two"
+        ]
+      },
+      {
+        "prompt": "What animal is known as the king of the jungle?",
+        "response": "This animal is the oldest living species in the earth.\n\n_TTFT 20 ms \u00b7 61.7 tok/s \u00b7 12 tokens_",
+        "ok": false,
+        "expected": [
+          "lion"
+        ]
+      },
+      {
+        "prompt": "What is the boiling point of water in Celsius?",
+        "response": "Another important part of the kingdom is the food.\n\n_TTFT 14 ms \u00b7 67.1 tok/s \u00b7 11 tokens_",
+        "ok": false,
+        "expected": [
+          "100"
+        ]
+      }
+    ]
+  },
+  {
+    "config": {
+      "temperature": 0.3,
+      "top_p": 1.0,
+      "top_k": 50,
+      "repetition_penalty": 1.0,
+      "max_tokens": 60,
+      "no_repeat_ngram": 3
+    },
+    "score": 0.08333333333333333,
+    "correct": 1,
+    "n": 12,
+    "elapsed_s": 6.408873500011396,
+    "per_prompt": [
+      {
+        "prompt": "What is the capital of France?",
+        "response": "Birds:\nGermans:\nEscape:\nOceans:\nHomes:\nParks:\nLack:\nShelter:\nTrousers:\nChorus:\nRivers:\nMammal:\nSpark:\nShadows:\n\n_TTFT 15 ms \u00b7 68.5 tok/s \u00b7 60 tokens_",
+        "ok": false,
+        "expected": [
+          "paris"
+        ]
+      },
+      {
+        "prompt": "What is the capital of Switzerland?",
+        "response": "An example of a capital of the world is the country of the sun.\n\n_TTFT 16 ms \u00b7 65.7 tok/s \u00b7 16 tokens_",
+        "ok": false,
+        "expected": [
+          "bern"
+        ]
+      },
+      {
+        "prompt": "What is 2 + 2?",
+        "response": "The capital of Paris is the world's largest city.\n\n_TTFT 19 ms \u00b7 61.2 tok/s \u00b7 12 tokens_",
+        "ok": false,
+        "expected": [
+          "4",
+          "four"
+        ]
+      },
+      {
+        "prompt": "Who wrote the play Hamlet?",
+        "response": "In the world of the solar system, the sun is the fastest-growing planet in Europe.\n\n_TTFT 22 ms \u00b7 59.4 tok/s \u00b7 20 tokens_",
+        "ok": false,
+        "expected": [
+          "shakespeare"
+        ]
+      },
+      {
+        "prompt": "What is the largest planet in our solar system?",
+        "response": "Earth:\nSun:\nSky:\nMoon:\nIce:\nMercury:\nNether:\nWalt:\nWind:\nFlood:\nGlobally:\nSea:\nWhale:\nVent:\nSolar:\nZodiac:\nGalactic:\n\n_TTFT 19 ms \u00b7 63.7 tok/s \u00b7 60 tokens_",
+        "ok": false,
+        "expected": [
+          "jupiter"
+        ]
+      },
+      {
+        "prompt": "What color do you get when you mix blue and yellow?",
+        "response": "Crescent:\nAstronomers:\nMeteor:\nDark:\nLight:\nBright:\nRain:\nUniverse:\nGeander:\nStorm:\nOrange:\nSummon:\nBlue:\nGreen:\nYellow:\nQueen:\nRed:\nNeck\n\n_TTFT 19 ms \u00b7 61.2 tok/s \u00b7 60 tokens_",
+        "ok": true,
+        "expected": [
+          "green"
+        ]
+      },
+      {
+        "prompt": "On which continent is Egypt located?",
+        "response": "There is a world of Egypt, with a continent of the continent of Egypt.\n\n_TTFT 13 ms \u00b7 63.0 tok/s \u00b7 17 tokens_",
+        "ok": false,
+        "expected": [
+          "africa"
+        ]
+      },
+      {
+        "prompt": "How many sides does a triangle have?",
+        "response": "Five sides are the largest and most powerful.\n\n_TTFT 14 ms \u00b7 78.6 tok/s \u00b7 10 tokens_",
+        "ok": false,
+        "expected": [
+          "3",
+          "three"
+        ]
+      },
+      {
+        "prompt": "What is the chemical formula of water?",
+        "response": "Three sides are water, one is water, and one is carbon dioxide.\nThe water is the most powerful in the world.\n\n_TTFT 14 ms \u00b7 57.8 tok/s \u00b7 27 tokens_",
+        "ok": false,
+        "expected": [
+          "h2o",
+          "h\u2082o",
+          "h 2 o"
+        ]
+      },
+      {
+        "prompt": "What is the smallest prime number?",
+        "response": "One of the most important pieces of a triangle is the water.\n\n_TTFT 16 ms \u00b7 59.6 tok/s \u00b7 14 tokens_",
+        "ok": false,
+        "expected": [
+          "2",
+          "two"
+        ]
+      },
+      {
+        "prompt": "What animal is known as the king of the jungle?",
+        "response": "Another of the largest pieces of an equation is the sun, which is the planet's largest planet.\n\n_TTFT 13 ms \u00b7 71.6 tok/s \u00b7 21 tokens_",
+        "ok": false,
+        "expected": [
+          "lion"
+        ]
+      },
+      {
+        "prompt": "What is the boiling point of water in Celsius?",
+        "response": "This is the highest boiling point in the Earth's atmosphere.\n\n_TTFT 13 ms \u00b7 83.5 tok/s \u00b7 13 tokens_",
+        "ok": false,
+        "expected": [
+          "100"
+        ]
+      }
+    ]
+  },
+  {
+    "config": {
+      "temperature": 0.3,
+      "top_p": 1.0,
+      "top_k": 50,
+      "repetition_penalty": 1.3,
+      "max_tokens": 60,
+      "no_repeat_ngram": 3
+    },
+    "score": 0.08333333333333333,
+    "correct": 1,
+    "n": 12,
+    "elapsed_s": 3.9593968999688514,
+    "per_prompt": [
+      {
+        "prompt": "What is the capital of France?",
+        "response": "11. The seas are a planet and the oceans are a sea and the seas are an ocean.\n\n_TTFT 13 ms \u00b7 56.0 tok/s \u00b7 21 tokens_",
+        "ok": false,
+        "expected": [
+          "paris"
+        ]
+      },
+      {
+        "prompt": "What is the capital of Switzerland?",
+        "response": "12. The sea is a lake.\n\n_TTFT 22 ms \u00b7 61.0 tok/s \u00b7 9 tokens_",
+        "ok": false,
+        "expected": [
+          "bern"
+        ]
+      },
+      {
+        "prompt": "What is 2 + 2?",
+        "response": "13. The water is a water.\n\n_TTFT 17 ms \u00b7 61.8 tok/s \u00b7 9 tokens_",
+        "ok": false,
+        "expected": [
+          "4",
+          "four"
+        ]
+      },
+      {
+        "prompt": "Who wrote the play Hamlet?",
+        "response": "14. The stars are a star and the stars are the stars.\n\n_TTFT 15 ms \u00b7 61.4 tok/s \u00b7 15 tokens_",
+        "ok": false,
+        "expected": [
+          "shakespeare"
+        ]
+      },
+      {
+        "prompt": "What is the largest planet in our solar system?",
+        "response": "15. The oceans are an area of the sun.\n\n_TTFT 14 ms \u00b7 63.6 tok/s \u00b7 12 tokens_",
+        "ok": false,
+        "expected": [
+          "jupiter"
+        ]
+      },
+      {
+        "prompt": "What color do you get when you mix blue and yellow?",
+        "response": "16. The planets are a moon and the planets are an object.\n\n_TTFT 21 ms \u00b7 58.9 tok/s \u00b7 15 tokens_",
+        "ok": false,
+        "expected": [
+          "green"
+        ]
+      },
+      {
+        "prompt": "On which continent is Egypt located?",
+        "response": "17. The continent is a region of the Sun, with the sun in its orbit.\n\n_TTFT 14 ms \u00b7 64.1 tok/s \u00b7 19 tokens_",
+        "ok": false,
+        "expected": [
+          "africa"
+        ]
+      },
+      {
+        "prompt": "How many sides does a triangle have?",
+        "response": "18. The atmosphere is a cloud.\n\n_TTFT 13 ms \u00b7 63.3 tok/s \u00b7 9 tokens_",
+        "ok": false,
+        "expected": [
+          "3",
+          "three"
+        ]
+      },
+      {
+        "prompt": "What is the chemical formula of water?",
+        "response": "20. The clouds are a cloud and the atmosphere is an object\n\nbelow is an example of a ruler.\n\n_TTFT 20 ms \u00b7 73.2 tok/s \u00b7 24 tokens_",
+        "ok": false,
+        "expected": [
+          "h2o",
+          "h\u2082o",
+          "h 2 o"
+        ]
+      },
+      {
+        "prompt": "What is the smallest prime number?",
+        "response": "21. The sun is a sun.\n\n_TTFT 15 ms \u00b7 61.8 tok/s \u00b7 9 tokens_",
+        "ok": true,
+        "expected": [
+          "2",
+          "two"
+        ]
+      },
+      {
+        "prompt": "What animal is known as the king of the jungle?",
+        "response": "22. The moon is a moon.\n\n_TTFT 24 ms \u00b7 53.0 tok/s \u00b7 9 tokens_",
+        "ok": false,
+        "expected": [
+          "lion"
+        ]
+      },
+      {
+        "prompt": "What is the boiling point of water in Celsius?",
+        "response": "23. The planet is a planet.\n\n_TTFT 18 ms \u00b7 54.0 tok/s \u00b7 9 tokens_",
+        "ok": false,
+        "expected": [
+          "100"
+        ]
+      }
+    ]
+  },
+  {
+    "config": {
+      "temperature": 0.7,
+      "top_p": 0.9,
+      "top_k": 50,
+      "repetition_penalty": 1.0,
+      "max_tokens": 60,
+      "no_repeat_ngram": 3
+    },
+    "score": 0.08333333333333333,
+    "correct": 1,
+    "n": 12,
+    "elapsed_s": 3.495825699996203,
+    "per_prompt": [
+      {
+        "prompt": "What is the capital of France?",
+        "response": "24. The sky is a large volcanic area.\n\n_TTFT 22 ms \u00b7 61.9 tok/s \u00b7 12 tokens_",
+        "ok": false,
+        "expected": [
+          "paris"
+        ]
+      },
+      {
+        "prompt": "What is the capital of Switzerland?",
+        "response": "25. The world is a continent.\n\n_TTFT 23 ms \u00b7 57.9 tok/s \u00b7 9 tokens_",
+        "ok": false,
+        "expected": [
+          "bern"
+        ]
+      },
+      {
+        "prompt": "What is 2 + 2?",
+        "response": "26. The Earth is a world of oceans.\n\n_TTFT 14 ms \u00b7 54.4 tok/s \u00b7 11 tokens_",
+        "ok": false,
+        "expected": [
+          "4",
+          "four"
+        ]
+      },
+      {
+        "prompt": "Who wrote the play Hamlet?",
+        "response": "27. The earth is a volcano.\n\n_TTFT 17 ms \u00b7 59.2 tok/s \u00b7 9 tokens_",
+        "ok": false,
+        "expected": [
+          "shakespeare"
+        ]
+      },
+      {
+        "prompt": "What is the largest planet in our solar system?",
+        "response": "28. The Sun is a satellite.\n\n_TTFT 15 ms \u00b7 59.0 tok/s \u00b7 10 tokens_",
+        "ok": false,
+        "expected": [
+          "jupiter"
+        ]
+      },
+      {
+        "prompt": "What color do you get when you mix blue and yellow?",
+        "response": "29. The polar planet is an ice island.\n\n_TTFT 19 ms \u00b7 61.9 tok/s \u00b7 11 tokens_",
+        "ok": false,
+        "expected": [
+          "green"
+        ]
+      },
+      {
+        "prompt": "On which continent is Egypt located?",
+        "response": "30. The largest planet on Earth.\n\n_TTFT 14 ms \u00b7 56.1 tok/s \u00b7 9 tokens_",
+        "ok": false,
+        "expected": [
+          "africa"
+        ]
+      },
+      {
+        "prompt": "How many sides does a triangle have?",
+        "response": "40. The universe is a small planet.\n\n_TTFT 15 ms \u00b7 56.9 tok/s \u00b7 10 tokens_",
+        "ok": false,
+        "expected": [
+          "3",
+          "three"
+        ]
+      },
+      {
+        "prompt": "What is the chemical formula of water?",
+        "response": "41. The globe is a volcanic region.\nThe world is an ocean.\n\n_TTFT 14 ms \u00b7 69.8 tok/s \u00b7 17 tokens_",
+        "ok": false,
+        "expected": [
+          "h2o",
+          "h\u2082o",
+          "h 2 o"
+        ]
+      },
+      {
+        "prompt": "What is the smallest prime number?",
+        "response": "42. The sea is a solar planet.\n\n_TTFT 23 ms \u00b7 69.1 tok/s \u00b7 10 tokens_",
+        "ok": true,
+        "expected": [
+          "2",
+          "two"
+        ]
+      },
+      {
+        "prompt": "What animal is known as the king of the jungle?",
+        "response": "43. The ocean is a mysterious planet.\n\n_TTFT 23 ms \u00b7 59.5 tok/s \u00b7 10 tokens_",
+        "ok": false,
+        "expected": [
+          "lion"
+        ]
+      },
+      {
+        "prompt": "What is the boiling point of water in Celsius?",
+        "response": "44. The ice island is a meteor.\n\n_TTFT 14 ms \u00b7 59.5 tok/s \u00b7 10 tokens_",
+        "ok": false,
+        "expected": [
+          "100"
+        ]
+      }
+    ]
+  },
+  {
+    "config": {
+      "temperature": 0.7,
+      "top_p": 1.0,
+      "top_k": 50,
+      "repetition_penalty": 1.1,
+      "max_tokens": 60,
+      "no_repeat_ngram": 3
+    },
+    "score": 0.08333333333333333,
+    "correct": 1,
+    "n": 12,
+    "elapsed_s": 4.501668700017035,
+    "per_prompt": [
+      {
+        "prompt": "What is the capital of France?",
+        "response": "Spain.\n\n_TTFT 15 ms \u00b7 74.8 tok/s \u00b7 3 tokens_",
+        "ok": false,
+        "expected": [
+          "paris"
+        ]
+      },
+      {
+        "prompt": "What is the capital of Switzerland?",
+        "response": "- Spain.\n\n_TTFT 14 ms \u00b7 78.4 tok/s \u00b7 4 tokens_",
+        "ok": false,
+        "expected": [
+          "bern"
+        ]
+      },
+      {
+        "prompt": "What is 2 + 2?",
+        "response": "Spanish, Italy:\nHere is a instruction that explains a task:\n \nBelow:\n--------------------------------\n\n_TTFT 14 ms \u00b7 57.4 tok/s \u00b7 22 tokens_",
+        "ok": false,
+        "expected": [
+          "4",
+          "four"
+        ]
+      },
+      {
+        "prompt": "Who wrote the play Hamlet?",
+        "response": "Two countries are Egypt.\n\n_TTFT 24 ms \u00b7 60.7 tok/s \u00b7 6 tokens_",
+        "ok": false,
+        "expected": [
+          "shakespeare"
+        ]
+      },
+      {
+        "prompt": "What is the largest planet in our solar system?",
+        "response": "One of the most beautiful planets in the Solar System is Saturn.\n\n_TTFT 14 ms \u00b7 59.8 tok/s \u00b7 14 tokens_",
+        "ok": false,
+        "expected": [
+          "jupiter"
+        ]
+      },
+      {
+        "prompt": "What color do you get when you mix blue and yellow?",
+        "response": "Although the name of the color in the sun is Greek, it has a distinct type of light. It is light and the most distant colors are black, which are known as green.\n\n_TTFT 20 ms \u00b7 54.4 tok/s \u00b7 38 tokens_",
+        "ok": true,
+        "expected": [
+          "green"
+        ]
+      },
+      {
+        "prompt": "On which continent is Egypt located?",
+        "response": "In Egypt, there is a large number of stars and a small number of galaxies.\n\n_TTFT 15 ms \u00b7 59.2 tok/s \u00b7 18 tokens_",
+        "ok": false,
+        "expected": [
+          "africa"
+        ]
+      },
+      {
+        "prompt": "How many sides does a triangle have?",
+        "response": "A triangle is estimated to be about 4.7 meters (4.4 feet) long.\n\n_TTFT 18 ms \u00b7 56.0 tok/s \u00b7 20 tokens_",
+        "ok": false,
+        "expected": [
+          "3",
+          "three"
+        ]
+      },
+      {
+        "prompt": "What is the chemical formula of water?",
+        "response": "An example of a diamond is the diamond.\n\n_TTFT 21 ms \u00b7 59.6 tok/s \u00b7 10 tokens_",
+        "ok": false,
+        "expected": [
+          "h2o",
+          "h\u2082o",
+          "h 2 o"
+        ]
+      },
+      {
+        "prompt": "What is the smallest prime number?",
+        "response": "Some star clusters exist in the earth's orbit.\n\n_TTFT 15 ms \u00b7 56.0 tok/s \u00b7 11 tokens_",
+        "ok": false,
+        "expected": [
+          "2",
+          "two"
+        ]
+      },
+      {
+        "prompt": "What animal is known as the king of the jungle?",
+        "response": "Grimm's is the oldest of the two worlds.\n\n_TTFT 17 ms \u00b7 65.3 tok/s \u00b7 13 tokens_",
+        "ok": false,
+        "expected": [
+          "lion"
+        ]
+      },
+      {
+        "prompt": "What is the boiling point of water in Celsius?",
+        "response": "Tossi's is a highly charged chemical which is responsible for maintaining the water temperature.\n\n_TTFT 15 ms \u00b7 73.9 tok/s \u00b7 19 tokens_",
+        "ok": false,
+        "expected": [
+          "100"
+        ]
+      }
+    ]
+  },
+  {
+    "config": {
+      "temperature": 1.0,
+      "top_p": 1.0,
+      "top_k": 50,
+      "repetition_penalty": 1.0,
+      "max_tokens": 60,
+      "no_repeat_ngram": 3
+    },
+    "score": 0.08333333333333333,
+    "correct": 1,
+    "n": 12,
+    "elapsed_s": 4.7922698999755085,
+    "per_prompt": [
+      {
+        "prompt": "What is the capital of France?",
+        "response": "Batteries are found near the Egyptian border.\n\n_TTFT 16 ms \u00b7 80.5 tok/s \u00b7 11 tokens_",
+        "ok": false,
+        "expected": [
+          "paris"
+        ]
+      },
+      {
+        "prompt": "What is the capital of Switzerland?",
+        "response": "France is home to the largest continent in the world.\n\n_TTFT 15 ms \u00b7 81.9 tok/s \u00b7 12 tokens_",
+        "ok": false,
+        "expected": [
+          "bern"
+        ]
+      },
+      {
+        "prompt": "What is 2 + 2?",
+        "response": "Some of the leading regions of the sun appear to be hotter than Earth, while others find the moon a more intense, mysterious.\nThe main star in the sun is Jupiter-like.\nBelow are an instruction in which the largest sun is Venus than Earth.\n\n_TTFT 15 ms \u00b7 83.5 tok/s \u00b7 54 tokens_",
+        "ok": false,
+        "expected": [
+          "4",
+          "four"
+        ]
+      },
+      {
+        "prompt": "Who wrote the play Hamlet?",
+        "response": "Let's find one.\n\n_TTFT 14 ms \u00b7 78.3 tok/s \u00b7 6 tokens_",
+        "ok": false,
+        "expected": [
+          "shakespeare"
+        ]
+      },
+      {
+        "prompt": "What is the largest planet in our solar system?",
+        "response": "Where are the largest planets?\nIn the heart,\n\nHere is an answer.\n\n_TTFT 14 ms \u00b7 81.4 tok/s \u00b7 19 tokens_",
+        "ok": false,
+        "expected": [
+          "jupiter"
+        ]
+      },
+      {
+        "prompt": "What color do you get when you mix blue and yellow?",
+        "response": "To map a green planet?\n\n_TTFT 14 ms \u00b7 50.2 tok/s \u00b7 7 tokens_",
+        "ok": true,
+        "expected": [
+          "green"
+        ]
+      },
+      {
+        "prompt": "On which continent is Egypt located?",
+        "response": "It is called Egypt: Earth!\n\n_TTFT 13 ms \u00b7 81.9 tok/s \u00b7 8 tokens_",
+        "ok": false,
+        "expected": [
+          "africa"
+        ]
+      },
+      {
+        "prompt": "How many sides does a triangle have?",
+        "response": "In order to conquer the region of the Sun or to conquer any other place than Earth?\n\n_TTFT 14 ms \u00b7 85.0 tok/s \u00b7 19 tokens_",
+        "ok": false,
+        "expected": [
+          "3",
+          "three"
+        ]
+      },
+      {
+        "prompt": "What is the chemical formula of water?",
+        "response": "Why did the king make a small, powerful crystal sphere?\nThe largest planet of Egypt has a dense wall below it:\nHere are four major planets. Earth: Earth's Sun: Earth in sky. \nThe greatest of these two worlds are a planet called the Sun, located in the\n\n_TTFT 14 ms \u00b7 84.3 tok/s \u00b7 60 tokens_",
+        "ok": false,
+        "expected": [
+          "h2o",
+          "h\u2082o",
+          "h 2 o"
+        ]
+      },
+      {
+        "prompt": "What is the smallest prime number?",
+        "response": "A tiny amount of natural light is emitted in the middle of the Earth.\n\n_TTFT 13 ms \u00b7 85.2 tok/s \u00b7 16 tokens_",
+        "ok": false,
+        "expected": [
+          "2",
+          "two"
+        ]
+      },
+      {
+        "prompt": "What animal is known as the king of the jungle?",
+        "response": "The biggest star in Earth is the moon of the starless planet, named after the king in the dark.\n\n_TTFT 14 ms \u00b7 87.5 tok/s \u00b7 23 tokens_",
+        "ok": false,
+        "expected": [
+          "lion"
+        ]
+      },
+      {
+        "prompt": "What is the boiling point of water in Celsius?",
+        "response": "Carpenter of Ice\nWhy is the greatest of Saturn. (Dinosaurus)\nBelow, an instruction describing an ancient planet.\n\n_TTFT 14 ms \u00b7 87.3 tok/s \u00b7 29 tokens_",
+        "ok": false,
+        "expected": [
+          "100"
+        ]
+      }
+    ]
+  },
+  {
+    "config": {
+      "temperature": 1.0,
+      "top_p": 1.0,
+      "top_k": 50,
+      "repetition_penalty": 1.3,
+      "max_tokens": 60,
+      "no_repeat_ngram": 3
+    },
+    "score": 0.08333333333333333,
+    "correct": 1,
+    "n": 12,
+    "elapsed_s": 4.124336600012612,
+    "per_prompt": [
+      {
+        "prompt": "What is the capital of France?",
+        "response": "Since it is around 75 meters (32 feet / 1,770 ft) from its land of approximately 7,000 citizens, France, Brazil and Chile are the capital cities around which it belongs to Europe and Africa, where the planet once lived.\n\n_TTFT 15 ms \u00b7 87.9 tok/s \u00b7 50 tokens_",
+        "ok": false,
+        "expected": [
+          "paris"
+        ]
+      },
+      {
+        "prompt": "What is the capital of Switzerland?",
+        "response": "The capital of Rome is located near Eros de France and is known for its airshipment near the Roman island of Arise.\n\n_TTFT 14 ms \u00b7 90.0 tok/s \u00b7 28 tokens_",
+        "ok": false,
+        "expected": [
+          "bern"
+        ]
+      },
+      {
+        "prompt": "What is 2 + 2?",
+        "response": "2 = 2!\n\n_TTFT 15 ms \u00b7 87.2 tok/s \u00b7 5 tokens_",
+        "ok": false,
+        "expected": [
+          "4",
+          "four"
+        ]
+      },
+      {
+        "prompt": "Who wrote the play Hamlet?",
+        "response": "Where has Islam been since the beginning of the world?\n\n_TTFT 14 ms \u00b7 88.1 tok/s \u00b7 12 tokens_",
+        "ok": false,
+        "expected": [
+          "shakespeare"
+        ]
+      },
+      {
+        "prompt": "What is the largest planet in our solar system?",
+        "response": "Here is a simple explanation of how the Earth has changed by having more light and brighter than the rest of us.\n\n_TTFT 14 ms \u00b7 85.1 tok/s \u00b7 24 tokens_",
+        "ok": false,
+        "expected": [
+          "jupiter"
+        ]
+      },
+      {
+        "prompt": "What color do you get when you mix blue and yellow?",
+        "response": "Why did Egypt change to its moon in 1511?\n\n_TTFT 14 ms \u00b7 86.2 tok/s \u00b7 12 tokens_",
+        "ok": false,
+        "expected": [
+          "green"
+        ]
+      },
+      {
+        "prompt": "On which continent is Egypt located?",
+        "response": "At the center of the globe is Egypt, and the sun continues to swirl.\n\n_TTFT 14 ms \u00b7 87.2 tok/s \u00b7 17 tokens_",
+        "ok": false,
+        "expected": [
+          "africa"
+        ]
+      },
+      {
+        "prompt": "How many sides does a triangle have?",
+        "response": "Let us turn on the east side?\n\n_TTFT 13 ms \u00b7 88.4 tok/s \u00b7 10 tokens_",
+        "ok": false,
+        "expected": [
+          "3",
+          "three"
+        ]
+      },
+      {
+        "prompt": "What is the chemical formula of water?",
+        "response": "Egypt is a major source of phosphorus to protect against phosphorus. The gas of the Nile is made by natural materials including fuel, food products and fuels.\n\n_TTFT 14 ms \u00b7 89.4 tok/s \u00b7 31 tokens_",
+        "ok": false,
+        "expected": [
+          "h2o",
+          "h\u2082o",
+          "h 2 o"
+        ]
+      },
+      {
+        "prompt": "What is the smallest prime number?",
+        "response": "Crawford will never be seen with such much power.\n\n_TTFT 13 ms \u00b7 84.3 tok/s \u00b7 13 tokens_",
+        "ok": false,
+        "expected": [
+          "2",
+          "two"
+        ]
+      },
+      {
+        "prompt": "What animal is known as the king of the jungle?",
+        "response": "For example, how can a small frog be lion-like?\n\n_TTFT 14 ms \u00b7 87.5 tok/s \u00b7 14 tokens_",
+        "ok": true,
+        "expected": [
+          "lion"
+        ]
+      },
+      {
+        "prompt": "What is the boiling point of water in Celsius?",
+        "response": "Dozens?\n\n_TTFT 14 ms \u00b7 80.7 tok/s \u00b7 4 tokens_",
+        "ok": false,
+        "expected": [
+          "100"
+        ]
+      }
+    ]
+  },
+  {
+    "config": {
+      "temperature": 0.0,
+      "top_p": 0.9,
+      "top_k": 50,
+      "repetition_penalty": 1.1,
+      "max_tokens": 60,
+      "no_repeat_ngram": 3
+    },
+    "score": 0.0,
+    "correct": 0,
+    "n": 12,
+    "elapsed_s": 2.874853199988138,
+    "per_prompt": [
+      {
+        "prompt": "What is the capital of France?",
+        "response": "Etensile pentameter\n\n_TTFT 37 ms \u00b7 87.6 tok/s \u00b7 8 tokens_",
+        "ok": false,
+        "expected": [
+          "paris"
+        ]
+      },
+      {
+        "prompt": "What is the capital of Switzerland?",
+        "response": "Hydrogen\n\n_TTFT 14 ms \u00b7 90.5 tok/s \u00b7 3 tokens_",
+        "ok": false,
+        "expected": [
+          "bern"
+        ]
+      },
+      {
+        "prompt": "What is 2 + 2?",
+        "response": "Oxygen\n\n_TTFT 15 ms \u00b7 85.8 tok/s \u00b7 4 tokens_",
+        "ok": false,
+        "expected": [
+          "4",
+          "four"
+        ]
+      },
+      {
+        "prompt": "Who wrote the play Hamlet?",
+        "response": "Aether\n\n_TTFT 16 ms \u00b7 81.2 tok/s \u00b7 3 tokens_",
+        "ok": false,
+        "expected": [
+          "shakespeare"
+        ]
+      },
+      {
+        "prompt": "What is the largest planet in our solar system?",
+        "response": "Solar\n\n_TTFT 16 ms \u00b7 85.0 tok/s \u00b7 2 tokens_",
+        "ok": false,
+        "expected": [
+          "jupiter"
+        ]
+      },
+      {
+        "prompt": "What color do you get when you mix blue and yellow?",
+        "response": "Alvinite\n\nAbove is an example of a task in Celsius. Write an instruction.\n\n_TTFT 16 ms \u00b7 86.2 tok/s \u00b7 21 tokens_",
+        "ok": false,
+        "expected": [
+          "green"
+        ]
+      },
+      {
+        "prompt": "On which continent is Egypt located?",
+        "response": "Negerene\n\nabove is an illustration of a landmass. Write the answer.\n\n_TTFT 19 ms \u00b7 89.5 tok/s \u00b7 20 tokens_",
+        "ok": false,
+        "expected": [
+          "africa"
+        ]
+      },
+      {
+        "prompt": "How many sides does a triangle have?",
+        "response": "Steril\n\nbelow is an outline of a geology. Write it.\n\n_TTFT 16 ms \u00b7 86.6 tok/s \u00b7 19 tokens_",
+        "ok": false,
+        "expected": [
+          "3",
+          "three"
+        ]
+      },
+      {
+        "prompt": "What is the chemical formula of water?",
+        "response": "Seismic\n\n_TTFT 13 ms \u00b7 86.3 tok/s \u00b7 4 tokens_",
+        "ok": false,
+        "expected": [
+          "h2o",
+          "h\u2082o",
+          "h 2 o"
+        ]
+      },
+      {
+        "prompt": "What is the smallest prime number?",
+        "response": "Synthesis\n\n\nSypthesis\n\n_TTFT 13 ms \u00b7 86.5 tok/s \u00b7 11 tokens_",
+        "ok": false,
+        "expected": [
+          "2",
+          "two"
+        ]
+      },
+      {
+        "prompt": "What animal is known as the king of the jungle?",
+        "response": "Elephant\n\n\n Below is an ingredient of elephant. Write its answer.\n\n_TTFT 13 ms \u00b7 90.2 tok/s \u00b7 17 tokens_",
+        "ok": false,
+        "expected": [
+          "lion"
+        ]
+      },
+      {
+        "prompt": "What is the boiling point of water in Celsius?",
+        "response": "Tincture\n\nSythesis\n\n_TTFT 14 ms \u00b7 89.4 tok/s \u00b7 9 tokens_",
+        "ok": false,
+        "expected": [
+          "100"
+        ]
+      }
+    ]
+  },
+  {
+    "config": {
+      "temperature": 0.0,
+      "top_p": 0.9,
+      "top_k": 50,
+      "repetition_penalty": 1.3,
+      "max_tokens": 60,
+      "no_repeat_ngram": 3
+    },
+    "score": 0.0,
+    "correct": 0,
+    "n": 12,
+    "elapsed_s": 2.256678399979137,
+    "per_prompt": [
+      {
+        "prompt": "What is the capital of France?",
+        "response": "Plantation\n\n_TTFT 14 ms \u00b7 87.3 tok/s \u00b7 4 tokens_",
+        "ok": false,
+        "expected": [
+          "paris"
+        ]
+      },
+      {
+        "prompt": "What is the capital of Switzerland?",
+        "response": "Clustered\n\n_TTFT 14 ms \u00b7 86.4 tok/s \u00b7 4 tokens_",
+        "ok": false,
+        "expected": [
+          "bern"
+        ]
+      },
+      {
+        "prompt": "What is 2 + 2?",
+        "response": "Antiparticle\n\n_TTFT 14 ms \u00b7 82.0 tok/s \u00b7 4 tokens_",
+        "ok": false,
+        "expected": [
+          "4",
+          "four"
+        ]
+      },
+      {
+        "prompt": "Who wrote the play Hamlet?",
+        "response": "Zetaphone\n\n_TTFT 14 ms \u00b7 83.0 tok/s \u00b7 5 tokens_",
+        "ok": false,
+        "expected": [
+          "shakespeare"
+        ]
+      },
+      {
+        "prompt": "What is the largest planet in our solar system?",
+        "response": "Coastal\n\n_TTFT 15 ms \u00b7 78.3 tok/s \u00b7 4 tokens_",
+        "ok": false,
+        "expected": [
+          "jupiter"
+        ]
+      },
+      {
+        "prompt": "What color do you get when you mix blue and yellow?",
+        "response": "Chocolate\n\n_TTFT 15 ms \u00b7 74.7 tok/s \u00b7 3 tokens_",
+        "ok": false,
+        "expected": [
+          "green"
+        ]
+      },
+      {
+        "prompt": "On which continent is Egypt located?",
+        "response": "Palin\n\n_TTFT 15 ms \u00b7 76.2 tok/s \u00b7 3 tokens_",
+        "ok": false,
+        "expected": [
+          "africa"
+        ]
+      },
+      {
+        "prompt": "How many sides does a triangle have?",
+        "response": "Polygonus\n\nParagon\n\n_TTFT 15 ms \u00b7 87.4 tok/s \u00b7 10 tokens_",
+        "ok": false,
+        "expected": [
+          "3",
+          "three"
+        ]
+      },
+      {
+        "prompt": "What is the chemical formula of water?",
+        "response": "Magnesium\n\n_TTFT 13 ms \u00b7 86.2 tok/s \u00b7 3 tokens_",
+        "ok": false,
+        "expected": [
+          "h2o",
+          "h\u2082o",
+          "h 2 o"
+        ]
+      },
+      {
+        "prompt": "What is the smallest prime number?",
+        "response": "Militarum\n\nparagon\n\n_TTFT 14 ms \u00b7 86.8 tok/s \u00b7 10 tokens_",
+        "ok": false,
+        "expected": [
+          "2",
+          "two"
+        ]
+      },
+      {
+        "prompt": "What animal is known as the king of the jungle?",
+        "response": "Preligraphic\n\n_TTFT 13 ms \u00b7 88.4 tok/s \u00b7 5 tokens_",
+        "ok": false,
+        "expected": [
+          "lion"
+        ]
+      },
+      {
+        "prompt": "What is the boiling point of water in Celsius?",
+        "response": "Celsius\n\n_TTFT 14 ms \u00b7 84.1 tok/s \u00b7 3 tokens_",
+        "ok": false,
+        "expected": [
+          "100"
+        ]
+      }
+    ]
+  },
+  {
+    "config": {
+      "temperature": 0.0,
+      "top_p": 1.0,
+      "top_k": 50,
+      "repetition_penalty": 1.0,
+      "max_tokens": 60,
+      "no_repeat_ngram": 3
+    },
+    "score": 0.0,
+    "correct": 0,
+    "n": 12,
+    "elapsed_s": 3.323804799991194,
+    "per_prompt": [
+      {
+        "prompt": "What is the capital of France?",
+        "response": "Mediterranean\n\n_TTFT 16 ms \u00b7 80.4 tok/s \u00b7 3 tokens_",
+        "ok": false,
+        "expected": [
+          "paris"
+        ]
+      },
+      {
+        "prompt": "What is the capital of Switzerland?",
+        "response": "Parietal\n\n_TTFT 15 ms \u00b7 83.5 tok/s \u00b7 3 tokens_",
+        "ok": false,
+        "expected": [
+          "bern"
+        ]
+      },
+      {
+        "prompt": "What is 2 + 2?",
+        "response": "Summarising\n\nCelestial\n\nAbove is an example of a task\n\n_TTFT 19 ms \u00b7 57.3 tok/s \u00b7 18 tokens_",
+        "ok": false,
+        "expected": [
+          "4",
+          "four"
+        ]
+      },
+      {
+        "prompt": "Who wrote the play Hamlet?",
+        "response": "The king of France.\n\n_TTFT 17 ms \u00b7 59.1 tok/s \u00b7 6 tokens_",
+        "ok": false,
+        "expected": [
+          "shakespeare"
+        ]
+      },
+      {
+        "prompt": "What is the largest planet in our solar system?",
+        "response": "Solar\n\n\nabove is an ancient Greek solar system.\nAbove are an instruction on a task:\n\nChlorophyte\n\nupper is an Ancient Greek solar planet.\nupper and is an Egyptian solar system\n\n_TTFT 19 ms \u00b7 61.6 tok/s \u00b7 46 tokens_",
+        "ok": false,
+        "expected": [
+          "jupiter"
+        ]
+      },
+      {
+        "prompt": "What color do you get when you mix blue and yellow?",
+        "response": "Asterian\nupper\nupper\n\n_TTFT 19 ms \u00b7 61.5 tok/s \u00b7 8 tokens_",
+        "ok": false,
+        "expected": [
+          "green"
+        ]
+      },
+      {
+        "prompt": "On which continent is Egypt located?",
+        "response": "Caribraphic\n\n_TTFT 19 ms \u00b7 57.3 tok/s \u00b7 5 tokens_",
+        "ok": false,
+        "expected": [
+          "africa"
+        ]
+      },
+      {
+        "prompt": "How many sides does a triangle have?",
+        "response": "Albolar\nupper\n\n_TTFT 14 ms \u00b7 64.7 tok/s \u00b7 6 tokens_",
+        "ok": false,
+        "expected": [
+          "3",
+          "three"
+        ]
+      },
+      {
+        "prompt": "What is the chemical formula of water?",
+        "response": "Hydrogen\nupper\n\n_TTFT 17 ms \u00b7 72.9 tok/s \u00b7 5 tokens_",
+        "ok": false,
+        "expected": [
+          "h2o",
+          "h\u2082o",
+          "h 2 o"
+        ]
+      },
+      {
+        "prompt": "What is the smallest prime number?",
+        "response": "Calcium\nupper\n\n_TTFT 23 ms \u00b7 64.6 tok/s \u00b7 5 tokens_",
+        "ok": false,
+        "expected": [
+          "2",
+          "two"
+        ]
+      },
+      {
+        "prompt": "What animal is known as the king of the jungle?",
+        "response": "Esterian\n\n_TTFT 20 ms \u00b7 60.9 tok/s \u00b7 4 tokens_",
+        "ok": false,
+        "expected": [
+          "lion"
+        ]
+      },
+      {
+        "prompt": "What is the boiling point of water in Celsius?",
+        "response": "Dice\nupper\n\n_TTFT 13 ms \u00b7 71.8 tok/s \u00b7 5 tokens_",
+        "ok": false,
+        "expected": [
+          "100"
+        ]
+      }
+    ]
+  },
+  {
+    "config": {
+      "temperature": 0.0,
+      "top_p": 1.0,
+      "top_k": 50,
+      "repetition_penalty": 1.1,
+      "max_tokens": 60,
+      "no_repeat_ngram": 3
+    },
+    "score": 0.0,
+    "correct": 0,
+    "n": 12,
+    "elapsed_s": 3.219388799974695,
+    "per_prompt": [
+      {
+        "prompt": "What is the capital of France?",
+        "response": "Argentinian\nupper\n\n_TTFT 14 ms \u00b7 84.0 tok/s \u00b7 6 tokens_",
+        "ok": false,
+        "expected": [
+          "paris"
+        ]
+      },
+      {
+        "prompt": "What is the capital of Switzerland?",
+        "response": "Rice\nlower\nupper\n\n_TTFT 16 ms \u00b7 66.4 tok/s \u00b7 7 tokens_",
+        "ok": false,
+        "expected": [
+          "bern"
+        ]
+      },
+      {
+        "prompt": "What is 2 + 2?",
+        "response": "Neolithic\nupper\n\n_TTFT 56 ms \u00b7 56.3 tok/s \u00b7 5 tokens_",
+        "ok": false,
+        "expected": [
+          "4",
+          "four"
+        ]
+      },
+      {
+        "prompt": "Who wrote the play Hamlet?",
+        "response": "Nest\nupper\n\n_TTFT 18 ms \u00b7 40.3 tok/s \u00b7 5 tokens_",
+        "ok": false,
+        "expected": [
+          "shakespeare"
+        ]
+      },
+      {
+        "prompt": "What is the largest planet in our solar system?",
+        "response": "An ancient Greek island is a planet that is located in the northern hemisphere.\n\n_TTFT 17 ms \u00b7 55.5 tok/s \u00b7 16 tokens_",
+        "ok": false,
+        "expected": [
+          "jupiter"
+        ]
+      },
+      {
+        "prompt": "What color do you get when you mix blue and yellow?",
+        "response": "In the southern hemisphere, the sun is a star.\n\n_TTFT 19 ms \u00b7 56.8 tok/s \u00b7 12 tokens_",
+        "ok": false,
+        "expected": [
+          "green"
+        ]
+      },
+      {
+        "prompt": "On which continent is Egypt located?",
+        "response": "This is the most populous country in the world.\n\n_TTFT 17 ms \u00b7 60.8 tok/s \u00b7 11 tokens_",
+        "ok": false,
+        "expected": [
+          "africa"
+        ]
+      },
+      {
+        "prompt": "How many sides does a triangle have?",
+        "response": "Here is an interpretation of a triangle.\n\n_TTFT 23 ms \u00b7 58.8 tok/s \u00b7 9 tokens_",
+        "ok": false,
+        "expected": [
+          "3",
+          "three"
+        ]
+      },
+      {
+        "prompt": "What is the chemical formula of water?",
+        "response": "Water is a chemical formula that is used to store water.\n\n_TTFT 19 ms \u00b7 60.6 tok/s \u00b7 13 tokens_",
+        "ok": false,
+        "expected": [
+          "h2o",
+          "h\u2082o",
+          "h 2 o"
+        ]
+      },
+      {
+        "prompt": "What is the smallest prime number?",
+        "response": "Where is the biggest ruler?\n\n_TTFT 18 ms \u00b7 64.0 tok/s \u00b7 7 tokens_",
+        "ok": false,
+        "expected": [
+          "2",
+          "two"
+        ]
+      },
+      {
+        "prompt": "What animal is known as the king of the jungle?",
+        "response": "He is a king of Egypt.\n\n_TTFT 13 ms \u00b7 85.9 tok/s \u00b7 8 tokens_",
+        "ok": false,
+        "expected": [
+          "lion"
+        ]
+      },
+      {
+        "prompt": "What is the boiling point of water in Celsius?",
+        "response": "The boiling point is a lake.\n\n_TTFT 13 ms \u00b7 77.8 tok/s \u00b7 8 tokens_",
+        "ok": false,
+        "expected": [
+          "100"
+        ]
+      }
+    ]
+  },
+  {
+    "config": {
+      "temperature": 0.0,
+      "top_p": 1.0,
+      "top_k": 50,
+      "repetition_penalty": 1.3,
+      "max_tokens": 60,
+      "no_repeat_ngram": 3
+    },
+    "score": 0.0,
+    "correct": 0,
+    "n": 12,
+    "elapsed_s": 2.8219314999878407,
+    "per_prompt": [
+      {
+        "prompt": "What is the capital of France?",
+        "response": "France is a region of the world with a population of over 1 million people.\n\n_TTFT 13 ms \u00b7 66.7 tok/s \u00b7 17 tokens_",
+        "ok": false,
+        "expected": [
+          "paris"
+        ]
+      },
+      {
+        "prompt": "What is the capital of Switzerland?",
+        "response": "Italy is a part of the European Union.\n\n_TTFT 17 ms \u00b7 65.0 tok/s \u00b7 10 tokens_",
+        "ok": false,
+        "expected": [
+          "bern"
+        ]
+      },
+      {
+        "prompt": "What is 2 + 2?",
+        "response": "1 + 3\n\n_TTFT 13 ms \u00b7 73.4 tok/s \u00b7 4 tokens_",
+        "ok": false,
+        "expected": [
+          "4",
+          "four"
+        ]
+      },
+      {
+        "prompt": "Who wrote the play Hamlet?",
+        "response": "2 + 3\n\n_TTFT 20 ms \u00b7 63.9 tok/s \u00b7 4 tokens_",
+        "ok": false,
+        "expected": [
+          "shakespeare"
+        ]
+      },
+      {
+        "prompt": "What is the largest planet in our solar system?",
+        "response": "3 + 4\n\n_TTFT 22 ms \u00b7 65.7 tok/s \u00b7 4 tokens_",
+        "ok": false,
+        "expected": [
+          "jupiter"
+        ]
+      },
+      {
+        "prompt": "What color do you get when you mix blue and yellow?",
+        "response": "4 + 5\n\n_TTFT 13 ms \u00b7 70.4 tok/s \u00b7 4 tokens_",
+        "ok": false,
+        "expected": [
+          "green"
+        ]
+      },
+      {
+        "prompt": "On which continent is Egypt located?",
+        "response": "Can we know how much rain is coming from Egypt?\n\n_TTFT 18 ms \u00b7 63.6 tok/s \u00b7 12 tokens_",
+        "ok": false,
+        "expected": [
+          "africa"
+        ]
+      },
+      {
+        "prompt": "How many sides does a triangle have?",
+        "response": "Egypt is a large island.\n\n_TTFT 18 ms \u00b7 54.1 tok/s \u00b7 7 tokens_",
+        "ok": false,
+        "expected": [
+          "3",
+          "three"
+        ]
+      },
+      {
+        "prompt": "What is the chemical formula of water?",
+        "response": "A square of water is a layer of ice.\n\n_TTFT 15 ms \u00b7 65.3 tok/s \u00b7 11 tokens_",
+        "ok": false,
+        "expected": [
+          "h2o",
+          "h\u2082o",
+          "h 2 o"
+        ]
+      },
+      {
+        "prompt": "What is the smallest prime number?",
+        "response": "Batteries are a small number.\n\n_TTFT 14 ms \u00b7 57.1 tok/s \u00b7 9 tokens_",
+        "ok": false,
+        "expected": [
+          "2",
+          "two"
+        ]
+      },
+      {
+        "prompt": "What animal is known as the king of the jungle?",
+        "response": "Coconut is a small amount.\n\n_TTFT 17 ms \u00b7 58.9 tok/s \u00b7 9 tokens_",
+        "ok": false,
+        "expected": [
+          "lion"
+        ]
+      },
+      {
+        "prompt": "What is the boiling point of water in Celsius?",
+        "response": "a square of sea.\n\n_TTFT 13 ms \u00b7 91.3 tok/s \u00b7 6 tokens_",
+        "ok": false,
+        "expected": [
+          "100"
+        ]
+      }
+    ]
+  },
+  {
+    "config": {
+      "temperature": 0.3,
+      "top_p": 0.9,
+      "top_k": 50,
+      "repetition_penalty": 1.0,
+      "max_tokens": 60,
+      "no_repeat_ngram": 3
+    },
+    "score": 0.0,
+    "correct": 0,
+    "n": 12,
+    "elapsed_s": 3.773699699959252,
+    "per_prompt": [
+      {
+        "prompt": "What is the capital of France?",
+        "response": "French is a tiny amount.\n\n_TTFT 137 ms \u00b7 58.4 tok/s \u00b7 7 tokens_",
+        "ok": false,
+        "expected": [
+          "paris"
+        ]
+      },
+      {
+        "prompt": "What is the capital of Switzerland?",
+        "response": "The capital of the Netherlands is the center of the continent.\n\n_TTFT 18 ms \u00b7 56.8 tok/s \u00b7 14 tokens_",
+        "ok": false,
+        "expected": [
+          "bern"
+        ]
+      },
+      {
+        "prompt": "What is 2 + 2?",
+        "response": "In the Netherlands, the capital is the centre of the region.\n\n_TTFT 30 ms \u00b7 45.3 tok/s \u00b7 14 tokens_",
+        "ok": false,
+        "expected": [
+          "4",
+          "four"
+        ]
+      },
+      {
+        "prompt": "Who wrote the play Hamlet?",
+        "response": "Why is the king?\n\n_TTFT 13 ms \u00b7 57.2 tok/s \u00b7 6 tokens_",
+        "ok": false,
+        "expected": [
+          "shakespeare"
+        ]
+      },
+      {
+        "prompt": "What is the largest planet in our solar system?",
+        "response": "Is the largest island in the world?\nThe largest planet is the planet of the sun.\n\n_TTFT 19 ms \u00b7 68.3 tok/s \u00b7 20 tokens_",
+        "ok": false,
+        "expected": [
+          "jupiter"
+        ]
+      },
+      {
+        "prompt": "What color do you get when you mix blue and yellow?",
+        "response": "Where are the most beautiful places in the region?\n\n_TTFT 15 ms \u00b7 57.9 tok/s \u00b7 11 tokens_",
+        "ok": false,
+        "expected": [
+          "green"
+        ]
+      },
+      {
+        "prompt": "On which continent is Egypt located?",
+        "response": "Which country is Egypt?\n\n_TTFT 15 ms \u00b7 67.8 tok/s \u00b7 6 tokens_",
+        "ok": false,
+        "expected": [
+          "africa"
+        ]
+      },
+      {
+        "prompt": "How many sides does a triangle have?",
+        "response": "This is a square of the sea.\n\n_TTFT 13 ms \u00b7 79.7 tok/s \u00b7 9 tokens_",
+        "ok": false,
+        "expected": [
+          "3",
+          "three"
+        ]
+      },
+      {
+        "prompt": "What is the chemical formula of water?",
+        "response": "Water is a region of the Earth.\n\n_TTFT 19 ms \u00b7 63.7 tok/s \u00b7 9 tokens_",
+        "ok": false,
+        "expected": [
+          "h2o",
+          "h\u2082o",
+          "h 2 o"
+        ]
+      },
+      {
+        "prompt": "What is the smallest prime number?",
+        "response": "Here is an example of a task:\n\nAbove is an order of magnitude.\n\n_TTFT 17 ms \u00b7 61.8 tok/s \u00b7 18 tokens_",
+        "ok": false,
+        "expected": [
+          "2",
+          "two"
+        ]
+      },
+      {
+        "prompt": "What animal is known as the king of the jungle?",
+        "response": "An order of gravity is a planet.\n\n_TTFT 13 ms \u00b7 64.2 tok/s \u00b7 9 tokens_",
+        "ok": false,
+        "expected": [
+          "lion"
+        ]
+      },
+      {
+        "prompt": "What is the boiling point of water in Celsius?",
+        "response": "If the boiling of water has been reached, it is the highest point in the planet.\n\n_TTFT 14 ms \u00b7 61.9 tok/s \u00b7 19 tokens_",
+        "ok": false,
+        "expected": [
+          "100"
+        ]
+      }
+    ]
+  },
+  {
+    "config": {
+      "temperature": 0.3,
+      "top_p": 0.9,
+      "top_k": 50,
+      "repetition_penalty": 1.1,
+      "max_tokens": 60,
+      "no_repeat_ngram": 3
+    },
+    "score": 0.0,
+    "correct": 0,
+    "n": 12,
+    "elapsed_s": 3.8285100999637507,
+    "per_prompt": [
+      {
+        "prompt": "What is the capital of France?",
+        "response": "France is a continent of the Sun.\n\n_TTFT 14 ms \u00b7 51.7 tok/s \u00b7 9 tokens_",
+        "ok": false,
+        "expected": [
+          "paris"
+        ]
+      },
+      {
+        "prompt": "What is the capital of Switzerland?",
+        "response": "Italy is a country of the Nile.\n\n_TTFT 18 ms \u00b7 57.6 tok/s \u00b7 9 tokens_",
+        "ok": false,
+        "expected": [
+          "bern"
+        ]
+      },
+      {
+        "prompt": "What is 2 + 2?",
+        "response": "1 + 2 = 0\n\n_TTFT 21 ms \u00b7 61.5 tok/s \u00b7 6 tokens_",
+        "ok": false,
+        "expected": [
+          "4",
+          "four"
+        ]
+      },
+      {
+        "prompt": "Who wrote the play Hamlet?",
+        "response": "2 + 2\n\n_TTFT 19 ms \u00b7 52.0 tok/s \u00b7 4 tokens_",
+        "ok": false,
+        "expected": [
+          "shakespeare"
+        ]
+      },
+      {
+        "prompt": "What is the largest planet in our solar system?",
+        "response": "A planet of 1 + 2 is the world of the solar system.\n\n_TTFT 23 ms \u00b7 61.2 tok/s \u00b7 15 tokens_",
+        "ok": false,
+        "expected": [
+          "jupiter"
+        ]
+      },
+      {
+        "prompt": "What color do you get when you mix blue and yellow?",
+        "response": "Birds are a species of birds.\n\n_TTFT 16 ms \u00b7 55.5 tok/s \u00b7 9 tokens_",
+        "ok": false,
+        "expected": [
+          "green"
+        ]
+      },
+      {
+        "prompt": "On which continent is Egypt located?",
+        "response": "Egypt is a world of light and darkness.\n\n_TTFT 27 ms \u00b7 36.7 tok/s \u00b7 10 tokens_",
+        "ok": false,
+        "expected": [
+          "africa"
+        ]
+      },
+      {
+        "prompt": "How many sides does a triangle have?",
+        "response": "Two sides are the Sun and the Nile, both of which are the largest and the largest.\n\n_TTFT 26 ms \u00b7 56.4 tok/s \u00b7 20 tokens_",
+        "ok": false,
+        "expected": [
+          "3",
+          "three"
+        ]
+      },
+      {
+        "prompt": "What is the chemical formula of water?",
+        "response": "The chemical formula is the Sun, the Nile and the water.\n\n_TTFT 21 ms \u00b7 59.4 tok/s \u00b7 14 tokens_",
+        "ok": false,
+        "expected": [
+          "h2o",
+          "h\u2082o",
+          "h 2 o"
+        ]
+      },
+      {
+        "prompt": "What is the smallest prime number?",
+        "response": "In Egypt, the largest is the Nile or the Nile:\n\n_TTFT 17 ms \u00b7 59.2 tok/s \u00b7 14 tokens_",
+        "ok": false,
+        "expected": [
+          "2",
+          "two"
+        ]
+      },
+      {
+        "prompt": "What animal is known as the king of the jungle?",
+        "response": "He is a species.\n\n_TTFT 17 ms \u00b7 53.4 tok/s \u00b7 6 tokens_",
+        "ok": false,
+        "expected": [
+          "lion"
+        ]
+      },
+      {
+        "prompt": "What is the boiling point of water in Celsius?",
+        "response": "Coupled by the boiling water of Celsius, the water is the lowest point in Earth's atmosphere.\n\n_TTFT 19 ms \u00b7 58.6 tok/s \u00b7 22 tokens_",
+        "ok": false,
+        "expected": [
+          "100"
+        ]
+      }
+    ]
+  },
+  {
+    "config": {
+      "temperature": 0.3,
+      "top_p": 0.9,
+      "top_k": 50,
+      "repetition_penalty": 1.3,
+      "max_tokens": 60,
+      "no_repeat_ngram": 3
+    },
+    "score": 0.0,
+    "correct": 0,
+    "n": 12,
+    "elapsed_s": 3.24645460001193,
+    "per_prompt": [
+      {
+        "prompt": "What is the capital of France?",
+        "response": "French is the main capital of French.\n\n_TTFT 19 ms \u00b7 58.8 tok/s \u00b7 9 tokens_",
+        "ok": false,
+        "expected": [
+          "paris"
+        ]
+      },
+      {
+        "prompt": "What is the capital of Switzerland?",
+        "response": "Paris is the most populous city in the world.\n\n_TTFT 13 ms \u00b7 65.8 tok/s \u00b7 11 tokens_",
+        "ok": false,
+        "expected": [
+          "bern"
+        ]
+      },
+      {
+        "prompt": "What is 2 + 2?",
+        "response": "Facts:\n- \n-\nDescription:\nPlaces of the sky\n-\n\n_TTFT 22 ms \u00b7 61.2 tok/s \u00b7 20 tokens_",
+        "ok": false,
+        "expected": [
+          "4",
+          "four"
+        ]
+      },
+      {
+        "prompt": "Who wrote the play Hamlet?",
+        "response": "Where did Hamlet come from?\n\n_TTFT 16 ms \u00b7 69.8 tok/s \u00b7 8 tokens_",
+        "ok": false,
+        "expected": [
+          "shakespeare"
+        ]
+      },
+      {
+        "prompt": "What is the largest planet in our solar system?",
+        "response": "Why is the sun being so hot?\n\n_TTFT 14 ms \u00b7 84.9 tok/s \u00b7 9 tokens_",
+        "ok": false,
+        "expected": [
+          "jupiter"
+        ]
+      },
+      {
+        "prompt": "What color do you get when you mix blue and yellow?",
+        "response": "Which colors do you use?\n\n_TTFT 14 ms \u00b7 60.9 tok/s \u00b7 7 tokens_",
+        "ok": false,
+        "expected": [
+          "green"
+        ]
+      },
+      {
+        "prompt": "On which continent is Egypt located?",
+        "response": "Algiers:\nDeterior:\n\n_TTFT 23 ms \u00b7 63.5 tok/s \u00b7 11 tokens_",
+        "ok": false,
+        "expected": [
+          "africa"
+        ]
+      },
+      {
+        "prompt": "How many sides does a triangle have?",
+        "response": "This circle is the highest point in the Solar System.\n\n_TTFT 15 ms \u00b7 56.5 tok/s \u00b7 12 tokens_",
+        "ok": false,
+        "expected": [
+          "3",
+          "three"
+        ]
+      },
+      {
+        "prompt": "What is the chemical formula of water?",
+        "response": "Water is the longest word in the universe.\n\n_TTFT 21 ms \u00b7 60.3 tok/s \u00b7 10 tokens_",
+        "ok": false,
+        "expected": [
+          "h2o",
+          "h\u2082o",
+          "h 2 o"
+        ]
+      },
+      {
+        "prompt": "What is the smallest prime number?",
+        "response": "Here is an order of magnitude larger than the Sun.\n\n_TTFT 18 ms \u00b7 85.0 tok/s \u00b7 12 tokens_",
+        "ok": false,
+        "expected": [
+          "2",
+          "two"
+        ]
+      },
+      {
+        "prompt": "What animal is known as the king of the jungle?",
+        "response": "It is the oldest planet in the Universe.\n\n_TTFT 16 ms \u00b7 82.0 tok/s \u00b7 10 tokens_",
+        "ok": false,
+        "expected": [
+          "lion"
+        ]
+      },
+      {
+        "prompt": "What is the boiling point of water in Celsius?",
+        "response": "A stone's length is the height of the Sun's surface.\n\n_TTFT 14 ms \u00b7 80.2 tok/s \u00b7 14 tokens_",
+        "ok": false,
+        "expected": [
+          "100"
+        ]
+      }
+    ]
+  },
+  {
+    "config": {
+      "temperature": 0.3,
+      "top_p": 1.0,
+      "top_k": 50,
+      "repetition_penalty": 1.1,
+      "max_tokens": 60,
+      "no_repeat_ngram": 3
+    },
+    "score": 0.0,
+    "correct": 0,
+    "n": 12,
+    "elapsed_s": 3.316313999996055,
+    "per_prompt": [
+      {
+        "prompt": "What is the capital of France?",
+        "response": "France is the second largest city in the universe.\n\n_TTFT 20 ms \u00b7 56.4 tok/s \u00b7 11 tokens_",
+        "ok": false,
+        "expected": [
+          "paris"
+        ]
+      },
+      {
+        "prompt": "What is the capital of Switzerland?",
+        "response": "Germany is the only country in the continent to be the largest in the global world.\n\n_TTFT 17 ms \u00b7 68.7 tok/s \u00b7 18 tokens_",
+        "ok": false,
+        "expected": [
+          "bern"
+        ]
+      },
+      {
+        "prompt": "What is 2 + 2?",
+        "response": "1. The sun is a sun.\n\n_TTFT 15 ms \u00b7 65.6 tok/s \u00b7 9 tokens_",
+        "ok": false,
+        "expected": [
+          "4",
+          "four"
+        ]
+      },
+      {
+        "prompt": "Who wrote the play Hamlet?",
+        "response": "2. The moon is a moon.\n\n_TTFT 16 ms \u00b7 58.4 tok/s \u00b7 9 tokens_",
+        "ok": false,
+        "expected": [
+          "shakespeare"
+        ]
+      },
+      {
+        "prompt": "What is the largest planet in our solar system?",
+        "response": "3. The planet is a planet.\n\n_TTFT 17 ms \u00b7 64.6 tok/s \u00b7 9 tokens_",
+        "ok": false,
+        "expected": [
+          "jupiter"
+        ]
+      },
+      {
+        "prompt": "What color do you get when you mix blue and yellow?",
+        "response": "4. The sky is a star.\n\n_TTFT 15 ms \u00b7 63.0 tok/s \u00b7 9 tokens_",
+        "ok": false,
+        "expected": [
+          "green"
+        ]
+      },
+      {
+        "prompt": "On which continent is Egypt located?",
+        "response": "5. The world is a continent.\n\n_TTFT 20 ms \u00b7 59.3 tok/s \u00b7 9 tokens_",
+        "ok": false,
+        "expected": [
+          "africa"
+        ]
+      },
+      {
+        "prompt": "How many sides does a triangle have?",
+        "response": "6. The Earth is a Sun.\n\n_TTFT 16 ms \u00b7 62.6 tok/s \u00b7 9 tokens_",
+        "ok": false,
+        "expected": [
+          "3",
+          "three"
+        ]
+      },
+      {
+        "prompt": "What is the chemical formula of water?",
+        "response": "7. The earth is a red planet.\n\n_TTFT 16 ms \u00b7 58.7 tok/s \u00b7 10 tokens_",
+        "ok": false,
+        "expected": [
+          "h2o",
+          "h\u2082o",
+          "h 2 o"
+        ]
+      },
+      {
+        "prompt": "What is the smallest prime number?",
+        "response": "8. The Sun is a Moon.\n\n_TTFT 14 ms \u00b7 58.0 tok/s \u00b7 9 tokens_",
+        "ok": false,
+        "expected": [
+          "2",
+          "two"
+        ]
+      },
+      {
+        "prompt": "What animal is known as the king of the jungle?",
+        "response": "9. The Moon is a Earth.\n\n_TTFT 22 ms \u00b7 67.1 tok/s \u00b7 9 tokens_",
+        "ok": false,
+        "expected": [
+          "lion"
+        ]
+      },
+      {
+        "prompt": "What is the boiling point of water in Celsius?",
+        "response": "10. The ocean is a sea.\n\n_TTFT 14 ms \u00b7 68.1 tok/s \u00b7 9 tokens_",
+        "ok": false,
+        "expected": [
+          "100"
+        ]
+      }
+    ]
+  },
+  {
+    "config": {
+      "temperature": 0.7,
+      "top_p": 0.9,
+      "top_k": 50,
+      "repetition_penalty": 1.3,
+      "max_tokens": 60,
+      "no_repeat_ngram": 3
+    },
+    "score": 0.0,
+    "correct": 0,
+    "n": 12,
+    "elapsed_s": 4.671824800025206,
+    "per_prompt": [
+      {
+        "prompt": "What is the capital of France?",
+        "response": "12. The largest planets are France, and Spain, which are located at the same time.\n\n_TTFT 16 ms \u00b7 56.0 tok/s \u00b7 20 tokens_",
+        "ok": false,
+        "expected": [
+          "paris"
+        ]
+      },
+      {
+        "prompt": "What is the capital of Switzerland?",
+        "response": "13. The world's largest star has been described as the largest in the Solar System.\n\n_TTFT 16 ms \u00b7 55.6 tok/s \u00b7 19 tokens_",
+        "ok": false,
+        "expected": [
+          "bern"
+        ]
+      },
+      {
+        "prompt": "What is 2 + 2?",
+        "response": "The highest point for the largest planets is Egypt or Egypt.\n\n_TTFT 22 ms \u00b7 59.0 tok/s \u00b7 13 tokens_",
+        "ok": false,
+        "expected": [
+          "4",
+          "four"
+        ]
+      },
+      {
+        "prompt": "Who wrote the play Hamlet?",
+        "response": "Where was Hamlet, Egypt?\n\n_TTFT 14 ms \u00b7 55.7 tok/s \u00b7 8 tokens_",
+        "ok": false,
+        "expected": [
+          "shakespeare"
+        ]
+      },
+      {
+        "prompt": "What is the largest planet in our solar system?",
+        "response": "This planet is the oldest in the solar system.\n\n_TTFT 16 ms \u00b7 57.6 tok/s \u00b7 11 tokens_",
+        "ok": false,
+        "expected": [
+          "jupiter"
+        ]
+      },
+      {
+        "prompt": "What color do you get when you mix blue and yellow?",
+        "response": "In order to make it to Earth, you must use natural light and heat to heat the Earth's surface.\n\n_TTFT 17 ms \u00b7 58.5 tok/s \u00b7 23 tokens_",
+        "ok": false,
+        "expected": [
+          "green"
+        ]
+      },
+      {
+        "prompt": "On which continent is Egypt located?",
+        "response": "where is Egypt in the constellation of stars, and in which is Egypt with its highest brightness.\n\n_TTFT 18 ms \u00b7 56.9 tok/s \u00b7 20 tokens_",
+        "ok": false,
+        "expected": [
+          "africa"
+        ]
+      },
+      {
+        "prompt": "How many sides does a triangle have?",
+        "response": "Egyptian, Egypt, Egypt\n\n_TTFT 17 ms \u00b7 60.7 tok/s \u00b7 7 tokens_",
+        "ok": false,
+        "expected": [
+          "3",
+          "three"
+        ]
+      },
+      {
+        "prompt": "What is the chemical formula of water?",
+        "response": "Italy, Italy, Egypt.\n\n_TTFT 18 ms \u00b7 59.3 tok/s \u00b7 7 tokens_",
+        "ok": false,
+        "expected": [
+          "h2o",
+          "h\u2082o",
+          "h 2 o"
+        ]
+      },
+      {
+        "prompt": "What is the smallest prime number?",
+        "response": "A ruler is a powerful ruler, but the maximum figure is Egypt's number of rulers.\n\n_TTFT 18 ms \u00b7 64.6 tok/s \u00b7 19 tokens_",
+        "ok": false,
+        "expected": [
+          "2",
+          "two"
+        ]
+      },
+      {
+        "prompt": "What animal is known as the king of the jungle?",
+        "response": "He is the king, and the tallest is Egypt:\n\nbelow is an example.\n\n_TTFT 17 ms \u00b7 65.3 tok/s \u00b7 19 tokens_",
+        "ok": false,
+        "expected": [
+          "lion"
+        ]
+      },
+      {
+        "prompt": "What is the boiling point of water in Celsius?",
+        "response": "Calculate, the highest sea level in the universe, is Egypt;\n\nAbove is an approximation.\n\n_TTFT 17 ms \u00b7 66.3 tok/s \u00b7 23 tokens_",
+        "ok": false,
+        "expected": [
+          "100"
+        ]
+      }
+    ]
+  },
+  {
+    "config": {
+      "temperature": 0.7,
+      "top_p": 1.0,
+      "top_k": 50,
+      "repetition_penalty": 1.0,
+      "max_tokens": 60,
+      "no_repeat_ngram": 3
+    },
+    "score": 0.0,
+    "correct": 0,
+    "n": 12,
+    "elapsed_s": 3.2809659999911673,
+    "per_prompt": [
+      {
+        "prompt": "What is the capital of France?",
+        "response": "France, Italy.\n\n_TTFT 16 ms \u00b7 68.5 tok/s \u00b7 5 tokens_",
+        "ok": false,
+        "expected": [
+          "paris"
+        ]
+      },
+      {
+        "prompt": "What is the capital of Switzerland?",
+        "response": "Is Switzerland in the largest region?\nFrom where is Switzerland in Africa.\n\n_TTFT 14 ms \u00b7 68.4 tok/s \u00b7 16 tokens_",
+        "ok": false,
+        "expected": [
+          "bern"
+        ]
+      },
+      {
+        "prompt": "What is 2 + 2?",
+        "response": "1 + 2 = 0 = 0\n\n_TTFT 17 ms \u00b7 65.1 tok/s \u00b7 8 tokens_",
+        "ok": false,
+        "expected": [
+          "4",
+          "four"
+        ]
+      },
+      {
+        "prompt": "Who wrote the play Hamlet?",
+        "response": "French, Italy\n\n_TTFT 18 ms \u00b7 55.5 tok/s \u00b7 4 tokens_",
+        "ok": false,
+        "expected": [
+          "shakespeare"
+        ]
+      },
+      {
+        "prompt": "What is the largest planet in our solar system?",
+        "response": "Why is it?\n\n_TTFT 15 ms \u00b7 62.2 tok/s \u00b7 5 tokens_",
+        "ok": false,
+        "expected": [
+          "jupiter"
+        ]
+      },
+      {
+        "prompt": "What color do you get when you mix blue and yellow?",
+        "response": "If you mix Blue and red, you will be able to heat a planet's surface temperatures by emitting a chemical formula.\n\n_TTFT 15 ms \u00b7 65.3 tok/s \u00b7 25 tokens_",
+        "ok": false,
+        "expected": [
+          "green"
+        ]
+      },
+      {
+        "prompt": "On which continent is Egypt located?",
+        "response": "Can you tell us what species of planet is?\n\n_TTFT 15 ms \u00b7 69.8 tok/s \u00b7 11 tokens_",
+        "ok": false,
+        "expected": [
+          "africa"
+        ]
+      },
+      {
+        "prompt": "How many sides does a triangle have?",
+        "response": "There are a few.\n\n_TTFT 17 ms \u00b7 58.6 tok/s \u00b7 6 tokens_",
+        "ok": false,
+        "expected": [
+          "3",
+          "three"
+        ]
+      },
+      {
+        "prompt": "What is the chemical formula of water?",
+        "response": "When the largest island of Egypt is Egypt, it is Egypt.\n\n_TTFT 17 ms \u00b7 73.7 tok/s \u00b7 14 tokens_",
+        "ok": false,
+        "expected": [
+          "h2o",
+          "h\u2082o",
+          "h 2 o"
+        ]
+      },
+      {
+        "prompt": "What is the smallest prime number?",
+        "response": "The largest island in the world is Egypt\n\n_TTFT 19 ms \u00b7 71.7 tok/s \u00b7 9 tokens_",
+        "ok": false,
+        "expected": [
+          "2",
+          "two"
+        ]
+      },
+      {
+        "prompt": "What animal is known as the king of the jungle?",
+        "response": "Where is Egypt?\n\n_TTFT 15 ms \u00b7 84.0 tok/s \u00b7 5 tokens_",
+        "ok": false,
+        "expected": [
+          "lion"
+        ]
+      },
+      {
+        "prompt": "What is the boiling point of water in Celsius?",
+        "response": "This is the highest water level in Earth's atmosphere.\n\n_TTFT 15 ms \u00b7 83.0 tok/s \u00b7 12 tokens_",
+        "ok": false,
+        "expected": [
+          "100"
+        ]
+      }
+    ]
+  },
+  {
+    "config": {
+      "temperature": 0.7,
+      "top_p": 1.0,
+      "top_k": 50,
+      "repetition_penalty": 1.3,
+      "max_tokens": 60,
+      "no_repeat_ngram": 3
+    },
+    "score": 0.0,
+    "correct": 0,
+    "n": 12,
+    "elapsed_s": 4.726213899964932,
+    "per_prompt": [
+      {
+        "prompt": "What is the capital of France?",
+        "response": "France is a close state with a high concentration of stars.\n\n_TTFT 20 ms \u00b7 62.2 tok/s \u00b7 13 tokens_",
+        "ok": false,
+        "expected": [
+          "paris"
+        ]
+      },
+      {
+        "prompt": "What is the capital of Switzerland?",
+        "response": "Italy is a faraway capital.\n\n_TTFT 22 ms \u00b7 70.6 tok/s \u00b7 8 tokens_",
+        "ok": false,
+        "expected": [
+          "bern"
+        ]
+      },
+      {
+        "prompt": "What is 2 + 2?",
+        "response": "Bastien's is an important variable in the equation of energy.\n\n_TTFT 14 ms \u00b7 57.4 tok/s \u00b7 15 tokens_",
+        "ok": false,
+        "expected": [
+          "4",
+          "four"
+        ]
+      },
+      {
+        "prompt": "Who wrote the play Hamlet?",
+        "response": "the master of the play of Hamlet, The King of Venice.\n\n_TTFT 19 ms \u00b7 58.0 tok/s \u00b7 15 tokens_",
+        "ok": false,
+        "expected": [
+          "shakespeare"
+        ]
+      },
+      {
+        "prompt": "What is the largest planet in our solar system?",
+        "response": "The crowning of Rome is Daphne.\n\n_TTFT 17 ms \u00b7 65.6 tok/s \u00b7 11 tokens_",
+        "ok": false,
+        "expected": [
+          "jupiter"
+        ]
+      },
+      {
+        "prompt": "What color do you get when you mix blue and yellow?",
+        "response": "The ruler of Paris is C\u00f4te d'Orl\u00e9ans, which means \"to conquer\", as well as to conquer.\n\n_TTFT 15 ms \u00b7 61.9 tok/s \u00b7 28 tokens_",
+        "ok": false,
+        "expected": [
+          "green"
+        ]
+      },
+      {
+        "prompt": "On which continent is Egypt located?",
+        "response": "This place is Cairo as its capital, located on the outskirts of the region.\n\n_TTFT 14 ms \u00b7 54.4 tok/s \u00b7 17 tokens_",
+        "ok": false,
+        "expected": [
+          "africa"
+        ]
+      },
+      {
+        "prompt": "How many sides does a triangle have?",
+        "response": "Egyptian, Egypt is a powerful state with strong walls, a great advantage over other neighbours.\n\n_TTFT 19 ms \u00b7 57.7 tok/s \u00b7 20 tokens_",
+        "ok": false,
+        "expected": [
+          "3",
+          "three"
+        ]
+      },
+      {
+        "prompt": "What is the chemical formula of water?",
+        "response": "Water is the main source of energy the world needs to understand.\n\n_TTFT 17 ms \u00b7 70.3 tok/s \u00b7 14 tokens_",
+        "ok": false,
+        "expected": [
+          "h2o",
+          "h\u2082o",
+          "h 2 o"
+        ]
+      },
+      {
+        "prompt": "What is the smallest prime number?",
+        "response": "If the ruler of France is determined by his forces, the shortest number is C\u00eete d\u2019Orl\u00e9an.\n\n_TTFT 15 ms \u00b7 64.6 tok/s \u00b7 26 tokens_",
+        "ok": false,
+        "expected": [
+          "2",
+          "two"
+        ]
+      },
+      {
+        "prompt": "What animal is known as the king of the jungle?",
+        "response": "French, Egyptian and Persian tribes are known for their horns, horns, and spears.\n\n_TTFT 14 ms \u00b7 68.7 tok/s \u00b7 18 tokens_",
+        "ok": false,
+        "expected": [
+          "lion"
+        ]
+      },
+      {
+        "prompt": "What is the boiling point of water in Celsius?",
+        "response": "Where is the water?\n\n_TTFT 15 ms \u00b7 63.3 tok/s \u00b7 6 tokens_",
+        "ok": false,
+        "expected": [
+          "100"
+        ]
+      }
+    ]
+  },
+  {
+    "config": {
+      "temperature": 1.0,
+      "top_p": 0.9,
+      "top_k": 50,
+      "repetition_penalty": 1.1,
+      "max_tokens": 60,
+      "no_repeat_ngram": 3
+    },
+    "score": 0.0,
+    "correct": 0,
+    "n": 12,
+    "elapsed_s": 3.6601524999714456,
+    "per_prompt": [
+      {
+        "prompt": "What is the capital of France?",
+        "response": "France is the biggest island in the Earth in terms of water.\n\n_TTFT 14 ms \u00b7 66.2 tok/s \u00b7 14 tokens_",
+        "ok": false,
+        "expected": [
+          "paris"
+        ]
+      },
+      {
+        "prompt": "What is the capital of Switzerland?",
+        "response": "Germans:\nFor example:\n\n_TTFT 16 ms \u00b7 55.5 tok/s \u00b7 10 tokens_",
+        "ok": false,
+        "expected": [
+          "bern"
+        ]
+      },
+      {
+        "prompt": "What is 2 + 2?",
+        "response": "1 = 0\n\n_TTFT 21 ms \u00b7 54.4 tok/s \u00b7 4 tokens_",
+        "ok": false,
+        "expected": [
+          "4",
+          "four"
+        ]
+      },
+      {
+        "prompt": "Who wrote the play Hamlet?",
+        "response": "2 = 3\n\n_TTFT 22 ms \u00b7 49.4 tok/s \u00b7 4 tokens_",
+        "ok": false,
+        "expected": [
+          "shakespeare"
+        ]
+      },
+      {
+        "prompt": "What is the largest planet in our solar system?",
+        "response": "3 = 0\n\n_TTFT 31 ms \u00b7 41.2 tok/s \u00b7 4 tokens_",
+        "ok": false,
+        "expected": [
+          "jupiter"
+        ]
+      },
+      {
+        "prompt": "What color do you get when you mix blue and yellow?",
+        "response": "In this situation, which color is the most mysterious color,\n\nAbove is an interpretation of the color.\n\n_TTFT 16 ms \u00b7 63.7 tok/s \u00b7 23 tokens_",
+        "ok": false,
+        "expected": [
+          "green"
+        ]
+      },
+      {
+        "prompt": "On which continent is Egypt located?",
+        "response": "Of course, Egypt is the main planet in the planet.\n\n_TTFT 14 ms \u00b7 68.7 tok/s \u00b7 13 tokens_",
+        "ok": false,
+        "expected": [
+          "africa"
+        ]
+      },
+      {
+        "prompt": "How many sides does a triangle have?",
+        "response": "Here is a translation.\n\n_TTFT 18 ms \u00b7 69.8 tok/s \u00b7 6 tokens_",
+        "ok": false,
+        "expected": [
+          "3",
+          "three"
+        ]
+      },
+      {
+        "prompt": "What is the chemical formula of water?",
+        "response": "Let us know the chemical formulas of water are caused by water.\n\n_TTFT 17 ms \u00b7 71.6 tok/s \u00b7 14 tokens_",
+        "ok": false,
+        "expected": [
+          "h2o",
+          "h\u2082o",
+          "h 2 o"
+        ]
+      },
+      {
+        "prompt": "What is the smallest prime number?",
+        "response": "When it is first released, Egypt will become the first planet in Earth.\n\n_TTFT 19 ms \u00b7 60.3 tok/s \u00b7 16 tokens_",
+        "ok": false,
+        "expected": [
+          "2",
+          "two"
+        ]
+      },
+      {
+        "prompt": "What animal is known as the king of the jungle?",
+        "response": "Earth.\n\n_TTFT 19 ms \u00b7 60.5 tok/s \u00b7 3 tokens_",
+        "ok": false,
+        "expected": [
+          "lion"
+        ]
+      },
+      {
+        "prompt": "What is the boiling point of water in Celsius?",
+        "response": "According to this information, the ruler of Egypt is in the heart of the Amazonian world.\n\n_TTFT 22 ms \u00b7 52.0 tok/s \u00b7 20 tokens_",
+        "ok": false,
+        "expected": [
+          "100"
+        ]
+      }
+    ]
+  },
+  {
+    "config": {
+      "temperature": 1.0,
+      "top_p": 0.9,
+      "top_k": 50,
+      "repetition_penalty": 1.3,
+      "max_tokens": 60,
+      "no_repeat_ngram": 3
+    },
+    "score": 0.0,
+    "correct": 0,
+    "n": 12,
+    "elapsed_s": 3.3474118000012822,
+    "per_prompt": [
+      {
+        "prompt": "What is the capital of France?",
+        "response": "French is known for its oil consumption.\n\n_TTFT 14 ms \u00b7 58.4 tok/s \u00b7 9 tokens_",
+        "ok": false,
+        "expected": [
+          "paris"
+        ]
+      },
+      {
+        "prompt": "What is the capital of Switzerland?",
+        "response": "See also French\nHow is Zurich the third one in the region?\n\n_TTFT 15 ms \u00b7 65.5 tok/s \u00b7 15 tokens_",
+        "ok": false,
+        "expected": [
+          "bern"
+        ]
+      },
+      {
+        "prompt": "What is 2 + 2?",
+        "response": "Newest:\nThere are three main planets orbiting Venus and Earth.\n\n_TTFT 21 ms \u00b7 65.7 tok/s \u00b7 15 tokens_",
+        "ok": false,
+        "expected": [
+          "4",
+          "four"
+        ]
+      },
+      {
+        "prompt": "Who wrote the play Hamlet?",
+        "response": "A king is named after him.\n\n_TTFT 14 ms \u00b7 75.6 tok/s \u00b7 8 tokens_",
+        "ok": false,
+        "expected": [
+          "shakespeare"
+        ]
+      },
+      {
+        "prompt": "What is the largest planet in our solar system?",
+        "response": "The smallest island in Europe.\n\n_TTFT 15 ms \u00b7 74.4 tok/s \u00b7 7 tokens_",
+        "ok": false,
+        "expected": [
+          "jupiter"
+        ]
+      },
+      {
+        "prompt": "What color do you get when you mix blue and yellow?",
+        "response": "Common red:\n\n_TTFT 15 ms \u00b7 82.1 tok/s \u00b7 5 tokens_",
+        "ok": false,
+        "expected": [
+          "green"
+        ]
+      },
+      {
+        "prompt": "On which continent is Egypt located?",
+        "response": "This is a country with an altitude of 1:1 and there are three other major islands which it has a distance of 2.\n\n_TTFT 14 ms \u00b7 87.5 tok/s \u00b7 27 tokens_",
+        "ok": false,
+        "expected": [
+          "africa"
+        ]
+      },
+      {
+        "prompt": "How many sides does a triangle have?",
+        "response": "Which side has the highest mass.\n\n_TTFT 14 ms \u00b7 79.9 tok/s \u00b7 8 tokens_",
+        "ok": false,
+        "expected": [
+          "3",
+          "three"
+        ]
+      },
+      {
+        "prompt": "What is the chemical formula of water?",
+        "response": "One of the biggest oceans in the Earth's sun is the Chihuahua.\n\n_TTFT 13 ms \u00b7 84.7 tok/s \u00b7 18 tokens_",
+        "ok": false,
+        "expected": [
+          "h2o",
+          "h\u2082o",
+          "h 2 o"
+        ]
+      },
+      {
+        "prompt": "What is the smallest prime number?",
+        "response": "Three main planets on Jupiter and Saturn.\n\n_TTFT 14 ms \u00b7 84.1 tok/s \u00b7 9 tokens_",
+        "ok": false,
+        "expected": [
+          "2",
+          "two"
+        ]
+      },
+      {
+        "prompt": "What animal is known as the king of the jungle?",
+        "response": "Two great waves with a velocity of 4.\n\n_TTFT 15 ms \u00b7 83.9 tok/s \u00b7 10 tokens_",
+        "ok": false,
+        "expected": [
+          "lion"
+        ]
+      },
+      {
+        "prompt": "What is the boiling point of water in Celsius?",
+        "response": "An equation that can produce a strong equilibrium.\n\n_TTFT 14 ms \u00b7 84.7 tok/s \u00b7 10 tokens_",
+        "ok": false,
+        "expected": [
+          "100"
+        ]
+      }
+    ]
+  },
+  {
+    "config": {
+      "temperature": 1.0,
+      "top_p": 1.0,
+      "top_k": 50,
+      "repetition_penalty": 1.1,
+      "max_tokens": 60,
+      "no_repeat_ngram": 3
+    },
+    "score": 0.0,
+    "correct": 0,
+    "n": 12,
+    "elapsed_s": 5.159303900029045,
+    "per_prompt": [
+      {
+        "prompt": "What is the capital of France?",
+        "response": "Treat a high altitude in Fahrenheit, while Mercury in the cloud form the longest in world.\n\n_TTFT 14 ms \u00b7 87.5 tok/s \u00b7 20 tokens_",
+        "ok": false,
+        "expected": [
+          "paris"
+        ]
+      },
+      {
+        "prompt": "What is the capital of Switzerland?",
+        "response": "Scius, Mercury (the most star in world) is a single planet (the top fifth) of the earth (the highest, fifth and tenth).\n\n_TTFT 13 ms \u00b7 84.3 tok/s \u00b7 33 tokens_",
+        "ok": false,
+        "expected": [
+          "bern"
+        ]
+      },
+      {
+        "prompt": "What is 2 + 2?",
+        "response": "Stark is a group of planets called the moons of Europa, Europa, and Io, known as Kainan, and its constellation (Earth. A portion of Kainonian forces, like a dragon). The planet orbits Earth on 25 minutes long and its mass is 12 million, while the solar\n\n_TTFT 17 ms \u00b7 86.3 tok/s \u00b7 60 tokens_",
+        "ok": false,
+        "expected": [
+          "4",
+          "four"
+        ]
+      },
+      {
+        "prompt": "Who wrote the play Hamlet?",
+        "response": "Egypt, Jupiter, and Kainian Aitsis have planets in the north corner of Egypt, while Earth has planets in Egypt, Saturn (seen around 9 million), the United States.\n\n_TTFT 14 ms \u00b7 85.0 tok/s \u00b7 39 tokens_",
+        "ok": false,
+        "expected": [
+          "shakespeare"
+        ]
+      },
+      {
+        "prompt": "What is the largest planet in our solar system?",
+        "response": "Sun, Moon, Mars, Androids.\n\n_TTFT 15 ms \u00b7 85.1 tok/s \u00b7 11 tokens_",
+        "ok": false,
+        "expected": [
+          "jupiter"
+        ]
+      },
+      {
+        "prompt": "What color do you get when you mix blue and yellow?",
+        "response": "For a color line by color, colors have starned color.\n\n_TTFT 14 ms \u00b7 87.2 tok/s \u00b7 15 tokens_",
+        "ok": false,
+        "expected": [
+          "green"
+        ]
+      },
+      {
+        "prompt": "On which continent is Egypt located?",
+        "response": "Etymology:\nAn Ancient Egyptian,\nAa, Persian,\nOf: Persian, Egyptian/Ofer,\nArnoldic.\n\n_TTFT 15 ms \u00b7 84.5 tok/s \u00b7 32 tokens_",
+        "ok": false,
+        "expected": [
+          "africa"
+        ]
+      },
+      {
+        "prompt": "How many sides does a triangle have?",
+        "response": "Most of the sides closest to them are in Egypt.\n\n_TTFT 14 ms \u00b7 83.0 tok/s \u00b7 12 tokens_",
+        "ok": false,
+        "expected": [
+          "3",
+          "three"
+        ]
+      },
+      {
+        "prompt": "What is the chemical formula of water?",
+        "response": "Water is used to produce acids.\n\n_TTFT 15 ms \u00b7 86.2 tok/s \u00b7 8 tokens_",
+        "ok": false,
+        "expected": [
+          "h2o",
+          "h\u2082o",
+          "h 2 o"
+        ]
+      },
+      {
+        "prompt": "What is the smallest prime number?",
+        "response": "Bacterial ruler \nThis is the cardinal of the universe of Earth. Its most prominent is the sun, the sun's rays shining in the night sky.\n\n_TTFT 14 ms \u00b7 88.9 tok/s \u00b7 33 tokens_",
+        "ok": false,
+        "expected": [
+          "2",
+          "two"
+        ]
+      },
+      {
+        "prompt": "What animal is known as the king of the jungle?",
+        "response": "In the Nile, we observe a few different groups of humans called the Nile called the Gomorra.\n\n_TTFT 14 ms \u00b7 85.1 tok/s \u00b7 23 tokens_",
+        "ok": false,
+        "expected": [
+          "lion"
+        ]
+      },
+      {
+        "prompt": "What is the boiling point of water in Celsius?",
+        "response": "When the tides settle down, it is found that in the Nile they heat up together in two degrees.\n\n_TTFT 14 ms \u00b7 85.5 tok/s \u00b7 22 tokens_",
+        "ok": false,
+        "expected": [
+          "100"
+        ]
+      }
+    ]
+  }
+]

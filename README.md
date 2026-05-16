@@ -33,7 +33,39 @@ uv run python main.py --stage inference --mock-testing \
 
 # 7. Chat UI
 uv run python main.py --stage chat --config configs/default.yaml
+
+# 7b. Two-team demo (Cyril & Christof vs. Gian & Tilman)
+bash tools/download_demo_checkpoints.sh
+uv run python main.py --stage chat --config configs/chat/chat_demo.yaml
 ```
+
+## Two-team demo
+
+The original team split into two halves for the final submission — both
+trained their own ~40M-param model on top of the shared pretraining
+base. The chat UI can load either checkpoint and switch between them
+live from the sidebar so the two outputs can be compared side-by-side
+on the same prompt.
+
+| Label              | Submission             | Source                                                                                  |
+|--------------------|------------------------|-----------------------------------------------------------------------------------------|
+| Cyril & Christof   | `ParrotLLM_llarotpm`   | PR #4 — release asset on `steinerchristof/PikoGPT_Leaderboard` (tag `parrotllm-may05`)  |
+| Gian & Tilman      | `PikoGPT_ParrotLabs`   | PR #13 — committed blob on `TilmanHaferbeck/PikoGPT_Leaderboard@parrotllm_submission`   |
+
+On a fresh machine:
+
+```bash
+git clone <repo-url> && cd ParrotLLM
+uv sync                                     # install deps
+bash tools/download_demo_checkpoints.sh     # ~120 MB total into runs/demo/
+uv run python main.py --stage chat --config configs/chat/chat_demo.yaml
+```
+
+The sidebar exposes the two checkpoints as labeled radio buttons
+("Cyril & Christof" loads on startup; click "Gian & Tilman" to swap).
+The named labels and paths are config-driven via `chat.demo_checkpoints`
+in `configs/chat/chat_demo.yaml`, so the demo can be re-targeted
+without touching code.
 
 ## Setup for New Team Members
 

@@ -5,7 +5,12 @@ from pathlib import Path
 import numpy as np
 import torch
 from transformers import GPT2TokenizerFast
-from dotenv import load_dotenv
+
+try:
+    from dotenv import load_dotenv
+except ImportError:
+    def load_dotenv(*args, **kwargs):
+        return False
 
 
 PAD_TOKEN = "<|pad|>"
@@ -23,7 +28,7 @@ def maybe_load_hf_token(env_path: str | Path = Path(".env")) -> str | None:
     path = Path(env_path)
     if not path.exists():
         return None
-    
+
     return None
 
 

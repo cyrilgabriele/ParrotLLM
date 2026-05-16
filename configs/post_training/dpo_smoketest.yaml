@@ -1,0 +1,63 @@
+# DPO smoketest — verify the whole DPO pipeline end-to-end on 100 pairs.
+# Expected wall-clock: ~30-60 s on a 5090 (with compile disabled).
+
+model:
+  vocab_size: 50258
+  pad_token_id: 50257
+  bos_token_id: 50256
+  eos_token_id: 50256
+  d_model: 384
+  n_layers: 14
+  n_heads: 6
+  d_ff: 768
+  context_length: 1024
+  bias: false
+  dropout: 0.0
+  rope_theta: 10000.0
+  gradient_checkpointing: false
+
+logging:
+  console_level: INFO
+  file_level: INFO
+
+dpo:
+  hf_dataset_name: Intel/orca_dpo_pairs
+  hf_split: train
+  max_examples: 100
+  val_fraction: 0.1
+  decontam_benchmarks: []        # skip benchmark downloads for speed
+
+  max_length: 512                # half — speeds up smoke
+
+  beta: 0.1
+  length_normalize_logp: false
+
+  learning_rate: 5.0e-6
+  min_lr: 5.0e-7
+  weight_decay: 0.0
+  beta1: 0.9
+  beta2: 0.95
+  grad_clip: 1.0
+
+  warmup_steps: 5
+  epochs: 1
+  lr_schedule: cosine
+
+  batch_size: 2
+  gradient_accumulation_steps: 2
+  num_workers: 0
+  pin_memory: true
+
+  wt103_eval_every_n_evals: 0    # skip WT-103 download for smoke
+  wt103_max_sequences: 64
+  wt103_hard_stop_pct: 10.0
+
+  runs_dir: runs
+  eval_every: 5
+  save_every: 999999
+  log_every: 1
+  early_stopping_patience: 0
+
+  base_checkpoint: null
+  device: auto
+  torch_compile: false           # skip compile warmup for smoke

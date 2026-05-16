@@ -12,6 +12,8 @@ from .preprocessing.preprocessConfig import PreprocessConfig
 from .training.trainingConfig import HfUploadConfig, ModelConfig, TrainingConfig
 from .tuning.tuneConfig import TuneConfig
 from .loggingConfig import LoggingConfig
+from .post_training.sftConfig import SFTConfig
+from .post_training.dpoConfig import DPOConfig
 
 
 class EvalDatasetConfig(BaseModel):
@@ -40,6 +42,20 @@ class InferenceConfig(BaseModel):
     temperature: float = Field(..., ge=0.0)
     top_k: PositiveInt = Field(...)
     top_p: float = Field(..., gt=0.0, le=1.0)
+    # VL09 slide 25 — θ=1.0 disables; PikoGPT default 1.1.
+    repetition_penalty: float = Field(default=1.0, ge=1.0, le=2.0)
+
+
+class DemoCheckpoint(BaseModel):
+    model_config = ConfigDict(extra="ignore")
+
+    name: str = Field(..., min_length=1)
+    path: Path = Field(...)
+
+    @field_validator("path", mode="before")
+    @classmethod
+    def _coerce_path(cls, value: str | Path) -> Path:
+        return value if isinstance(value, Path) else Path(str(value))
 
 
 class ChatConfig(BaseModel):
@@ -50,8 +66,19 @@ class ChatConfig(BaseModel):
     temperature: float = Field(..., ge=0.0)
     top_k: PositiveInt = Field(...)
     top_p: float = Field(..., gt=0.0, le=1.0)
+    # VL09 slide 30 "PikoGPT default": θ=1.1.
+    repetition_penalty: float = Field(default=1.1, ge=1.0, le=2.0)
     system_prompt: str = Field(...)
     checkpoint_dir: Path = Field(...)
+    # Optional pin to a specific .pt file. When set, the chat UI loads
+    # this checkpoint on startup and skips the PREFERRED_RUNS / lowest-
+    # valloss auto-discovery in src/chat/app.py. Lets the team swap the
+    # demo target by editing YAML alone (no code change).
+    preferred_checkpoint: Path | None = Field(default=None)
+    # Named quick-load entries rendered as labeled buttons in the chat
+    # sidebar. Lets the demo present human-friendly names ("Cyril &
+    # Christof", "Gian & Tilman") instead of raw checkpoint paths.
+    demo_checkpoints: list[DemoCheckpoint] | None = Field(default=None)
 
     @field_validator("checkpoint_dir", mode="before")
     @classmethod
@@ -59,6 +86,13 @@ class ChatConfig(BaseModel):
         if isinstance(value, Path):
             return value
         return Path(str(value))
+
+    @field_validator("preferred_checkpoint", mode="before")
+    @classmethod
+    def _coerce_preferred_checkpoint(cls, value: str | Path | None) -> Path | None:
+        if value is None or value == "":
+            return None
+        return value if isinstance(value, Path) else Path(str(value))
 
 
 class ProjectConfig(BaseModel):
@@ -74,6 +108,8 @@ class ProjectConfig(BaseModel):
     eval: EvalConfig | None = None
     inference: InferenceConfig | None = None
     chat: ChatConfig | None = None
+    sft: SFTConfig | None = None  # VL07 post-training stage (see configs/post_training/sftConfig.py)
+    dpo: DPOConfig | None = None  # VL08 post-training stage (see configs/post_training/dpoConfig.py)
 
 
 def load_project_config(config_path: str | Path) -> ProjectConfig:
@@ -118,11 +154,14 @@ def load_project_config_from_checkpoint(checkpoint_path: str | Path) -> ProjectC
 
 __all__ = [
     "ChatConfig",
+    "DemoCheckpoint",
     "EvalConfig",
     "EvalDatasetConfig",
     "HfUploadConfig",
+    "DPOConfig",
     "InferenceConfig",
     "ProjectConfig",
+    "SFTConfig",
     "load_project_config",
     "load_project_config_from_checkpoint",
 ]

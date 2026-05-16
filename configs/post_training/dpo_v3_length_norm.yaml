@@ -1,0 +1,87 @@
+# DPO v3 — length normalisation, single-variable from v2.
+#
+# Audit finding (tools/audit_dpo_split.py): orca_dpo_pairs prompt-overlap
+# at 5% val_fraction is only 1.6% (not the contamination source we
+# hypothesised). The actual driver of val_loss=0.0175 / val_acc=99.7% is
+# CHOSEN-vs-REJECTED LENGTH ASYMMETRY:
+#   - avg chosen   702 chars
+#   - avg rejected 1061 chars
+#   - 78.8% of pairs have rejected longer than chosen
+# The DPO loss aggregates per-token log-probs over the whole sequence;
+# longer sequences accumulate more low-probability mass, so the model
+# learns "shorter == better" instead of "more helpful == better".
+#
+# Fix: length_normalize_logp = true. Divides per-pair logp by completion
+# token count, removing the length signal. Standard DPO hyperparameter,
+# discussed in the original Rafailov 2023 paper Appendix.
+#
+# Hypothesis: val_acc will drop from ~99% to ~70-80% (true preference
+# accuracy at this scale), val_loss will be higher and peak earlier,
+# perplexity drift should be marginally smaller.
+#
+# Single variable changed from dpo_v2_balanced: length_normalize_logp.
+
+model:
+  vocab_size: 50258
+  pad_token_id: 50257
+  bos_token_id: 50256
+  eos_token_id: 50256
+  d_model: 384
+  n_layers: 14
+  n_heads: 6
+  d_ff: 768
+  context_length: 1024
+  bias: false
+  dropout: 0.0
+  rope_theta: 10000.0
+  gradient_checkpointing: false
+
+logging:
+  console_level: INFO
+  file_level: INFO
+
+dpo:
+  hf_dataset_name: Intel/orca_dpo_pairs
+  hf_split: train
+  max_examples: null
+  val_fraction: 0.05
+  decontam_benchmarks:
+    - lambada
+    - hellaswag
+    - winogrande
+    - openbookqa
+
+  max_length: 1024
+
+  beta: 0.2                       # same as v2
+  length_normalize_logp: true     # CHANGED — was false in v1 and v2
+
+  learning_rate: 5.0e-6
+  min_lr: 5.0e-7
+  weight_decay: 0.0
+  beta1: 0.9
+  beta2: 0.95
+  grad_clip: 1.0
+
+  warmup_steps: 10
+  epochs: 1
+  lr_schedule: cosine
+
+  batch_size: 4
+  gradient_accumulation_steps: 8
+  num_workers: 0
+  pin_memory: true
+
+  wt103_eval_every_n_evals: 1
+  wt103_max_sequences: 64
+  wt103_hard_stop_pct: 10.0
+
+  runs_dir: runs
+  eval_every: 20
+  save_every: 999999
+  log_every: 10
+  early_stopping_patience: 2
+
+  base_checkpoint: runs/run_20260426_203420_sft/checkpoints/best_step_0001500_epoch_01_valloss_2p7198.pt
+  device: auto
+  torch_compile: true

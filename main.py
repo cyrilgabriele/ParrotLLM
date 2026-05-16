@@ -15,7 +15,7 @@ def main() -> None:
     parser.add_argument(
         "--stage",
         required=True,
-        choices=["preprocess", "train", "tune", "eval", "inference", "chat", "dashboard"],
+        choices=["preprocess", "train", "tune", "eval", "inference", "chat", "dashboard", "sft", "dpo"],
     )
     parser.add_argument("--config", type=Path, default=Path("configs/default.yaml"))
     parser.add_argument("--checkpoint", default=None)
@@ -29,6 +29,15 @@ def main() -> None:
     parser.add_argument("--temperature", type=float, default=None)
     parser.add_argument("--leaderboard", action="store_true")
     parser.add_argument("--mock-testing", action="store_true", default=None)
+    # Mandatory inference-contract flags (factsheet §4.4). The leaderboard
+    # runner invokes us with these literally; rejecting them invalidates
+    # every benchmark example.
+    parser.add_argument("--device", default=None,
+                        help="Device override (auto/cuda/mps/cpu). Required by "
+                             "the leaderboard inference contract.")
+    parser.add_argument("--seed", type=int, default=None,
+                        help="Deterministic seed. Required by the leaderboard "
+                             "inference contract; overrides the default 42.")
     # dashboard-specific
     parser.add_argument("--open", action="store_true",
                         help="Open browser automatically when starting the dashboard")
@@ -65,7 +74,7 @@ def main() -> None:
     project_config_payload = project_config.model_dump(mode="python")
     HF_TOKEN = maybe_load_hf_token()
 
-    SEED = 42
+    SEED = args.seed if args.seed is not None else 42
     set_seed(SEED)
 
     if args.stage == "preprocess":
@@ -119,7 +128,9 @@ def main() -> None:
         checkpoint_path = args.checkpoint
         if not args.mock_testing:
             checkpoint_path = _require_checkpoint(args.checkpoint, stage="inference")
-        device = get_device(inference_cfg.device)
+        # CLI --device takes precedence over the YAML setting — required by
+        # the leaderboard contract, which always passes --device auto.
+        device = get_device(args.device or inference_cfg.device)
         from src.eval.inference import run_inference
 
         run_inference(
@@ -133,6 +144,34 @@ def main() -> None:
             mock_testing=args.mock_testing,
             hf_token=HF_TOKEN
         )
+        return
+
+    if args.stage == "sft":
+        # VL07 — Supervised Fine-Tuning stage. Requires:
+        #   (i)   an `sft:` block in the YAML config (see configs/default.yaml),
+        #   (ii)  a base pretraining checkpoint, sourced from --checkpoint or
+        #         from sft.base_checkpoint in the YAML (CLI takes precedence).
+        sft_cfg = _require_section(project_config.sft, "sft")
+        _require_section(project_config.model, "model")
+        checkpoint_path = _resolve_sft_checkpoint(args.checkpoint, sft_cfg.base_checkpoint)
+        device = get_device(sft_cfg.device)
+        from src.post_training.sft.trainer import run_sft
+
+        run_sft(project_config, checkpoint=checkpoint_path, device=device)
+        return
+
+    if args.stage == "dpo":
+        # VL08 — Direct Preference Optimization. Requires:
+        #   (i)   a `dpo:` block in the YAML config,
+        #   (ii)  an SFT checkpoint passed via --checkpoint (used as BOTH
+        #         the policy initialisation AND the frozen reference model).
+        dpo_cfg = _require_section(project_config.dpo, "dpo")
+        _require_section(project_config.model, "model")
+        checkpoint_path = _resolve_sft_checkpoint(args.checkpoint, dpo_cfg.base_checkpoint)
+        device = get_device(dpo_cfg.device)
+        from src.post_training.dpo.trainer import run_dpo
+
+        run_dpo(project_config, checkpoint=checkpoint_path, device=device)
         return
 
     if args.stage == "chat":
@@ -191,6 +230,21 @@ def _load_effective_project_config(
 def _require_checkpoint(path: str | None, stage: str) -> str:
     if not path:
         raise ValueError(f"--checkpoint is required for stage '{stage}'.")
+    return path
+
+
+def _resolve_sft_checkpoint(cli_path: str | None, yaml_default: str | None) -> str:
+    """Choose the SFT base checkpoint. CLI flag wins; YAML is the fallback.
+
+    SFT on random weights is meaningless (VL07 slide 12), so one of the
+    two sources must be set. Empty strings from argparse fall through.
+    """
+    path = (cli_path or "").strip() or (yaml_default or "").strip()
+    if not path:
+        raise ValueError(
+            "SFT requires a base pretraining checkpoint. Pass --checkpoint "
+            "or set sft.base_checkpoint in the YAML."
+        )
     return path
 
 

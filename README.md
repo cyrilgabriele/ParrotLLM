@@ -1,42 +1,54 @@
 # ParrotLLM
 
-35.8M parameter decoder-only language model built from scratch for the PikoGPT Challenge (NLP Lab FS26).
+ParrotLLM is a course-scale decoder-only language model built from scratch for
+the PikoGPT Challenge in NLP Lab FS26. The final pretrained model uses a tuned
+39.97M-parameter GPT-style architecture and was trained under a strict 40M
+parameter budget.
+
+The full project write-up is in
+[ParrotLLM/techreport.tex](ParrotLLM/techreport.tex). It documents the data
+pipeline, architecture search, four pretraining runs, inference contract, and
+post-training branch results.
 
 ## Quick Start
 
 ```bash
 # 1. Clone and install (requires Python 3.14+ and uv)
-git clone <repo-url> && cd ParrotLLM
+git clone <repo-url>
+cd ParrotLLM
 uv sync
 
 # 2. Download datasets
 uv run python src/scripts/download_data.py
 
-# 3. Preprocess (tokenize + filter + decontaminate)
+# 3. Preprocess
 uv run python main.py --stage preprocess --config configs/default.yaml
-#   edit configs/default.yaml:preprocess.* to switch between full/small/dummy datasets,
-#   token-budget subsets, topic filters, etc.
 
 # 4. Train
-uv run python main.py --stage train
+uv run python main.py --stage train --config configs/default.yaml
 
 # 5. Evaluate
-uv run python main.py --stage eval --config configs/default.yaml --checkpoint checkpoints/step_5000.pt
+uv run python main.py --stage eval --config configs/default.yaml \
+    --checkpoint checkpoints/step_5000.pt
 
 # 6. Generate text
-uv run python main.py --stage inference --config configs/default.yaml --checkpoint checkpoints/step_5000.pt \
+uv run python main.py --stage inference --config configs/default.yaml \
+    --checkpoint checkpoints/step_5000.pt \
     --prompt "The meaning of life is"
 
-# 6b. Mock inference (downloads Hugging Face GPT-2, no ParrotLLM training)
+# 7. Mock inference (downloads Hugging Face GPT-2; no ParrotLLM checkpoint)
 uv run python main.py --stage inference --mock-testing \
     --prompt "The meaning of life is"
 
-# 7. Chat UI
+# 8. Chat UI
 uv run python main.py --stage chat --config configs/default.yaml
 
-# 7b. Two-team demo (Cyril & Christof vs. Gian & Tilman)
+# 9. Two-team demo (Cyril & Christof vs. Gian & Tilman)
 bash tools/download_demo_checkpoints.sh
 uv run python main.py --stage chat --config configs/chat/chat_demo.yaml
+
+# 10. Training dashboard
+uv run python main.py --stage dashboard --config configs/default.yaml
 ```
 
 ## Two-team demo
@@ -67,217 +79,239 @@ The named labels and paths are config-driven via `chat.demo_checkpoints`
 in `configs/chat/chat_demo.yaml`, so the demo can be re-targeted
 without touching code.
 
-## Setup for New Team Members
+## Setup
 
 ### Prerequisites
 
-- **Python 3.14+**
-- **uv** (dependency manager) — install with `curl -LsSf https://astral.sh/uv/install.sh | sh`
+- Python 3.14+
+- `uv` dependency manager
 
-### Step-by-Step
+Install `uv` with:
 
 ```bash
-# Clone
-git clone <repo-url>
-cd ParrotLLM
+curl -LsSf https://astral.sh/uv/install.sh | sh
+```
 
-# Install all dependencies (torch, transformers, datasets, wandb, gradio, etc.)
+### Verify The Install
+
+```bash
 uv sync
 
-# Verify everything works
 uv run python -c "
 from configs import load_project_config
 from src.model import ParrotLLM
 import torch
+
 project = load_project_config('configs/default.yaml')
 config = project.model_dump(mode='python')
 model = ParrotLLM(config)
 print(f'Parameters: {model.count_parameters():,}')
-x = torch.randint(0, 50257, (2, 128))
+x = torch.randint(0, config['model']['vocab_size'], (2, 128))
 logits, loss = model(x, targets=x)
 print(f'Logits: {logits.shape}, Loss: {loss.item():.2f}')
 "
-# Expected: Parameters: 35,763,840 | Logits: torch.Size([2, 128, 50257]) | Loss: ~9-11
-
-# Download datasets (10k subset, wikitext-103 test, fasttext model, NLP26 eval)
-uv run python src/scripts/download_data.py
 ```
 
-That's it. No conda, no pip, no Docker. `uv sync` handles everything.
+Expected parameter count for the current default model:
+`39,966,592`.
 
 ## Project Structure
 
-```
+```text
 ParrotLLM/
-├── main.py                          # CLI entry point (all stages)
+├── main.py                         # CLI entry point for all stages
 ├── configs/
-│   └── default.yaml                 # single source of truth for all hyperparams
+│   ├── default.yaml                # main config
+│   ├── big_run/                    # final large pretraining configs
+│   ├── preprocessing/              # data variant configs
+│   ├── training/                   # smoke/legacy train configs
+│   ├── tuning/                     # Optuna architecture/HP tuning configs
+│   ├── eval/                       # eval smoke configs
+│   ├── inference/                  # inference smoke configs
+│   └── chat/                       # chat smoke configs
 ├── src/
-│   ├── utils.py                     # tokenizer helpers, set_seed, get_device
-│   ├── model/
-│   │   └── transformer.py           # RMSNorm, RoPE, MHA, SwiGLU, ParrotLLM
-│   ├── training/
-│   │   └── trainer.py               # training loop, dataset, checkpointing
-│   ├── eval/
-│   │   ├── perplexity.py            # perplexity on Wikitext-103 / OWT val
-│   │   └── inference.py             # text generation, leaderboard mode
-│   ├── chat/
-│   │   └── app.py                   # Gradio chat interface
-│   ├── data/
-│   │   └── preprocess.py            # tokenize, filter, decontaminate, save .bin
-│   ├── scripts/
-│   │   └── download_data.py         # download all datasets
-│   └── notebooks/
-│       └── 01_data_preprocessing.ipynb
-├── data/                            # datasets (git-tracked metadata, not binaries)
-│   ├── openwebtext-10k/             # 10k doc subset for dev
-│   ├── wikitext-103-test/           # eval benchmark
-│   ├── owt-eval/                    # NLP26 decontamination set
-│   ├── lid.176.ftz                  # fasttext lang detection model
-│   └── processed/                   # generated .bin files (gitignored)
-├── checkpoints/                     # model checkpoints (gitignored)
+│   ├── data/                       # preprocessing pipeline
+│   ├── model/                      # transformer implementation
+│   ├── training/                   # training loop and Optuna tuning
+│   ├── eval/                       # perplexity and inference
+│   ├── chat/                       # Gradio chat UI
+│   ├── dashboard/                  # Gradio/TUI training dashboard
+│   ├── scripts/                    # data/model utility scripts
+│   └── notebooks/                  # exploratory notebooks
+├── tests/                          # unit and integration tests
 ├── docs/
-│   └── ARCHITECTURE_DECISIONS.md    # paper-backed design rationale
-├── pyproject.toml                   # dependencies & project metadata
-└── uv.lock                          # locked dependency versions
+│   ├── architecture/               # architecture notes and diagrams
+│   ├── gpu_cluster/                # cluster training notes
+│   └── poster/                     # poster assets/results
+├── ParrotLLM/
+│   ├── techreport.tex              # technical report
+│   └── figures/                    # report figures
+├── results/                        # tuning/evaluation outputs
+├── runs/                           # local run outputs and checkpoints
+├── pyproject.toml                  # project metadata and dependencies
+└── uv.lock                         # locked dependency versions
 ```
+
+Large binaries, processed data, and checkpoints are local artifacts and are not
+expected to be fully tracked in git.
 
 ## Architecture
 
-```
-Tokenizer:      GPT-2 (vocab=50,257)              [course constraint]
-d_model:        320
-Layers:         16
-Heads:          8  (head_dim=40)
-FFN:            SwiGLU, d_ff=854 (8/3 * 320)
-Normalization:  RMSNorm, Pre-Norm
-Positional:     RoPE (Rotary Position Embedding)
-Weight Tying:   Yes (input embed = output head)
-Context:        1024                               [course constraint]
-Total params:   35,763,840  (~35.8M, budget: 40M)
-```
+The current default architecture is the final tuned shape reported in the
+technical report and encoded in [configs/default.yaml](configs/default.yaml).
 
-### Why These Choices
-
-| Decision | Choice | Reason | Paper |
-|----------|--------|--------|-------|
-| Deep & narrow | 16 layers, d=320 | Depth > width at small scale | MobileLLM (Meta, 2024) |
-| SwiGLU | d_ff = 8/3 * d_model | Beats GELU at same param cost | Shazeer (2020) |
-| RMSNorm + Pre-Norm | Before each sublayer | Same quality, faster, stable training | Zhang & Sennrich (2019) |
-| RoPE | Rotary embeddings | Zero extra params, relative position | Su et al. (2021) |
-| Weight tying | Shared embed/head | Saves 16M params, improves PPL | Press & Wolf (2017) |
-
-Full analysis with paper references: [docs/ARCHITECTURE_DECISIONS.md](docs/ARCHITECTURE_DECISIONS.md)
-
-## Preprocessing Pipeline
-
-All preprocessing runs via `main.py --stage preprocess` and applies 8 phases sequentially. Documents failing any phase are tagged with a reason and excluded from training.
-
-| Phase | What it does | Approach | Skippable |
-|-------|-------------|----------|-----------|
-| 1. Decontamination | Remove eval set overlaps | SHA-1 hash matching against Wikitext-103 & NLP26 OWT eval on raw text | `preprocess.skip_decontam` |
-| 2. Sanitization | Strip HTML, boilerplate, control chars, URLs | Regex rules | No |
-| 3. Language detection | Keep only target language (default: English) | fastText `lid.176.ftz`, threshold 0.8 | No |
-| 4. Code/artifact filter | Remove code dumps, HTML-heavy docs | Heuristic (symbol ratio, code fences) or fastText classifier | `preprocess.skip_code_filter` |
-| 5. Quality filter | Remove short, repetitive, incoherent text | Heuristic (min length, n-gram repetition) or KenLM + fastText edu-quality classifier | `preprocess.skip_quality_filter` |
-| 6. Fuzzy deduplication | Remove near-duplicate documents | MinHash LSH (64 perms, 16 bands, Jaccard ≥ 0.8) | `preprocess.skip_dedup` |
-| 7. Tokenization | Tokenize with GPT-2, filter docs < 64 tokens | `GPT2TokenizerFast` | No |
-| 8. Binary output | Split 99/1 train/val, save as uint16 `.bin` | numpy `tofile` | No |
-
-Decontamination runs first on raw text so that sanitization cannot alter document hashes and let contaminated documents slip through.
-
-Phases 4–5 support two modes via `--filter-mode {heuristic|classifier|none}`. Heuristic mode is the default and needs no pre-trained models. Classifier mode requires training models first (see `src/scripts/train_filter_models.py`).
-
-
-## Config-Driven Pipeline
-
-Every stage reads from `configs/default.yaml`. Change hyperparameters there, not in code.
-
-```yaml
-# Key sections:
-model:      # vocab, d_model, n_layers, n_heads, d_ff, context_length
-training:   # batch_size, lr, warmup, max_steps, grad_accum, checkpointing
-eval:       # batch_size, datasets, max_sequences
-inference:  # temperature, top_k, top_p, max_tokens
-chat:       # temperature, max_tokens, checkpoint_dir
+```text
+Tokenizer:      GPT-2 tokenizer + dedicated pad token
+Vocabulary:     50,258
+d_model:        384
+Layers:         14
+Heads:          6 (head_dim=64)
+FFN:            SwiGLU, d_ff=768
+Normalization:  RMSNorm, QK-Norm, Peri-LN-style dual normalization
+Positional:     RoPE
+Weight tying:   yes
+Context:        1024
+Biases:         disabled in linear layers
+Total params:   39,966,592
 ```
 
-## CLI Reference
+Architecture selection moved beyond the initial MobileLLM-style draft. The
+final shape came from staged Optuna searches at roughly 8.75M, 17.5M, and 40M
+parameters, using proxy training to select a wider, shallower model than the
+initial deep-and-narrow design.
 
-All stages go through `main.py`:
+See [docs/architecture/ARCHITECTURE_DECISIONS.md](docs/architecture/ARCHITECTURE_DECISIONS.md)
+and [ParrotLLM/techreport.tex](ParrotLLM/techreport.tex) for the full rationale.
+
+## Data Pipeline
+
+Preprocessing runs through `main.py --stage preprocess` and is controlled by
+YAML config. The final pipeline includes:
+
+- raw-text decontamination against evaluation sets
+- sanitization of HTML, boilerplate, control characters, and URLs
+- English language filtering with fastText
+- optional AG-News topic filtering/resampling
+- code/artifact filtering
+- heuristic quality filtering
+- MinHash-style near-deduplication
+- ellipsis-density filtering
+- GPT-2 tokenization with a dedicated pad token
+- binary train/validation output
+
+The report compares six controlled data variants. Experiment C, a balanced
+World/Business/Sci-Tech mixture with Sports removed, was selected as the final
+pretraining data recipe.
+
+## Training And Tuning
+
+All main runtime settings live in YAML configs rather than being hard-coded.
+The main CLI stages are:
 
 ```bash
-# Preprocess
 uv run python main.py --stage preprocess --config configs/default.yaml
-#   tweak configs/*.yaml:preprocess.* to switch dataset sizes, token budgets, topics
-
-# Train
-uv run python main.py --stage train --config configs/default.yaml [--checkpoint path.pt]
-
-# Evaluate perplexity
-uv run python main.py --stage eval --config configs/default.yaml --checkpoint checkpoints/step_5000.pt
-
-# Generate text
-uv run python main.py --stage inference --config configs/default.yaml --checkpoint checkpoints/step_5000.pt \
-    [--prompt "text"] [--max-tokens 128] [--temperature 0.0]
-
-# Leaderboard mode (stdout only, no logs)
-uv run python main.py --stage inference --config configs/default.yaml --checkpoint checkpoints/step_5000.pt \
-    --prompt "The answer is" --leaderboard
-
-# Chat UI
+uv run python main.py --stage tune --config configs/tuning/tune.yaml
+uv run python main.py --stage train --config configs/default.yaml
+uv run python main.py --stage train --config configs/default.yaml \
+    --resume-training --checkpoint path/to/checkpoint.pt
+uv run python main.py --stage eval --config configs/default.yaml \
+    --checkpoint path/to/checkpoint.pt
+uv run python main.py --stage inference --config configs/default.yaml \
+    --checkpoint path/to/checkpoint.pt --prompt "Prompt text"
 uv run python main.py --stage chat --config configs/default.yaml
+uv run python main.py --stage dashboard --config configs/default.yaml
 ```
 
-Use `--mock-testing` during `--stage inference` to skip checkpoints entirely; it loads the standard Hugging Face `openai-community/gpt2` weights so you can validate the CLI without training first (the model is downloaded on demand).
+Training uses AdamW, mixed precision where available, gradient clipping,
+checkpoint retention, periodic validation, optional `torch.compile`, optional
+Hugging Face run uploads, and console/file logging. The dashboard can be run as
+a Gradio app or as a terminal UI with `--tui`.
 
-If you place `HF_TOKEN=...` inside `.env` (or export `HF_TOKEN`), ParrotLLM picks it up automatically for authenticated Hugging Face downloads and end-of-training run uploads.
+## Pretraining Results
 
-To push completed training runs to the Hugging Face Hub as well, add an optional
-`training.hf_upload` block to your YAML:
+Final pretraining used the chair-provided 8xV100 hardware. The team ran four
+pretraining attempts:
 
-```yaml
-training:
-  runs_dir: runs
-  hf_upload:
-    repo_id: your-org/parrotllm-runs
-    repo_type: dataset
-    path_in_repo: ""
-    private: true
+| Run | Dataset | Size | Outcome |
+| --- | --- | --- | --- |
+| 1 | Experiment A | 800M-token setup | short baseline run |
+| 2 | Experiment C | 800M-token setup | short comparison run |
+| 3 | Experiment C | 8B-token setup | early-stopped with the initial tuned HPs |
+| 4 | Experiment C | 8B-token setup | final time-limited run |
+
+The final pretrained checkpoint reported in the technical report is:
+
+```text
+runs/big_run/exp_c_8b/run_20260410_044337/checkpoints/best_loss_3p2650_epoch_0000_step_0095500.pt
 ```
 
-When configured, ParrotLLM still writes the run locally under `runs/.../run_*`
-and then uploads that finished run directory once at the end of training,
-preserving its relative local path inside the target Hub repo.
+Reported pre-post-training perplexities:
 
-All hyperparameters—including dataset selection, topic filtering, optimizer, inference sampling, and chat settings—live in the YAML config. The CLI only exposes the runtime knobs that make sense to change per command (prompt text, leaderboard/mocking flags, checkpoint path).
+| Dataset | Perplexity |
+| --- | ---: |
+| Wikitext-103 | 51.8 |
+| OpenWebText validation | 24.17 |
 
-## Training Details
+## Post-Training Branches
 
-- **Optimizer**: AdamW (betas 0.9/0.95, weight decay 0.1, decay on 2D params only)
-- **Schedule**: linear warmup (2000 steps) + cosine decay to 10% of peak LR
-- **Mixed precision**: bfloat16 on Ampere+, float16+GradScaler on V100, float32 on CPU/MPS
-- **torch.compile**: auto-enabled on CUDA for ~20-40% speedup
-- **Gradient accumulation**: 4 micro-steps (effective batch = 256)
-- **Gradient clipping**: max norm 1.0
-- **Checkpoints**: every 5000 steps, eval every 500 steps
-- **Logging**: wandb (auto-detected, falls back to console)
+Post-training is not represented as a single linear history on the current
+branch. The technical report tracks three post-training branches:
 
-## What's Done (Week 1)
+| Branch | Owners / role | Summary |
+| --- | --- | --- |
+| `sft-tilman` | Tilman+Gian SFT branch | Initial benchmark-focused SFT setup and first successful SFT pass from the pretrained base. |
+| `sft-dpo-gian` | Tilman+Gian DPO branch | Continuation-pair DPO on top of benchmark-targeted SFT; strongest documented public result. |
+| `sft-christof` | Christof+Cyril branch | Course-style SFT variants, DPO implementation, and inference repairs; final selected result was SFT v7 plus PMI/cloze inference. |
 
-- [x] Data pipeline: download, language filter, decontamination, tokenization, binary serialization
-- [x] Model: full LLaMA-style transformer (RMSNorm, RoPE, SwiGLU, weight tying)
-- [x] Training loop: mixed precision, gradient accumulation, cosine LR, checkpointing, wandb
-- [x] Evaluation: perplexity on Wikitext-103 and OWT val split
-- [x] Inference: greedy + top-k/top-p sampling, leaderboard contract
-- [x] Chat: Gradio web UI with checkpoint selection
-- [x] Config: single YAML file drives every stage
+Documented public benchmark ledger from the report:
 
-## Datasources
+| Model/source | Limit | HellaSwag | WinoGrande | OpenBookQA | LAMBADA | Average |
+| --- | ---: | ---: | ---: | ---: | ---: | ---: |
+| Pretrained base, local sweep | 500 | 32.6 | 50.0 | 24.0 | 11.2 | 29.45 |
+| Tilman+Gian DPO, manifest | 200 | 23.5 | 59.5 | 35.5 | 38.5 | 39.25 |
+| Christof+Cyril SFT v7 + PMI | 500 | 32.2 | 54.0 | 25.0 | 23.2 | 33.60 |
+| Local SFT, May 5 | 500 | 31.6 | 52.2 | 24.8 | 14.0 | 30.65 |
+| Local DPO, May 6 | 500 | 31.2 | 52.2 | 24.4 | 13.0 | 30.20 |
 
-| Dataset | Purpose | Size |
-|---------|---------|------|
-| [OpenWebText (full)](https://huggingface.co/datasets/Skylion007/openwebtext) | Training data | ~8M docs, ~8.9B tokens |
-| [OpenWebText 10k](https://huggingface.co/datasets/stas/openwebtext-10k) | Fast dev iteration | 10k docs, ~11M tokens |
-| [Wikitext-103 test](https://huggingface.co/datasets/Salesforce/wikitext) | Perplexity benchmark | Standard eval set |
-| [NLP26 OWT eval](https://drive.switch.ch/index.php/s/6TLGQFEIkAPJ72K) | Decontamination | Course eval split |
+The limits and inference contracts differ across some entries, so these numbers
+are an artifact ledger rather than a strict paired comparison.
+
+## Inference
+
+Inference supports normal generation and a leaderboard mode:
+
+```bash
+uv run python main.py --stage inference --config configs/default.yaml \
+    --checkpoint path/to/checkpoint.pt \
+    --prompt "The answer is" \
+    --leaderboard
+```
+
+Use `--mock-testing` to validate the CLI without a ParrotLLM checkpoint. It
+loads `openai-community/gpt2` from Hugging Face on demand.
+
+The report describes additional branch-level inference fixes used for
+benchmark submissions, including option-text cloze scoring, WinoGrande blank
+substitution, LAMBADA whitespace handling, PMI calibration experiments, and a
+constrained-letter fallback.
+
+## Data Sources
+
+| Dataset | Purpose |
+| --- | --- |
+| [OpenWebText](https://huggingface.co/datasets/Skylion007/openwebtext) | pretraining data source |
+| [OpenWebText 10k](https://huggingface.co/datasets/stas/openwebtext-10k) | fast development subset |
+| [Wikitext-103](https://huggingface.co/datasets/Salesforce/wikitext) | perplexity benchmark and decontamination target |
+| NLP26 OWT eval split | course evaluation/decontamination split |
+| AG-News classifier labels | topic filtering and controlled data mixtures |
+
+## Development
+
+Run tests with:
+
+```bash
+uv run pytest
+```
+
+Useful smoke configs live under `configs/*/*dummy.yaml` and
+`configs/*/*smoketest.yaml`.

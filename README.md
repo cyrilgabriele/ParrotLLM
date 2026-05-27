@@ -1,4 +1,4 @@
-# <img src="docs/logos/white/parrotlabs_logo_white_no_bg.svg" alt="ParrotLabs logo" width="42"> ParrotLLM
+# <img src="docs/logos/parrotlabs_logo_white_no_bg.svg" alt="ParrotLabs logo" width="42"> ParrotLLM
 
 ParrotLLM is a course-scale decoder-only language model built from scratch for
 the PikoGPT Challenge in NLP Lab FS26. The final pretrained model uses a tuned
